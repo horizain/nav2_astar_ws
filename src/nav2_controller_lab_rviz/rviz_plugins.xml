@@ -1,0 +1,7 @@
+<library path="controller_lab_panel">
+  <class name="nav2_controller_lab_rviz/Controller Lab"
+         type="nav2_controller_lab_rviz::ControllerLabPanel"
+         base_class_type="rviz_common::Panel">
+    <description>Controller Lab: 一键切换 PID / Pure Pursuit / Stanley / DWB / MPPI，并显示调试标记。</description>
+  </class>
+</library>
