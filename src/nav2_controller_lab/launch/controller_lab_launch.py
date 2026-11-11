@@ -1,0 +1,90 @@
+#!/usr/bin/env python3
+# Copyright (c) 2026
+# 控制器实验室仿真启动文件
+#
+# 复用官方 tb3_simulation_launch.py，只替换 params_file。
+# 全局规划器仍是 nav2_astar_planner::AStarPlanner，控制器由 params 文件决定。
+#
+# 用法：
+#   ros2 launch nav2_controller_lab controller_lab_launch.py
+#   ros2 launch nav2_controller_lab controller_lab_launch.py headless:=True
+#   ros2 launch nav2_controller_lab controller_lab_launch.py use_rviz:=False
+
+import os
+
+from ament_index_python.packages import get_package_share_directory
+from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.conditions import IfCondition
+from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import Node
+
+
+def generate_launch_description():
+    lab_dir = get_package_share_directory('nav2_controller_lab')
+    bringup_dir = get_package_share_directory('nav2_bringup')
+    sim_dir = get_package_share_directory('nav2_minimal_tb3_sim')
+
+    default_params = os.path.join(
+        lab_dir, 'params', 'nav2_params_controller_lab.yaml')
+    default_rviz = os.path.join(
+        lab_dir, 'rviz', 'controller_lab_view.rviz')
+    default_world = os.path.join(
+        sim_dir, 'worlds', 'tb3_sandbox.sdf.xacro')
+
+    params_file = LaunchConfiguration('params_file')
+    headless = LaunchConfiguration('headless')
+    use_rviz = LaunchConfiguration('use_rviz')
+    use_composition = LaunchConfiguration('use_composition')
+    use_visualizer = LaunchConfiguration('use_visualizer')
+    world = LaunchConfiguration('world')
+    rviz_config_file = LaunchConfiguration('rviz_config_file')
+
+    ld = LaunchDescription()
+
+    ld.add_action(DeclareLaunchArgument(
+        'params_file', default_value=default_params,
+        description='Nav2 参数文件（默认使用 Pure Pursuit 控制器）'))
+    ld.add_action(DeclareLaunchArgument(
+        'headless', default_value='False',
+        description='是否无头运行（True 则不显示 Gazebo 窗口）'))
+    ld.add_action(DeclareLaunchArgument(
+        'use_rviz', default_value='True',
+        description='是否启动 RViz'))
+    ld.add_action(DeclareLaunchArgument(
+        'use_composition', default_value='False',
+        description='是否使用 composed bringup（本机建议 False）'))
+    ld.add_action(DeclareLaunchArgument(
+        'use_visualizer', default_value='True',
+        description='是否启动 Controller Lab 调试可视化节点'))
+    ld.add_action(DeclareLaunchArgument(
+        'world', default_value=default_world,
+        description='仿真世界文件'))
+    ld.add_action(DeclareLaunchArgument(
+        'rviz_config_file', default_value=default_rviz,
+        description='RViz 配置文件（已移除会段错误的 Docking 面板）'))
+
+    ld.add_action(IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(bringup_dir, 'launch', 'tb3_simulation_launch.py')),
+        launch_arguments={
+            'params_file': params_file,
+            'headless': headless,
+            'use_rviz': use_rviz,
+            'use_composition': use_composition,
+            'world': world,
+            'rviz_config_file': rviz_config_file,
+        }.items(),
+    ))
+
+    ld.add_action(Node(
+        package='nav2_controller_lab_rviz',
+        executable='controller_lab_visualizer',
+        name='controller_lab_visualizer',
+        output='screen',
+        parameters=[{'use_sim_time': True}],
+        condition=IfCondition(use_visualizer),
+    ))
+
+    return ld

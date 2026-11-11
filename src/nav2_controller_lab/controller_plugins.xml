@@ -1,0 +1,26 @@
+<library path="nav2_controller_lab">
+  <class type="nav2_controller_lab::PidController"
+         base_class_type="nav2_core::Controller">
+    <description>PID 路径跟踪基线（教学用，不处理障碍）</description>
+  </class>
+  <class type="nav2_controller_lab::PurePursuitController"
+         base_class_type="nav2_core::Controller">
+    <description>Pure Pursuit 几何路径跟踪（推荐入门）</description>
+  </class>
+  <class type="nav2_controller_lab::StanleyController"
+         base_class_type="nav2_core::Controller">
+    <description>Stanley 横向误差 + 航向误差路径跟踪</description>
+  </class>
+  <class type="nav2_controller_lab::DwbController"
+         base_class_type="nav2_core::Controller">
+    <description>DWB-lite：采样 (v, w) 并用 critics 评分</description>
+  </class>
+  <class type="nav2_controller_lab::MppiController"
+         base_class_type="nav2_core::Controller">
+    <description>MPPI-lite：采样控制序列 + 软最大加权</description>
+  </class>
+  <class type="nav2_controller_lab::MpcController"
+         base_class_type="nav2_core::Controller">
+    <description>MPC-lite：有限差分梯度 + 投影 + 线搜索的滚动优化</description>
+  </class>
+</library>
