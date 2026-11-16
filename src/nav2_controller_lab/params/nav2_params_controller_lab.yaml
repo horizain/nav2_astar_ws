@@ -68,7 +68,11 @@ bt_navigator:
 controller_server:
   ros__parameters:
     controller_frequency: 20.0
-    costmap_update_timeout: 0.30
+    # 2026-11 调优（docs/18 实验 C1）：等待 costmap "新鲜"的超时。
+    # 0.30 的官方默认让控制环被 costmap 更新节奏拖着走（实测 5-8Hz）。
+    # 调小后控制环按自己的 20Hz 跑，用上一次的 costmap 也够安全
+    # （下层还有 collision_monitor + CBF 两道防线）。
+    costmap_update_timeout: 0.05
     min_x_velocity_threshold: 0.001
     min_y_velocity_threshold: 0.5
     min_theta_velocity_threshold: 0.001
@@ -80,13 +84,25 @@ controller_server:
 
     progress_checker:
       plugin: "nav2_controller::SimpleProgressChecker"
-      required_movement_radius: 0.5
-      movement_time_allowance: 10.0
+      # 教学实验室专用调参（2026-11 端到端实验结论）：
+      # 本机 WSL2 headless 下激光只有 ~5Hz，costmap 更新把控制环拖到 ~6Hz，
+      # 采样类控制器（DWB/MPPI/MPC）在障碍附近会以 0.03~0.3 m/s 谨慎爬行。
+      # 官方默认（0.5m/10s）会把这种"慢而正常"的移动误判为失败，
+      # 触发 abort -> 恢复行为 -> 重规划 的搅局循环，机器人永远到不了目标。
+      # 放宽为 0.15m/25s：允许慢速绕障，只拦截真正的卡死。
+      required_movement_radius: 0.15
+      movement_time_allowance: 25.0
 
     general_goal_checker:
       stateful: True
       plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.25
+      # 教学实验室专用调参（2026-11 端到端实验结论）：
+      # MPPI-lite（100 采样、~6Hz）在目标口袋区（圆柱阵东侧）的 goal critic
+      # 与障碍 critic 平衡点在 ~0.27m 处，0.25 的容差永远差 2cm 够不着，
+      # 机器人会绕着目标口袋反复徘徊。差速小车教学场景放宽到 0.35m。
+      # 注意要 < FollowPath.goal_tolerance(0.40)：终点旋转阶段必须先介入，
+      # 机器人才会对准朝向，goal checker 才有机会在 xy 窗口内判成功。
+      xy_goal_tolerance: 0.35
       yaw_goal_tolerance: 0.25
 
     # ============================================================
@@ -96,7 +112,7 @@ controller_server:
     FollowPath:
       plugin: "nav2_controller_lab::PurePursuitController"
       transform_tolerance: 0.1
-      goal_tolerance: 0.25
+      goal_tolerance: 0.40
 
       lookahead_distance: 0.6
       min_lookahead_distance: 0.3
@@ -121,7 +137,7 @@ controller_server:
     PID:
       plugin: "nav2_controller_lab::PidController"
       transform_tolerance: 0.1
-      goal_tolerance: 0.25
+      goal_tolerance: 0.40
       kp_heading: 0.8
       ki_heading: 0.0
       kd_heading: 0.05
@@ -138,7 +154,7 @@ controller_server:
     Stanley:
       plugin: "nav2_controller_lab::StanleyController"
       transform_tolerance: 0.1
-      goal_tolerance: 0.25
+      goal_tolerance: 0.40
       k_cross: 1.0
       k_heading: 1.0
       wheelbase: 0.5
@@ -153,7 +169,7 @@ controller_server:
     DWB:
       plugin: "nav2_controller_lab::DwbController"
       transform_tolerance: 0.1
-      goal_tolerance: 0.25
+      goal_tolerance: 0.40
       min_linear_velocity: 0.0
       max_linear_velocity: 0.5
       max_angular_velocity: 1.9
@@ -161,20 +177,44 @@ controller_server:
       angular_samples: 11
       horizon: 1.5
       model_dt: 0.1
-      path_weight: 1.0
-      goal_weight: 2.0
-      obstacle_weight: 100.0
+      # ============================================================
+      # 2026-11 评分权重重构（解冻实验，详见 docs/16）：
+      #
+      # 旧配置 obstacle=100 / goal=2 / threshold=254 的后果：
+      #   障碍附近的代价场里，任何前进轨迹的 obstacle 均值代价
+      #   （raw 80~150 → 100×(raw/252) ≈ 32~60）压倒 goal 前进收益
+      #   （2.0×0.75m ≈ 1.5），而 v=0 原地不动停在代价 0 的格子上
+      #   总分永远最小 → 采样器每周期都选"站着"→ 机器人冻结。
+      #
+      # 官方 DWB 的语义（src/navigation2/nav2_dwb_controller/dwb_critics）：
+      #   ① 碰撞是二值的：isValidCost 拒绝 INSCRIBED(253)/LETHAL(254)/
+      #      UNKNOWN(255)，撞上即整条轨迹否决（collision_cost 一票否决）；
+      #   ② 不撞时 obstacle 只是近零权重的平手裁决器（BaseObstacle.scale
+      #      = 0.02，raw 代价 × 0.02，满值也才 ~5）；
+      #   ③ 前进收益由 GoalDist.scale=24.0 主导，贴路径由 PathDist.scale
+      #      =32.0 约束。
+      #
+      # 本评分器 obstacle 已归一化到 [0,1]（raw/252），映射到官方比例：
+      #   goal 24（前进主导）/ path 8（贴路径）/ obstacle 2（平手裁决：
+      #   满代价也只有 2.0，远小于全速一步 0.75m 的 goal 收益 18）
+      # ============================================================
+      path_weight: 8.0
+      goal_weight: 24.0
+      obstacle_weight: 2.0
       heading_weight: 0.5
       velocity_weight: 0.2
       control_weight: 0.05
       collision_cost: 1000000.0
-      collision_threshold: 254
+      # 官方 isValidCost：253(内切膨胀)与 254(致命)同属"必碰撞"——
+      # 机器人中心进入 253 区即保证碰撞。旧值 254 只挡真撞，
+      # 放任轨迹贴到障碍边缘 4cm 才回头。
+      collision_threshold: 253
       desired_linear_velocity: 0.5
 
     MPPI:
       plugin: "nav2_controller_lab::MppiController"
       transform_tolerance: 0.1
-      goal_tolerance: 0.25
+      goal_tolerance: 0.40
       min_linear_velocity: 0.0
       max_linear_velocity: 0.5
       max_angular_velocity: 1.9
@@ -198,7 +238,7 @@ controller_server:
     MPC:
       plugin: "nav2_controller_lab::MpcController"
       transform_tolerance: 0.1
-      goal_tolerance: 0.25
+      goal_tolerance: 0.40
       min_linear_velocity: 0.0
       max_linear_velocity: 0.5
       max_angular_velocity: 1.9
@@ -224,7 +264,11 @@ controller_server:
 local_costmap:
   local_costmap:
     ros__parameters:
-      update_frequency: 5.0
+      # 2026-11 调优（docs/18 实验 C2）：与 controller_frequency 对齐。
+      # 代价地图每 50ms 刷新一次"新鲜"状态，控制器的 isCurrent 等待消失。
+      # 实测（docs/18）：MPPI 控制环 5.5-8.3Hz → 19.62Hz；controller_server
+      # 总 CPU 15.2%（含 20Hz 代价地图，32 核机器上完全可接受）。
+      update_frequency: 20.0
       publish_frequency: 2.0
       global_frame: odom
       robot_base_frame: base_link
@@ -416,7 +460,12 @@ collision_monitor:
   ros__parameters:
     base_frame_id: "base_footprint"
     odom_frame_id: "odom"
-    cmd_vel_in_topic: "cmd_vel_smoothed"
+    # 2026-11：输入改为 CBF 安全过滤器的输出（docs/17）。
+    # 速度链路变为：velocity_smoother → cmd_vel_smoothed → cbf_safety_filter
+    #            → cmd_vel_cbf → collision_monitor → cmd_vel → 底盘
+    # collision_monitor 仍是最后防线（碰撞在即的离散停/慢），
+    # CBF 过滤器是它上游的连续平滑约束层。
+    cmd_vel_in_topic: "cmd_vel_cbf"
     cmd_vel_out_topic: "cmd_vel"
     state_topic: "collision_monitor_state"
     transform_tolerance: 0.2

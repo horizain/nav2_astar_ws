@@ -186,4 +186,16 @@ Pose2D toRobotFrame(const Pose2D & robot, const Pose2D & point)
   return out;
 }
 
+Control rotateInPlace(const Pose2D & robot, double goal_yaw, double max_angular_velocity)
+{
+  Control command;
+  command.linear = 0.0;
+  // P 控制：误差越大转得越快。符号约定 —— 目标朝向在逆时针方向（正误差）
+  // 时输出正 w，机器人左转（ROS 坐标系 z 轴朝上）。误差收敛到 0 时指令
+  // 自然归零，不会振荡。clamp 同时把误差限定在 [-π, π] 的最短方向上。
+  const double yaw_error = normalizeAngle(goal_yaw - robot.yaw);
+  command.angular = clamp(2.0 * yaw_error, -max_angular_velocity, max_angular_velocity);
+  return command;
+}
+
 }  // namespace nav2_controller_lab

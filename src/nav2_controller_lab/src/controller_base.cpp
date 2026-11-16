@@ -66,6 +66,7 @@ void ControllerBase::configure(
 
   declareAndGet(node, "transform_tolerance", 0.1, transform_tolerance_);
   declareAndGet(node, "goal_tolerance", 0.25, goal_tolerance_);
+  declareAndGet(node, "terminal_angular_velocity", 1.5, terminal_angular_velocity_);
 
   nav2_util::declare_parameter_if_not_declared(
     node, "controller_frequency", rclcpp::ParameterValue(20.0));
@@ -121,7 +122,7 @@ void ControllerBase::setPlan(const nav_msgs::msg::Path & path)
     global_plan_.header.frame_id.c_str());
 }
 
-std::vector<Pose2D> ControllerBase::transformPlanToLocalFrame() const
+std::vector<Pose2D> ControllerBase::transformPlanToLocalFrame()
 {
   if (global_plan_.poses.empty()) {
     throw nav2_core::InvalidPath("全局路径为空");
@@ -167,6 +168,12 @@ std::vector<Pose2D> ControllerBase::transformPlanToLocalFrame() const
     path.push_back(pose);
   }
 
+  // 保存原始路径末位姿的朝向（AStarPlanner 已写入目标朝向），供终点旋转
+  // 阶段使用。注意：recomputePathYaw 会把所有 yaw 覆盖成相邻点切线，
+  // 所以必须在这之后、覆盖之前提取 —— 这正是"路径终点朝向"和
+  // "路径切线"是两回事的地方。
+  path_terminal_yaw_ = path.back().yaw;
+
   // 统一用相邻点切线，避免上游朝向缺失或不一致
   recomputePathYaw(path);
   return path;
@@ -204,7 +211,26 @@ geometry_msgs::msg::TwistStamped ControllerBase::computeVelocityCommands(
   const double dt = 1.0 / std::max(control_frequency_, 1.0);
 
   Control command;
-  if (needsCostmap()) {
+  // ============================================================
+  // 终点旋转阶段（2026-11 端到端实验新增）
+  //
+  // 现象：机器人位置已到达 goal_tolerance 内，导航却永不返回成功，
+  // 控制器停在原地直到超时。
+  //
+  // 根因：六种控制器核心都只负责"跟路径"，路径走完就输出零速；
+  // 而 nav2 的 SimpleGoalChecker 同时检查位置和朝向（对路径末位姿，
+  // 即 A* 写入的目标朝向）。缺了"原地转到目标朝向"这一步就死锁。
+  //
+  // 官方控制器的对应实现：RPP 的 rotateToGoalHeading 阶段、
+  // MPPI 的 GoalAngleCritic。这里在基类统一实现，六种控制器共享；
+  // 纯算法在 path_utils::rotateInPlace（可单测）。
+  //
+  // 局限：本阶段不查局部代价地图（教学简化）。贴着障碍的目标
+  // 旋转可能碰到障碍， footprint 检查是 TODO（见 doc 14 后续可做）。
+  // ============================================================
+  if (!path.empty() && remainingDistance(robot, path) <= goal_tolerance_) {
+    command = rotateInPlace(robot, path_terminal_yaw_, terminal_angular_velocity_);
+  } else if (needsCostmap()) {
     std::unique_lock<nav2_costmap_2d::Costmap2D::mutex_t> lock(
       *(costmap_->getMutex()));
     command = computeCommand(robot, path, velocity.linear.x, dt);

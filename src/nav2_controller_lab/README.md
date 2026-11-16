@@ -16,6 +16,14 @@ A* 全局规划器，横向比较 **PID / Pure Pursuit / Stanley / DWB-lite / MP
 - [09 控制器实验手册](../../docs/09_控制器实验手册.md)
 - [13 控制器实验、调参与排错](../../docs/13_控制器实验调参与排错.md)
 - [14 控制器开发进度记录](../../docs/14_控制器开发进度记录.md)
+- [15 端到端链路实战](../../docs/15_端到端链路实战.md)（headless 一条命令跑通导航：`python3 docs/tools/e2e_nav_test.py --controller MPPI`）
+- [16 局部轨迹评分函数设计](../../docs/16_局部轨迹评分函数设计.md)（DWB 冻结解剖与解冻：`python3 docs/tools/dwb_scoring_demo.py`）
+- [17 CBF 安全过滤器](../../docs/17_CBF安全过滤器.md)（独立安全层，插在速度链路：`python3 docs/tools/cbf_experiment.py` 做 h(t) 对比）
+- [18 工程优化与实战技巧](../../docs/18_工程优化与实战技巧.md)（实测调优：控制环 5.5→19.6Hz；symlink-install 免编译改参）
+- [19 端到端策略与 VLA 路线图](../../docs/19_端到端策略与VLA路线图.md)（**规划篇⏳ 未实施**：BC/DAgger/VLA 微调的四阶段施工图）
+- [20 定位与建图 SLAM](../../docs/20_定位与建图SLAM.md)（slam_toolbox 建图→存图→自建图导航闭环：`auto_explorer.py` + `save_slam_map.py`）
+- [21 SLAM 建图原理零基础课](../../docs/21_SLAM建图原理零基础课.md)（栅格/EKF/粒子滤波/图优化，每个算法手算一遍且配 `slam_playground.py` 可跑演示 + [交互式网站](../../docs/website/index.html)）
+- [22 SLAM 工程实战](../../docs/22_SLAM工程实战.md)（参数逐条/雷达与里程计标定/抗干扰手册/故障速查）
 
 ---
 

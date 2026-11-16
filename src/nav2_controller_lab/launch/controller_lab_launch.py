@@ -64,6 +64,19 @@ def generate_launch_description():
     ld.add_action(DeclareLaunchArgument(
         'rviz_config_file', default_value=default_rviz,
         description='RViz 配置文件（已移除会段错误的 Docking 面板）'))
+    # SLAM 模式（docs/20）：slam:=True 时 bringup 用 slam_toolbox 替代
+    # map_server+AMCL —— 机器人边跑边建图（map_server/amcl 不启动）
+    slam = LaunchConfiguration('slam')
+    ld.add_action(DeclareLaunchArgument(
+        'slam', default_value='False',
+        description='True=slam_toolbox 在线建图（代替静态地图+AMCL）'))
+    # 自建地图（docs/20）：SLAM 存图后传给定位会话，如
+    #   map:=docs/tools/maps/lab_built.yaml
+    map_yaml = LaunchConfiguration('map')
+    ld.add_action(DeclareLaunchArgument(
+        'map', default_value=os.path.join(
+            bringup_dir, 'maps', 'tb3_sandbox.yaml'),
+        description='定位/导航用的地图 yaml（默认官方沙盒图）'))
 
     ld.add_action(IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -75,6 +88,8 @@ def generate_launch_description():
             'use_composition': use_composition,
             'world': world,
             'rviz_config_file': rviz_config_file,
+            'slam': slam,
+            'map': map_yaml,
         }.items(),
     ))
 
@@ -85,6 +100,33 @@ def generate_launch_description():
         output='screen',
         parameters=[{'use_sim_time': True}],
         condition=IfCondition(use_visualizer),
+    ))
+
+    # CBF 安全过滤器（docs/17）：独立安全层节点，插在速度链路里
+    #   velocity_smoother → cmd_vel_smoothed → cbf_safety_filter → cmd_vel_cbf
+    #   → collision_monitor → cmd_vel → 底盘
+    # 节点始终启动（collision_monitor 的输入依赖它），enabled 参数控制
+    # 过滤/旁路——运行时切换：ros2 param set /cbf_safety_filter enabled false
+    use_cbf = LaunchConfiguration('use_cbf')
+    ld.add_action(DeclareLaunchArgument(
+        'use_cbf', default_value='True',
+        description='CBF 安全过滤器默认启用（False 则纯透传，用于对比实验）'))
+    ld.add_action(Node(
+        package='nav2_controller_lab',
+        executable='cbf_safety_filter',
+        name='cbf_safety_filter',
+        output='screen',
+        parameters=[{
+            'use_sim_time': True,
+            'enabled': use_cbf,
+            'd_safe': 0.22,  # 屏障=机器人半径(接触边界)，与DWB 碰撞阈值253/内切语义严格对齐：docs/17 §6
+            'alpha': 2.0,
+            'scan_influence_range': 1.2,
+            # TB3 waffle 雷达外参：中心后方 6.4cm（gz_waffle.sdf.xacro lidar_joint）
+            # 不补偿 → 侧向束 h 被错误判负 → CBF 误拦合法运动（docs/17 §6）
+            'lidar_offset_x': -0.064,
+            'lidar_offset_y': 0.0,
+        }],
     ))
 
     return ld

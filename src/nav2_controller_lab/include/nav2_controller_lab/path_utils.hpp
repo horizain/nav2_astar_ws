@@ -70,6 +70,22 @@ double distanceToPath(const Pose2D & robot, const std::vector<Pose2D> & path);
 double remainingDistance(const Pose2D & robot, const std::vector<Pose2D> & path);
 
 /**
+ * @brief 终点旋转指令：原地旋转到目标朝向（纯 P 控制）
+ *
+ * 六种控制器核心都只负责"跟路径"，路径走完就输出零速，没有
+ * "原地转到目标朝向"的逻辑。而 nav2 的 SimpleGoalChecker 同时检查
+ * 位置和朝向，缺了这一步就会死锁：机器人停在目标旁边不动，
+ * 导航永远不返回成功。官方控制器也有对应阶段（RPP 的
+ * rotateToGoalHeading、MPPI 的 GoalAngleCritic）。
+ *
+ * @param robot 机器人位姿
+ * @param goal_yaw 目标朝向（弧度；A* 路径末位姿已写入目标朝向）
+ * @param max_angular_velocity 旋转角速度上限（rad/s）
+ * @return linear=0，angular 为限幅后的 P 控制旋转指令
+ */
+Control rotateInPlace(const Pose2D & robot, double goal_yaw, double max_angular_velocity);
+
+/**
  * @brief 把点变换到机器人坐标系
  */
 Pose2D toRobotFrame(const Pose2D & robot, const Pose2D & point);

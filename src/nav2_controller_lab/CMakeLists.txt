@@ -13,6 +13,7 @@ find_package(tf2_geometry_msgs REQUIRED)
 find_package(pluginlib REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_lifecycle REQUIRED)
+find_package(sensor_msgs REQUIRED)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -27,6 +28,7 @@ set(dependencies
   nav2_util
   nav_msgs
   geometry_msgs
+  sensor_msgs
   tf2
   tf2_ros
   tf2_geometry_msgs
@@ -40,6 +42,7 @@ add_library(${library_name} SHARED
   src/path_utils.cpp
   src/trajectory_utils.cpp
   src/trajectory_cost.cpp
+  src/cbf_core.cpp
   src/pid_core.cpp
   src/pure_pursuit_core.cpp
   src/stanley_core.cpp
@@ -62,7 +65,11 @@ target_compile_definitions(${library_name} PUBLIC "PLUGINLIB_DISABLE_BOOST_FUNCT
 # 告诉 nav2_core 的 pluginlib：本包含控制器插件
 pluginlib_export_plugin_description_file(nav2_core controller_plugins.xml)
 
-install(TARGETS ${library_name}
+add_executable(cbf_safety_filter src/cbf_safety_filter.cpp)
+target_link_libraries(cbf_safety_filter ${library_name})
+ament_target_dependencies(cbf_safety_filter ${dependencies})
+
+install(TARGETS ${library_name} cbf_safety_filter
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME}
@@ -89,6 +96,7 @@ if(BUILD_TESTING)
     src/path_utils.cpp
     src/trajectory_utils.cpp
     src/trajectory_cost.cpp
+    src/cbf_core.cpp
     src/pid_core.cpp
     src/pure_pursuit_core.cpp
     src/stanley_core.cpp

@@ -98,7 +98,7 @@ protected:
     node->get_parameter(parameter_name, out);
   }
 
-  std::vector<Pose2D> transformPlanToLocalFrame() const;
+  std::vector<Pose2D> transformPlanToLocalFrame();
   geometry_msgs::msg::TwistStamped zeroTwist() const;
 
   rclcpp_lifecycle::LifecycleNode::WeakPtr parent_node_;
@@ -115,6 +115,10 @@ protected:
   double transform_tolerance_{0.1};
   double control_frequency_{20.0};
   double goal_tolerance_{0.25};
+  double terminal_angular_velocity_{1.5};  ///< 终点旋转阶段的最大角速度 (rad/s)
+  /// 终点旋转的目标朝向 = 原始路径末位姿朝向（经 TF 到局部坐标系）。
+  /// 注意不能用 path.back().yaw —— recomputePathYaw 已把它覆盖成切线。
+  double path_terminal_yaw_{0.0};
 
   double speed_limit_{0.0};
   bool speed_limit_is_percentage_{false};
