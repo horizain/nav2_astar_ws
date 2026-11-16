@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SLAM·MPC 导航课堂 —— 从零实现激光 SLAM 与机器人导航</title>
+<meta name="description" content="面向零基础新手的 2D 激光 SLAM + MPC 控制器教学：11 章图文详解、7 个可交互仿真、约 1000 行可运行代码，跟着做就能跑出自己的激光 SLAM 项目与导航算法。">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Ccircle cx='20' cy='20' r='17' fill='%230b1220' stroke='%232563eb' stroke-width='3'/%3E%3Ccircle cx='20' cy='20' r='4' fill='%23f59e0b'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="assets/vendor/hljs/atom-one-dark.min.css">
+<link rel="stylesheet" href="assets/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="css/style.css">
+<script>window.SITE_ROOT = ".";</script>
+</head>
+<body id="home-page">
+<div id="site-header"></div>
+
+<!-- ================= HERO ================= -->
+<section class="hero">
+  <canvas id="hero-canvas"></canvas>
+  <div class="hero-inner">
+    <span class="kicker">激光 SLAM × MPC 控制 × 导航全栈 · 零基础友好</span>
+    <h1>动手造一台<br>会<span class="grad">自己建图</span>、<span class="grad">自己走路</span>的机器人</h1>
+    <p class="lead">从一个会漂移的小轮子开始，一步步实现完整的 2D 激光 SLAM：扫描匹配、
+      占据栅格建图、回环检测、位姿图优化；再用 MPC 控制器让机器人贴着规划路径稳稳行驶。
+      每一节都能跑、每张图都是真实运行结果、每个仿真都能上手玩。</p>
+    <div class="cta-row">
+      <a class="btn btn-primary" href="chapters/ch01.html">开始学习 · 第 1 章
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M3 8h10M9 4l4 4-4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </a>
+      <a class="btn btn-ghost" href="#sim-nav-section">先看最终效果 ↓</a>
+      <a class="btn btn-ghost" href="code/mini_slam/README.md">源码仓库</a>
+    </div>
+    <div class="stats">
+      <div class="stat"><b>11 章</b><span>图文详解 · 全部原创</span></div>
+      <div class="stat"><b>7 个</b><span>可交互 Canvas 仿真</span></div>
+      <div class="stat"><b>~1000 行</b><span>可运行的 Python 代码</span></div>
+      <div class="stat"><b>100%</b><span>结果图由真实运行生成</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 你将做出什么 ================= -->
+<section class="pad reveal">
+  <div class="container">
+    <div class="sec-head">
+      <div class="tag">WHAT YOU'LL BUILD</div>
+      <h2>你将亲手做出这两个东西</h2>
+      <p>不是玩具示意 —— 下面的图全部由本课程的 Python 代码实际运行生成，
+         你在浏览器里看到的每一帧仿真都和它逻辑一致。</p>
+    </div>
+    <div class="showcase">
+      <div class="shot">
+        <img src="assets/img/fig_slam_result.png" alt="mini-SLAM 建图结果">
+        <div class="cap">
+          <b>项目一 · mini-SLAM：2D 激光建图与定位</b>
+          <span>机器人在未知房间里跑两圈：里程计漂移 1.6 m，mini-SLAM 通过
+          ICP 扫描匹配 + 回环检测 + 位姿图优化把误差压到 0.2 m，
+          同时重建出干净的占据栅格地图。</span>
+        </div>
+      </div>
+      <div class="shot">
+        <img src="assets/img/fig_mpc_track.png" alt="MPC 轨迹跟踪结果">
+        <div class="cap">
+          <b>项目二 · MPC 控制器：轨迹跟踪与导航</b>
+          <span>基于运动学误差模型的模型预测控制（OSQP 求解 QP），
+          在速度/角速度约束下横向误差 RMSE 0.012 m，
+          急弯处误差只有纯追踪算法的三分之一。</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 特色 ================= -->
+<section class="pad reveal" style="background: var(--surface); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);">
+  <div class="container">
+    <div class="sec-head">
+      <div class="tag">WHY THIS COURSE</div>
+      <h2>为"完全没学过"的人设计的四个决定</h2>
+      <p>不预设控制理论 / 概率机器人 / 线性代数背景，需要的数学现场补，一次只讲用得上的。</p>
+    </div>
+    <div class="cards">
+      <div class="card">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="1.8"><path d="M4 19c3-8 6-8 8-3s5 5 8-11" stroke-linecap="round"/><path d="M4 5v14h16" stroke-linecap="round"/></svg></div>
+        <h3>先看见，再理解</h3>
+        <p>每章先让你"玩到"现象（漂移、对齐失败、地图绷直），再拆开讲背后的数学。直觉先行，公式殿后。</p>
+      </div>
+      <div class="card">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="1.8"><path d="M8 9l-4 3 4 3M16 9l4 3-4 3M13 6l-2 12" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+        <h3>代码全部可运行</h3>
+        <p>约 1000 行带中文注释的 Python，从光线投射到位姿图优化每一行都能跑。网站所有结果图 = 代码真实输出。</p>
+      </div>
+      <div class="card">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="1.8"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2.5" fill="#f59e0b" stroke="none"/><path d="M12 12l5-3M12 12l3 5" stroke-linecap="round"/></svg></div>
+        <h3>7 个交互仿真</h3>
+        <p>雷达扫描、ICP 对齐、实时建图、MPC 滑杆、A* 涂墙……全部原生 Canvas，拖一拖滑杆胜过看十页公式。</p>
+      </div>
+      <div class="card">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="1.8"><rect x="3" y="4" width="18" height="6" rx="2"/><rect x="3" y="14" width="18" height="6" rx="2"/><path d="M12 10v4" stroke-linecap="round"/></svg></div>
+        <h3>完整导航栈</h3>
+        <p>SLAM 建图 → A* 全局规划 → 路径拉直 → MPC 跟踪，最后一章演示真实机器人与 ROS 2 的进阶路线。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 课程路线 ================= -->
+<section class="pad reveal">
+  <div class="container">
+    <div class="sec-head">
+      <div class="tag">CURRICULUM</div>
+      <h2>课程路线图 · 约 8.5 小时</h2>
+      <p>三个部分层层递进。带 <span class="chip sim">仿真</span> 标记的章节有可交互演示，
+         带 <span class="chip code">代码</span> 标记的章节有配套 Python 实现。</p>
+    </div>
+
+    <div class="track-part"><b>第一部分 · 准备</b><div class="line"></div></div>
+    <div class="track-grid">
+      <a class="track-card" href="chapters/ch01.html">
+        <div class="num">CHAPTER 01</div><h3>课程总览与环境准备</h3>
+        <p>项目拆解 · 技术路线 · 10 分钟搭好 Python 环境</p>
+        <div class="meta"><span class="chip">20 分钟</span></div>
+      </a>
+      <a class="track-card" href="chapters/ch02.html">
+        <div class="num">CHAPTER 02</div><h3>数学最小集</h3>
+        <p>概率 · log-odds · 最小二乘与 Gauss-Newton · SE(2)</p>
+        <div class="meta"><span class="chip">35 分钟</span></div>
+      </a>
+    </div>
+
+    <div class="track-part"><b>第二部分 · mini-SLAM</b><div class="line"></div></div>
+    <div class="track-grid">
+      <a class="track-card" href="chapters/ch03.html">
+        <div class="num">CHAPTER 03</div><h3>传感器与仿真器</h3>
+        <p>激光雷达模型 · 运动学 · 写出第一个模拟器</p>
+        <div class="meta"><span class="chip">45 分钟</span><span class="chip sim">仿真</span><span class="chip code">代码</span></div>
+      </a>
+      <a class="track-card" href="chapters/ch04.html">
+        <div class="num">CHAPTER 04</div><h3>里程计与航迹推算</h3>
+        <p>亲手制造漂移惨案，理解 SLAM 为什么存在</p>
+        <div class="meta"><span class="chip">30 分钟</span><span class="chip sim">仿真</span><span class="chip code">代码</span></div>
+      </a>
+      <a class="track-card" href="chapters/ch05.html">
+        <div class="num">CHAPTER 05</div><h3>扫描匹配：ICP</h3>
+        <p>SVD 闭式解 · 迭代最近点 · 外点修剪</p>
+        <div class="meta"><span class="chip">50 分钟</span><span class="chip sim">仿真</span><span class="chip code">代码</span></div>
+      </a>
+      <a class="track-card" href="chapters/ch06.html">
+        <div class="num">CHAPTER 06</div><h3>占据栅格地图</h3>
+        <p>log-odds 贝叶斯更新 · 光线追踪</p>
+        <div class="meta"><span class="chip">40 分钟</span><span class="chip code">代码</span></div>
+      </a>
+      <a class="track-card" href="chapters/ch07.html">
+        <div class="num">CHAPTER 07</div><h3>位姿图优化与回环</h3>
+        <p>把 SLAM 变成图问题 · Gauss-Newton 拉直漂移</p>
+        <div class="meta"><span class="chip">55 分钟</span><span class="chip code">代码</span></div>
+      </a>
+      <a class="track-card" href="chapters/ch08.html">
+        <div class="num">CHAPTER 08</div><h3>组装完整 mini-SLAM</h3>
+        <p>关键帧 · 回环检测 · ATE 评估 · 全流程实跑</p>
+        <div class="meta"><span class="chip">60 分钟</span><span class="chip sim">仿真</span><span class="chip code">代码</span></div>
+      </a>
+    </div>
+
+    <div class="track-part"><b>第三部分 · 导航与控制</b><div class="line"></div></div>
+    <div class="track-grid">
+      <a class="track-card" href="chapters/ch09.html">
+        <div class="num">CHAPTER 09</div><h3>MPC 控制器</h3>
+        <p>滚动时域 · 误差模型 · QP 约束求解（OSQP）</p>
+        <div class="meta"><span class="chip">60 分钟</span><span class="chip sim">仿真</span><span class="chip code">代码</span></div>
+      </a>
+      <a class="track-card" href="chapters/ch10.html">
+        <div class="num">CHAPTER 10</div><h3>导航全栈整合</h3>
+        <p>A* 全局规划 + 路径拉直 + MPC 跟踪</p>
+        <div class="meta"><span class="chip">55 分钟</span><span class="chip sim">仿真</span><span class="chip code">代码</span></div>
+      </a>
+      <a class="track-card" href="chapters/ch11.html">
+        <div class="num">CHAPTER 11</div><h3>进阶路线与真实机器人</h3>
+        <p>ROS 2 · Cartographer · 硬件清单 · 调参秘籍</p>
+        <div class="meta"><span class="chip">30 分钟</span></div>
+      </a>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 全栈演示 ================= -->
+<section class="pad reveal" id="sim-nav-section" style="background: var(--surface); border-top: 1px solid var(--line);">
+  <div class="container">
+    <div class="sec-head">
+      <div class="tag">LIVE DEMO · FINAL SHOWCASE</div>
+      <h2>最终效果：完整的导航全栈（就在你浏览器里跑）</h2>
+      <p>这台"网页机器人"正在执行和课程代码完全相同的逻辑：巡逻建图（ICP + 回环 + 位姿图优化）
+         → 在自建地图上 A* 规划 → MPC 跟踪抵达目标。三个阶段会依次点亮。</p>
+    </div>
+    <div class="sim">
+      <div class="sim-head">
+        <span class="sim-dot"></span>
+        <span class="sim-title">导航全栈 · Nav-Stack Demo</span>
+        <span class="sim-hint">建图完成后可点击地图自定义目标点</span>
+      </div>
+      <canvas id="sim-nav" style="height: 520px"></canvas>
+      <div class="sim-bar">
+        <button class="sbtn primary" id="sim-nav-play">暂停 / 继续</button>
+        <button class="sbtn" id="sim-nav-plan">规划 → MPC</button>
+        <button class="sbtn" id="sim-nav-reset">重置</button>
+        <span class="badge" id="sim-nav-status">① 巡逻建图中…</span>
+        <span class="sctl" style="margin-left:auto">速度
+          <input type="range" id="sim-nav-speed" min="0.5" max="4" step="0.5" value="1.5">
+          <span class="val" id="sim-nav-speed-val">1.5×</span>
+        </span>
+      </div>
+      <div class="legend">
+        <span><i style="background:#f59e0b"></i>规划路径</span>
+        <span><i style="background:#2563eb"></i>机器人轨迹</span>
+        <span><i style="background:#93c5fd"></i>MPC 预测滚动</span>
+        <span><i style="background:rgba(220,38,38,0.8)"></i>SLAM 未知的真值墙</span>
+        <span><i style="background:#333"></i>建出的地图</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 适合谁 ================= -->
+<section class="pad reveal">
+  <div class="container">
+    <div class="sec-head">
+      <div class="tag">PREREQUISITES</div>
+      <h2>开始前，你只需要</h2>
+    </div>
+    <div class="cards">
+      <div class="card"><h3>✔ 会一点 Python</h3><p>会用变量、函数、列表就够了。NumPy 的用法在第 3 章现场教。</p></div>
+      <div class="card"><h3>✔ 高中数学</h3><p>三角函数、向量点积。微积分和线性代数会在第 2 章"最小必要版"里补齐。</p></div>
+      <div class="card"><h3>✔ 一台能装 Python 的电脑</h3><p>Windows / macOS / Linux 均可，不需要 GPU，不需要 ROS。</p></div>
+      <div class="card"><h3>✘ 不需要真实机器人</h3><p>全套实验都在仿真里完成；第 11 章再告诉你如何上真车。</p></div>
+    </div>
+  </div>
+</section>
+
+<div id="site-footer"></div>
+
+<script src="assets/vendor/katex/katex.min.js"></script>
+<script src="assets/vendor/katex/contrib/auto-render.min.js"></script>
+<script src="assets/vendor/hljs/highlight.min.js"></script>
+<script src="js/main.js"></script>
+<script src="js/sim/core.js"></script>
+<script src="js/sim/sim-lidar.js"></script>
+<script src="js/sim/sim-slam.js"></script>
+<script src="js/sim/sim-nav.js"></script>
+</body>
+</html>

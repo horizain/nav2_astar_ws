@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 9 章 · MPC 控制器 | SLAM·MPC 导航课堂</title>
+<link rel="stylesheet" href="../assets/vendor/hljs/atom-one-dark.min.css">
+<link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="../css/style.css">
+<script>window.SITE_ROOT = "..";</script>
+</head>
+<body>
+<div id="site-header"></div>
+
+<header class="page-head"><div class="container">
+  <div class="crumb"><a href="../index.html">首页</a> / 第三部分 · 导航与控制</div>
+  <h1>第 9 章 · MPC 控制器</h1>
+  <p class="sub">SLAM 解决"我在哪"，控制器解决"怎么走"。模型预测控制（MPC）是现代机器人
+     局部控制的事实标准：每一步求解"未来 N 步的最优控制"，但只执行第一步——
+     天然处理约束（限速、限转向）、天然具备前瞻性。本章完整推导运动学误差模型 + QP 构造，
+     并用 OSQP 实现，最后与纯追踪正面对决。</p>
+  <div class="meta-row">
+    <span class="chip blue">预计 60 分钟</span>
+    <span class="chip">前置：第 3 章（运动学）、第 2 章（最小二乘）</span>
+    <span class="chip">配套代码：run_mpc.py</span>
+  </div>
+</div></header>
+
+<div class="chapter-wrap">
+  <aside class="toc" id="toc"></aside>
+  <article class="content">
+
+    <h2 id="why-mpc"><span class="anchor-num">9.1</span>为什么 P 控制不够，MPC 值得学</h2>
+    <p>第 3 章的航点跟踪器本质是比例控制：<code>ω = k·e_θ</code>。它有两个先天缺陷：</p>
+    <ul>
+      <li><strong>短视</strong>：只看当前误差。急弯前不知道该提前减速、提前转向，冲过弯再补救——误差尖峰就是这么来的。</li>
+      <li><strong>无视约束</strong>：算出的 ω 可能超过底盘极限。硬截断（clip）后控制方向错误，震荡。</li>
+    </ul>
+    <p>MPC 的解法哲学：<strong>把"未来"和"约束"写进一个优化问题，每个控制周期解一次。</strong></p>
+    <figure class="fig">
+      <svg viewBox="0 0 940 260" style="width:100%;height:auto;font-family:inherit">
+        <defs><marker id="mpc-ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#94a3b8"/></marker></defs>
+        <g font-size="13">
+          <!-- horizon illustration -->
+          <rect x="30" y="30" width="560" height="200" rx="14" fill="#f8fafc" stroke="#cbd5e1"/>
+          <!-- reference path -->
+          <path d="M 60 200 C 160 90, 300 70, 420 110 S 560 200, 570 120" fill="none" stroke="#94a3b8" stroke-width="3" stroke-dasharray="10 7"/>
+          <!-- robot -->
+          <circle cx="120" cy="152" r="9" fill="#2563eb"/>
+          <!-- horizon segment highlight -->
+          <path d="M 120 152 C 200 105, 260 92, 340 102" fill="none" stroke="#60a5fa" stroke-width="5" opacity="0.55"/>
+          <path d="M 340 102 C 380 110, 400 118, 430 122" fill="none" stroke="#93c5fd" stroke-width="4" opacity="0.45"/>
+          <text x="105" y="185" fill="#2563eb" font-weight="700">机器人现在</text>
+          <text x="235" y="86" fill="#60a5fa">预测未来 N 步（时域内）</text>
+          <text x="430" y="142" fill="#94a3b8">时域外：不管</text>
+          <!-- executed -->
+          <circle cx="340" cy="102" r="7" fill="#f59e0b"/>
+          <text x="340" y="128" fill="#b45309" font-size="12" text-anchor="middle">只执行第一步</text>
+          <text x="310" y="222" text-anchor="middle" fill="#64748b" font-size="12.5">蓝色粗线 = 优化出来的未来轨迹；到下一周期一切重新来</text>
+          <!-- right steps -->
+          <rect x="620" y="40" width="300" height="180" rx="12" fill="#0d1526"/>
+          <text x="645" y="72" font-family="monospace" font-size="13.5" fill="#93c5fd">每个周期（20 Hz）：</text>
+          <text x="645" y="100" font-family="monospace" font-size="13" fill="#e2e8f0">① 测量当前状态 x</text>
+          <text x="645" y="126" font-family="monospace" font-size="13" fill="#e2e8f0">② 解未来 N 步优化 → u₀…u_N</text>
+          <text x="645" y="152" font-family="monospace" font-size="13" fill="#f59e0b">③ 只执行 u₀ 给电机</text>
+          <text x="645" y="178" font-family="monospace" font-size="13" fill="#e2e8f0">④ 时间前进，回到 ①</text>
+          <text x="645" y="205" font-family="monospace" font-size="12" fill="#6b8cc4">"滚动时域" Receding Horizon</text>
+        </g>
+      </svg>
+      <figcaption><b>滚动时域（Receding Horizon）。</b>永远只优化眼前 N 步、只执行第一步。
+      N 取 1.25 s（25 步 × 50 ms）时，小车在急弯前就有"预判"。</figcaption>
+    </figure>
+
+    <h2 id="model"><span class="anchor-num">9.2</span>第一步：把机器人写成方程</h2>
+    <p>沿用第 3 章的运动学：$\dot{x}=v\cos\theta,\ \dot{y}=v\sin\theta,\ \dot\theta=\omega$。
+    但直接拿 $(x,y,\theta)$ 做优化变量有两个麻烦：绝对坐标数值大、参考线附近的"误差"才是我们真正关心的。
+    于是做<strong>误差状态线性化</strong>——定义跟踪误差：</p>
+    <div class="math-block">$$
+      \mathbf{e}_k = \begin{bmatrix} x_k - x_k^r \\ y_k - y_k^r \\ \theta_k - \theta_k^r \end{bmatrix}
+      = [e_x,\ e_y,\ e_\theta]^\top,
+      \qquad
+      \Delta\mathbf{u}_k = \begin{bmatrix} v_k - v_k^r \\ \omega_k - \omega_k^r \end{bmatrix}
+    $$</div>
+    <p>在参考点 $(x^r, y^r, \theta^r, v^r)$ 处对运动学做一阶泰勒展开（把 $\cos/\sin$ 在参考角处展开），
+    得到每个预测步 $k$ 的<strong>线性时变</strong>系统：</p>
+    <div class="math-block">$$
+      \mathbf{e}_{k+1} = A_k\,\mathbf{e}_k + B_k\,\Delta\mathbf{u}_k + \mathbf{c}_k
+    $$</div>
+    <div class="math-block">$$
+      A_k = \begin{bmatrix} 1 & 0 & -v^r \sin\theta^r\,\Delta t \\ 0 & 1 & v^r \cos\theta^r\,\Delta t \\ 0 & 0 & 1 \end{bmatrix},
+      \quad
+      B_k = \begin{bmatrix} \cos\theta^r\,\Delta t & 0 \\ \sin\theta^r\,\Delta t & 0 \\ 0 & \Delta t \end{bmatrix}
+    $$</div>
+    <p>$\mathbf{c}_k$ 是补偿项：参考线本身由样条生成，不严格满足"以 $v^r$ 匀速走一步恰好到达下一个参考点"，
+    这一点"动力学不合规"用 $\mathbf{c}_k = f(\text{参考点}_k) - \text{参考点}_{k+1}$ 显式补进预测里。
+    忽略它的后果：直线上跟踪很好，弯道上出现系统性偏差——很多开源实现的 bug 源头。</p>
+
+    <div class="box box-theory">
+      <div class="box-title">为什么"线性化 + 逐周期重解"是合法的？</div>
+      <p>我们每 50 ms 都在新的真实状态处重新线性化——线性化的原点永远"跟得上"机器人，
+      所以泰勒展开的一阶近似始终在有效范围内。这是 MPC 能处理非线性系统的关键机制：
+      <strong>不追求一个大而全的非线性优化，而是把非线性拆成无限多个"刚刚线性化的小问题"。</strong></p>
+    </div>
+
+    <h2 id="qp"><span class="anchor-num">9.3</span>第二步：写出优化问题（QP）</h2>
+    <p>目标：时域内误差小、控制省、终点稳；约束：速度/角速度限幅 + 角加速度限幅（保护电机）。</p>
+    <div class="math-block">\[
+      \min_{\Delta u_0 \cdots \Delta u_{N-1}}
+      \;\Bigg[
+        \sum_{k=1}^{N} \mathbf{e}_k^\top Q\, \mathbf{e}_k
+        + \mathbf{e}_N^\top Q_f\, \mathbf{e}_N
+        + \sum_{k=0}^{N-1} \Delta\mathbf{u}_k^\top R\, \Delta\mathbf{u}_k
+      \Bigg]
+    \]</div>
+    <div class="math-block">\[
+      \text{s.t.}\quad
+      v_{min} \le v^r_k + \Delta v_k \le v_{max},\quad
+      |\omega^r_k + \Delta\omega_k| \le \omega_{max},\quad
+      |\Delta\omega_k - \Delta\omega_{k-1}| \le \dot\omega_{max}\,\Delta t
+    \]</div>
+    <p>参数解读：<strong>$Q$ 惩罚误差</strong>（横向 $e_y$ 通常给最大的权重——"贴线"最重要）；
+    <strong>$R$ 惩罚控制量</strong>（防抖，太大则懒动）；<strong>$Q_f$ 终端权重</strong>（理论上保证稳定性，
+    实践中取 $8Q$ 左右能让预测"看得更远"）。</p>
+    <p>把预测方程沿时域堆叠（递推代入），决策变量只剩 $\Delta\mathbf{u}_{0..N-1}$（$2N$ 个标量），
+    整个问题变成标准的<strong>凸二次规划（QP）</strong>：$N=25$ 时只有 50 个变量、150 条约束。
+    这正是 OSQP 的舒适区（它处理的工业问题动辄几万变量）。</p>
+
+    <div class="codeblock"><div class="cb-head"><span class="cb-file">run_mpc.py —— 凝聚 QP 构造 + OSQP 求解（节选）</span><button class="copy">复制</button></div>
+<pre><code class="language-python">def solve(self, state, ref, w_prev):
+    """ref: (N+1, 5) = [x, y, θ, v, ω] 未来 N+1 步参考"""
+    e0 = state - ref[0][:3]                    # 当前误差（角度已 wrap）
+    As, Bs, cs = self._dynamics(ref)           # 每步的线性化 A/B/c
+
+    # ---- 凝聚预测：E_k = Φ_k·e0 + Σ Su·Δu + C ----
+    # 逐步累积：E(3N,), Su(3N × 2N) —— 状态全部消掉
+    ...
+    # ---- QP：min ½ zᵀH z + qᵀz，z = Δu_0..Δu_{N-1} ----
+    H = Su.T @ Qbar @ Su + block_diag(R)       # 2N × 2N
+    q = Su.T @ Qbar @ E
+    # ---- 约束：v/ω 限幅 + 角加速度限幅 ----
+    for k in range(N):
+        A_rows.append(δv_k 行);  l/u = [V_MIN, V_MAX] - v_ref[k]
+        A_rows.append(δω_k 行);  l/u = [±W_MAX] - ω_ref[k]
+    for k in range(N):                          # |ω_k − ω_{k−1}| ≤ DW·dt
+        A_rows.append(ω_k − ω_{k−1} 行)
+    # ---- OSQP ----
+    prob = osqp.OSQP()
+    prob.setup(P=sparse(H), q=q, A=sparse(A_rows),
+               l=l_rows, u=u_rows, verbose=False, warm_starting=True)
+    res = prob.solve()
+    return v_ref[0] + res.x[0], ω_ref[0] + res.x[1]   # 只取第一个！</code></pre></div>
+
+    <div class="box box-tip">
+      <div class="box-title">为什么选 OSQP？</div>
+      <p>OSQP 专为 MPC 场景设计：<strong>热启动</strong>（上一周期的解是本周期极好的初值，
+      通常 5~10 次迭代就收敛）、ADMM 求解器对稠密/稀疏通吃、API 只要 P/q/A/l/u 五件套。
+      若你不想装依赖，第 2 章的"无约束 GN"也能解（代价：约束只能靠 clip 硬顶，
+      第 9.6 节网页版演示就是这么做的轻量近似）。</p>
+    </div>
+
+    <h2 id="results"><span class="anchor-num">9.4</span>成绩单：MPC vs 纯追踪</h2>
+    <p>同一参考路径（含两处急弯）、同一机器人、同一噪声种子，跑完整两圈（184 s / 100 m）：</p>
+    <figure class="fig">
+      <img src="../assets/img/fig_mpc_err.png" alt="横向误差对比">
+      <figcaption><b>横向误差对比（真实运行）。</b>全程 RMSE：MPC 0.012 m vs 纯追踪 0.029 m；
+      差距全部来自急弯——纯追踪冲到 14.7 cm，MPC 只有 4.3 cm。MPC 在弯道前提前减速（速度调度）
+      并提前转向，这就是"时域"的价值。</figcaption>
+    </figure>
+    <figure class="fig">
+      <img src="../assets/img/fig_mpc_inputs.png" alt="控制量与约束">
+      <figcaption><b>左：控制量始终贴着约束线跑。</b>红线是 v/ω 的限幅——注意急弯处 ω 顶到 ±1.6 rad/s
+      被约束"优雅地"压住而不是硬截断；v 也按曲率调度到 0.3 m/s。这就是约束优化的意义：
+      <b>知道边界在哪，才能贴着边界把性能榨干</b>。</figcaption>
+    </figure>
+    <figure class="fig">
+      <img src="../assets/img/fig_mpc_horizon.png" alt="滚动时域预测">
+      <figcaption><b>三个时刻的"水晶球"。</b>每个色块是当时优化出的未来 25 步预测轨迹（1.25 s）。
+      下一时刻它们被丢弃、重新求解——预测永远在滚动，如同多次曝光的照片。</figcaption>
+    </figure>
+
+    <h2 id="live"><span class="anchor-num">9.5</span>实把玩：调参驾驶舱</h2>
+    <p>下面的仿真把每个关键参数做成了滑杆。<strong>实验指南</strong>：</p>
+    <ol>
+      <li><strong>N（预测步数）</strong>：从 25 调到 8 —— 机器人变"近视"，急弯误差变大；调到 40 —— 更稳但计算变重。
+        这就是"看得远"的代价曲线。</li>
+      <li><strong>Q（横向权重）</strong>：调到 0.5 —— 机器人变得"懒散"，切弯抄近路；调到 10 —— 神经质般贴线，ω 抖动加剧。</li>
+      <li><strong>R（控制权重）</strong>：调到 1.0 —— 控制变得慵懒迟钝；调到 0.05 —— 反应极快但可能小幅震荡。</li>
+      <li><strong>限速</strong>：调到 1.0 m/s —— 注意它自动在急弯前减速（参考轨迹按曲率调度），
+        这就是约束感知和"硬踩油门"的区别。</li>
+    </ol>
+
+    <div class="sim">
+      <div class="sim-head"><span class="sim-dot"></span>
+        <span class="sim-title">交互 · MPC 调参驾驶舱</span>
+        <span class="sim-hint">右上角迷你图 = 最近 13 秒的横向误差曲线</span></div>
+      <canvas id="sim-mpc" style="height: 470px"></canvas>
+      <div class="sim-bar">
+        <button class="sbtn primary" id="sim-mpc-play">暂停 / 继续</button>
+        <button class="sbtn" id="sim-mpc-reset">重置</button>
+        <label class="sctl"><input type="checkbox" id="sim-mpc-ghost" checked> 显示预测滚动</label>
+        <span class="sctl">N
+          <input type="range" id="sim-mpc-N" min="8" max="40" step="1" value="25">
+          <span class="val" id="sim-mpc-N-val">25</span></span>
+        <span class="sctl">Q
+          <input type="range" id="sim-mpc-q" min="0.5" max="10" step="0.5" value="3">
+          <span class="val" id="sim-mpc-q-val">3</span></span>
+        <span class="sctl">R
+          <input type="range" id="sim-mpc-r" min="0.05" max="1" step="0.05" value="0.2">
+          <span class="val" id="sim-mpc-r-val">0.2</span></span>
+        <span class="sctl">限速
+          <input type="range" id="sim-mpc-vmax" min="0.4" max="1.2" step="0.1" value="1">
+          <span class="val" id="sim-mpc-vmax-val">1.0</span></span>
+      </div>
+      <div class="legend">
+        <span><i style="background:#5b6c8f"></i>参考轨迹</span>
+        <span><i style="background:#2563eb"></i>机器人</span>
+        <span><i style="background:#93c5fd"></i>预测滚动（未来 N 步）</span>
+        <span><i style="background:#ef4444"></i>当前横向误差</span>
+      </div>
+    </div>
+
+    <h2 id="summary"><span class="anchor-num">9.6</span>两种实现的对照（网页演示 vs 课程代码）</h2>
+    <table class="tbl">
+      <tr><th></th><th>课程代码 run_mpc.py</th><th>网页演示 sim-mpc.js</th></tr>
+      <tr><td>QP 求解</td><td>OSQP（ADMM，带全部约束）</td><td>高斯消元解无约束 QP + 输入限幅</td></tr>
+      <tr><td>约束处理</td><td>硬约束，优雅贴边</td><td>饱和截断（约束激活时有小误差）</td></tr>
+      <tr><td>角加速度约束</td><td>有</td><td>有（显式 clamp）</td></tr>
+      <tr><td>用途</td><td>精确复现 / 论文级结果</td><td>60 fps 实时交互演示</td></tr>
+    </table>
+    <p>两者在约束未激活时表现几乎一致——这也是检验你 QP 构造正确性的方法：
+    <strong>先写无约束版本对拍，再加约束。</strong></p>
+
+    <div class="box box-check">
+      <div class="box-title">检查点 · 离开本章前</div>
+      <ul>
+        <li>能写出误差状态模型 e_{k+1} = A e + B Δu + c，并解释 c 的来源</li>
+        <li>能默写 QP 的代价与三类约束</li>
+        <li>玩过调参驾驶舱的全部 4 个滑杆，能预测每个参数的方向性影响</li>
+        <li>知道 OSQP 的热启动为什么让 MPC 实时可行</li>
+      </ul>
+    </div>
+
+    <details class="ex"><summary>练习 1 · 验证 c_k 的必要性</summary>
+      <div class="ans">把 run_mpc.py 里 <code>_dynamics</code> 的 cvec 置零重跑。
+      圆角弯道处 RMSE 从 0.012 m 涨到 ~0.02 m，且曲率越大偏差越大——
+      补偿项的作用被曲率放大。参考线如果改用"严格按运动学生成的轨迹"（v、ω、θ 完全一致），
+      c 自然为零；样条参考线则必须补。</div>
+    </details>
+    <details class="ex"><summary>练习 2 · 加避障约束（进阶）</summary>
+      <div class="ans">对每个障碍物写线性化的"距离不等式"是难事（非凸）。实践方案是软约束：
+      代价里加障碍惩罚项 $\sum \max(0, d_{safe} - \|\mathbf{p}_k - \mathbf{o}\|)^2$，
+      或者用控制障碍函数（CBF）。提示：先把预测步的机器人位置写成 Δu 的线性函数（已有 Su 矩阵！），
+      惩罚项对 Δu 的梯度就能解析算出，用 OSQP 的 q 向量增补。
+      这是通往"动态避障 MPC"的第一步。</div>
+    </details>
+
+    <nav class="pager" id="pager"></nav>
+  </article>
+</div>
+
+<div id="site-footer"></div>
+<script src="../assets/vendor/katex/katex.min.js"></script>
+<script src="../assets/vendor/katex/contrib/auto-render.min.js"></script>
+<script src="../assets/vendor/hljs/highlight.min.js"></script>
+<script src="../js/main.js"></script>
+<script src="../js/sim/core.js"></script>
+<script src="../js/sim/sim-mpc.js"></script>
+</body>
+</html>

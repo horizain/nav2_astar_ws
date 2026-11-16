@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 8 章 · 组装完整 mini-SLAM | SLAM·MPC 导航课堂</title>
+<link rel="stylesheet" href="../assets/vendor/hljs/atom-one-dark.min.css">
+<link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="../css/style.css">
+<script>window.SITE_ROOT = "..";</script>
+</head>
+<body>
+<div id="site-header"></div>
+
+<header class="page-head"><div class="container">
+  <div class="crumb"><a href="../index.html">首页</a> / 第二部分 · mini-SLAM</div>
+  <h1>第 8 章 · 组装完整 mini-SLAM</h1>
+  <p class="sub">所有零件到齐：仿真器、里程计、ICP、占据栅格、位姿图。这一章把它们拧成一台完整的
+     SLAM 机器——先讲流水线的骨架（关键帧机制），再讲最后的评估指标 ATE，
+     然后你会得到一台"网页版 mini-SLAM"实时把玩，以及一份调参秘籍。</p>
+  <div class="meta-row">
+    <span class="chip blue">预计 60 分钟</span>
+    <span class="chip">前置：第 3-7 章全部</span>
+    <span class="chip">配套代码：run_slam.py</span>
+  </div>
+</div></header>
+
+<div class="chapter-wrap">
+  <aside class="toc" id="toc"></aside>
+  <article class="content">
+
+    <h2 id="pipeline"><span class="anchor-num">8.1</span>全流程鸟瞰</h2>
+    <figure class="fig">
+      <svg viewBox="0 0 960 240" style="width:100%;height:auto;font-family:inherit">
+        <defs><marker id="p8-ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#94a3b8"/></marker></defs>
+        <g font-size="13">
+          <g>
+            <rect x="20" y="40" width="150" height="70" rx="12" fill="#eff4ff" stroke="#93c5fd"/>
+            <text x="95" y="68" text-anchor="middle" font-weight="700" fill="#1e40af">数据采集</text>
+            <text x="95" y="90" text-anchor="middle" font-size="12" fill="#475569">20 Hz 激光 + 里程计</text>
+            <rect x="200" y="40" width="170" height="70" rx="12" fill="#eff4ff" stroke="#93c5fd"/>
+            <text x="285" y="68" text-anchor="middle" font-weight="700" fill="#1e40af">关键帧筛选</text>
+            <text x="285" y="90" text-anchor="middle" font-size="12" fill="#475569">走满 0.8 m 才收一帧</text>
+            <rect x="400" y="40" width="170" height="70" rx="12" fill="#fff7e6" stroke="#fbbf24"/>
+            <text x="485" y="68" text-anchor="middle" font-weight="700" fill="#92400e">ICP 运动边</text>
+            <text x="485" y="90" text-anchor="middle" font-size="12" fill="#475569">初值 = 里程计增量</text>
+            <rect x="600" y="40" width="170" height="70" rx="12" fill="#fff7e6" stroke="#fbbf24"/>
+            <text x="685" y="68" text-anchor="middle" font-weight="700" fill="#92400e">回环检测</text>
+            <text x="685" y="90" text-anchor="middle" font-size="12" fill="#475569">位置近 + 隔得远 + ICP 好</text>
+            <rect x="800" y="40" width="140" height="70" rx="12" fill="#ecfdf5" stroke="#6ee7b7"/>
+            <text x="870" y="68" text-anchor="middle" font-weight="700" fill="#065f46">位姿图 GN</text>
+            <text x="870" y="90" text-anchor="middle" font-size="12" fill="#475569">拉直一切漂移</text>
+          </g>
+          <g stroke="#94a3b8" stroke-width="1.6">
+            <line x1="170" y1="75" x2="198" y2="75" marker-end="url(#p8-ar)"/>
+            <line x1="370" y1="75" x2="398" y2="75" marker-end="url(#p8-ar)"/>
+            <line x1="570" y1="75" x2="598" y2="75" marker-end="url(#p8-ar)"/>
+            <line x1="770" y1="75" x2="798" y2="75" marker-end="url(#p8-ar)"/>
+          </g>
+          <g>
+            <rect x="400" y="150" width="200" height="60" rx="12" fill="#f2f4f7" stroke="#cbd5e1"/>
+            <text x="500" y="175" text-anchor="middle" font-weight="700" fill="#1e293b">优化后位姿</text>
+            <text x="500" y="196" text-anchor="middle" font-size="12" fill="#475569">→ 重建占据栅格地图</text>
+            <rect x="650" y="150" width="200" height="60" rx="12" fill="#f2f4f7" stroke="#cbd5e1"/>
+            <text x="750" y="175" text-anchor="middle" font-weight="700" fill="#1e293b">ATE 评估</text>
+            <text x="750" y="196" text-anchor="middle" font-size="12" fill="#475569">与真值对比打分</text>
+          </g>
+          <g stroke="#94a3b8" stroke-width="1.6">
+            <path d="M870 112 v40 H610" fill="none" marker-end="url(#p8-ar)"/>
+            <line x1="650" y1="180" x2="648" y2="180" marker-end="url(#p8-ar)"/>
+          </g>
+        </g>
+      </svg>
+      <figcaption><b>mini-SLAM 流水线。</b>上半排是"在线"部分（每来一帧跑一次），
+      下半排是"离线"部分（回环触发或跑完全程后执行）。</figcaption>
+    </figure>
+
+    <h2 id="keyframe"><span class="anchor-num">8.2</span>关键帧：让后端不必处理每一帧</h2>
+    <p>20 Hz × 161 s = 3220 帧，但相邻帧之间机器人只挪了 2.75 cm——处理每一帧是浪费。
+    <strong>关键帧（keyframe）机制：只有当机器人相对上一个关键帧走够 0.8 m 或转够 45° 才收一帧</strong>，
+    3220 帧压缩成 110 个关键帧，后端负担缩小 30 倍，而信息几乎无损（相邻帧扫描本来就大量重叠）。</p>
+    <div class="codeblock"><div class="cb-head"><span class="cb-file">run_slam.py —— 关键帧筛选</span><button class="copy">复制</button></div>
+<pre><code class="language-python">kf_step = 0.8                                  # 关键帧间隔（米）
+kf_idx = [0]
+for k in range(1, len(odom_traj)):
+    d = odom_traj[k, :2] - odom_traj[kf_idx[-1], :2]
+    turn = abs(wrap(odom_traj[k, 2] - odom_traj[kf_idx[-1], 2]))
+    if np.hypot(*d) >= kf_step or turn > np.deg2rad(45):
+        kf_idx.append(k)</code></pre></div>
+    <p>两个参数的取舍：间隔太大（&gt;1.5 m）时两帧重叠过少，ICP 对不上；
+    太小（&lt;0.4 m）时节点数膨胀、图优化变慢，而精度几乎不涨。0.8 m ≈ 量程的 9%、
+    帧间重叠率 &gt;85%，是被 Cartographer 等系统验证过的甜点区。</p>
+
+    <h2 id="front-end"><span class="anchor-num">8.3</span>前端：运动边 + 初值策略</h2>
+    <p>每对相邻关键帧做一次 ICP。这里有个决定成败的细节——<strong>坐标系约定</strong>：
+    ICP 必须在"参考帧的机体坐标系"内进行，返回的才是"i→j 的相对位姿"：</p>
+    <div class="codeblock"><div class="cb-head"><span class="cb-file">run_slam.py —— 运动边生成</span><button class="copy">复制</button></div>
+<pre><code class="language-python">for a in range(1, n_kf):
+    T_init = inv(T_odom[a-1]) @ T_odom[a]        # 里程计相对位姿做初值
+    ref = scan_to_local(scans[kf_idx[a-1]])      # 上一帧：机体系点云
+    cur = scan_to_local(scans[kf_idx[a]])        # 当前帧：机体系点云
+    T, rmse, _ = icp(ref, cur, init_pose=matrix_to_se2(T_init))
+    info = info_bad if rmse > 0.25 else info_odom  # 差边降权
+    pg.add_edge(a-1, a, matrix_to_se2(T), info)
+    chain.append(chain[-1] @ se2_exp(matrix_to_se2(T)))  # 链式估计</code></pre></div>
+    <div class="box box-warn">
+      <div class="box-title">本课程开发中真实踩过的三个坑（写出来防止你重蹈）</div>
+      <ul>
+        <li><strong>把"修正量"当"相对位姿"</strong>：如果先把 cur 预变换再以 0 为初值调 ICP，
+          返回的 T 只是修正量，z ≈ 0 —— 图里所有边都退化成"没动"。修复：把初值交给 icp() 内部，
+          直接用返回值。</li>
+        <li><strong>闭包缓存了旧数组引用</strong>：航点跟随器在创建时缓存了 <code>robot.pose</code> 的引用，
+          而运动学积分是"重新绑定新数组"——控制器永远看到起点，机器人一路冲出房间。</li>
+        <li><strong>回环搜索的哨兵值</strong>：<code>last_loop_a = -99</code> 配上错误的比较方向，
+          导致除第一帧外永远跳过回环搜索。调试SLAM 前端时，先打印"回环候选有几个、每个的 RMSE 是多少"。</li>
+      </ul>
+    </div>
+
+    <h2 id="eval"><span class="anchor-num">8.4</span>评估：ATE 指标</h2>
+    <p>怎么给 SLAM 打分？标准答案是<strong>绝对轨迹误差（Absolute Trajectory Error, ATE）</strong>：</p>
+    <div class="math-block">$$
+      \mathrm{ATE}_i = \big\|\, R\,\hat{\mathbf{p}}_i + \mathbf{t} - \mathbf{p}_i^{gt}\,\big\|,
+      \qquad
+      \mathrm{RMSE} = \sqrt{\tfrac{1}{N}\sum_i \mathrm{ATE}_i^2}
+    $$</div>
+    <p>注意 $(R, \mathbf{t})$ 这一步：<strong>SLAM 没有上帝视角，它建出的"世界原点"可以和真值差一个全局刚体变换</strong>。
+    评估前先用 <strong>Umeyama 对齐</strong>（第 2 章 SVD 闭式解的又一化身）把估计轨迹刚性对齐到真值，
+    再逐点算距离。这和 evo、TUM 基准的做法一致。</p>
+    <figure class="fig">
+      <img src="../assets/img/fig_ate.png" alt="ATE 曲线">
+      <figcaption><b>误差随时间变化（真实运行）。</b>橙线：里程计误差涨到 1.6 m 且无界；
+      蓝线：mini-SLAM 全程 &lt; 0.5 m，且在每次回环后"复位"。注意蓝线在 42s / 126s 的两个尖峰——
+      那是急弯处 ICP 约束变弱的位置，位姿图把它们摊平了。</figcaption>
+    </figure>
+    <figure class="fig">
+      <img src="../assets/img/fig_map_compare.png" alt="里程计建图 vs SLAM 建图">
+      <figcaption><b>为什么要 SLAM 的最终答案（真实运行）。</b>左：用里程计位姿建图——
+      墙变"厚"了、柱子出现鬼影、第二圈与第一圈对不齐；右：SLAM 位姿建图——干净锐利，
+      与红色真值轮廓重合。</figcaption>
+    </figure>
+
+    <h2 id="live"><span class="anchor-num">8.5</span>实把玩：网页版 mini-SLAM</h2>
+    <p>下面这台"浏览器机器人"运行着与 <code>run_slam.py</code> 完全相同的前端 + 后端
+    （ICP、关键帧、回环检测、数值雅可比 GN——全部用 JavaScript 重写了一遍）。
+    三个面板：真值（上帝视角，算法拿不到）、纯里程计、mini-SLAM 实时建图。</p>
+
+    <div class="sim">
+      <div class="sim-head"><span class="sim-dot"></span>
+        <span class="sim-title">交互 · mini-SLAM 实时运行</span>
+        <span class="sim-hint">盯住第 ③ 面板：每次回环时地图会"啪"地绷直</span></div>
+      <canvas id="sim-slam" style="height: 470px"></canvas>
+      <div class="sim-bar">
+        <button class="sbtn primary" id="sim-slam-play">暂停 / 继续</button>
+        <button class="sbtn" id="sim-slam-pgo">手动位姿图优化</button>
+        <button class="sbtn" id="sim-slam-reset">重置</button>
+        <span class="sctl">里程计噪声
+          <input type="range" id="sim-slam-noise" min="0.5" max="3" step="0.25" value="1">
+          <span class="val" id="sim-slam-noise-val">1×</span></span>
+        <span class="sctl">倍速
+          <input type="range" id="sim-slam-speed" min="1" max="5" step="0.5" value="2">
+          <span class="val" id="sim-slam-speed-val">2×</span></span>
+        <span class="badge" id="sim-slam-status">运行中</span>
+      </div>
+      <div class="legend">
+        <span><i style="background:#10b981"></i>真值轨迹</span>
+        <span><i style="background:#f59e0b"></i>里程计</span>
+        <span><i style="background:#60a5fa"></i>SLAM 关键帧位姿</span>
+        <span><i style="background:#ef4444"></i>回环边</span>
+      </div>
+    </div>
+
+    <h2 id="tuning"><span class="anchor-num">8.6</span>调参秘籍（抄作业表）</h2>
+    <table class="tbl">
+      <tr><th>参数</th><th>课程值</th><th>调大 →</th><th>调小 →</th></tr>
+      <tr><td>关键帧间隔</td><td>0.8 m</td><td>节点少跑得快，重叠少 ICP 易失败</td><td>精度冗余，图大变慢</td></tr>
+      <tr><td>ICP 修剪比</td><td>0.8</td><td>容忍更多噪声，动态物体更稳</td><td>锐利但对坏点敏感</td></tr>
+      <tr><td>运动边信息矩阵</td><td>diag(400,400,1e4)</td><td>更信 ICP、少信回环 → 漂移保留</td><td>地图更"软"，回环更容易掰弯它</td></tr>
+      <tr><td>回环 RMSE 门槛</td><td>0.12 m</td><td>回环更少、更保守（漏真回环）</td><td>更多回环、更易出错回环</td></tr>
+      <tr><td>回环候选半径</td><td>1.5 m</td><td>候选更多、计算更贵</td><td>可能错过真回环（漂移大于半径时）</td></tr>
+      <tr><td>l_max（log-odds 饱和）</td><td>4.0</td><td>信仰更坚定，难自我修正</td><td>地图"水性杨花"，噪声残留多</td></tr>
+    </table>
+
+    <div class="box box-tip">
+      <div class="box-title">破坏性实验清单（强烈推荐全部做一遍）</div>
+      <ul>
+        <li>注释掉所有回环边 → 观察"鬼影回归"</li>
+        <li>里程计噪声 ×3 → 观察 ICP 初值失效、低质量边暴增（看日志）</li>
+        <li>把 GN 的 <code>se2_exp</code> 换成直接加 → 观察优化发散</li>
+        <li>把 ICP 初值改成 0（不用里程计）→ 局部极小暴雷</li>
+        <li>激光噪声 σ 从 0.02 调到 0.10 → 找到"地图还能看"的极限</li>
+      </ul>
+    </div>
+
+    <div class="box box-check">
+      <div class="box-title">检查点 · 离开本章前</div>
+      <ul>
+        <li>能画出 8.1 的流水线图并说出每块输入输出</li>
+        <li>理解关键帧机制的取舍，知道 0.8 m 从哪来</li>
+        <li>会用 ATE（含 Umeyama 对齐）给轨迹打分</li>
+        <li>在网页仿真里看过至少 3 次回环绷紧的瞬间</li>
+        <li><code>python run_slam.py</code> 输出的所有数字都能解释</li>
+      </ul>
+    </div>
+
+    <details class="ex"><summary>练习 1 · 在线 vs 离线</summary>
+      <div class="ans">课程为了简化，位姿图优化只在回环触发/跑完两圈时执行。
+      把 <code>runPGO()</code> 挪到每 10 个关键帧执行一次（在线平滑），
+      对比 ATE 曲线：在线版误差全程更低，但 CPU 占用升高。真实系统在两者间权衡
+      （Cartographer：分支定界回环 + 每 5 s 一次全图优化）。</div>
+    </details>
+    <details class="ex"><summary>练习 2 · 把 ATE 换成 RPE</summary>
+      <div class="ans">相对位姿误差（RPE）衡量"相邻帧位移/转角"的精度（不含全局对齐），
+      对里程计评估更有意义。实现：对相邻两帧估计位姿做差 $\hat T_k^{-1}\hat T_{k+1}$ 与真值差对比，
+      平移/旋转分开报 RMSE。你会发现 SLAM 的 RPE ≈ ICP 单帧精度（~2 cm），
+      而里程计 RPE ≈ 3 cm——差在"重置"机会而不是单帧精度。</div>
+    </details>
+
+    <nav class="pager" id="pager"></nav>
+  </article>
+</div>
+
+<div id="site-footer"></div>
+<script src="../assets/vendor/katex/katex.min.js"></script>
+<script src="../assets/vendor/katex/contrib/auto-render.min.js"></script>
+<script src="../assets/vendor/hljs/highlight.min.js"></script>
+<script src="../js/main.js"></script>
+<script src="../js/sim/core.js"></script>
+<script src="../js/sim/sim-slam.js"></script>
+</body>
+</html>

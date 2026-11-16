@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 10 章 · 导航全栈整合 | SLAM·MPC 导航课堂</title>
+<link rel="stylesheet" href="../assets/vendor/hljs/atom-one-dark.min.css">
+<link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="../css/style.css">
+<script>window.SITE_ROOT = "..";</script>
+</head>
+<body>
+<div id="site-header"></div>
+
+<header class="page-head"><div class="container">
+  <div class="crumb"><a href="../index.html">首页</a> / 第三部分 · 导航与控制</div>
+  <h1>第 10 章 · 导航全栈整合</h1>
+  <p class="sub">所有积木在这一章拼成一台真正的导航机器人：给一个目标点，
+     它能自己规划路径（A*）、自己把路径拉直、自己用 MPC 走过去——
+     而这张地图，是第 8 章的 SLAM 亲手建出来的。导航栈的每个零件从此不再神秘。</p>
+  <div class="meta-row">
+    <span class="chip blue">预计 55 分钟</span>
+    <span class="chip">前置：第 8 章（SLAM）、第 9 章（MPC）</span>
+    <span class="chip">配套代码：run_astar.py</span>
+  </div>
+</div></header>
+
+<div class="chapter-wrap">
+  <aside class="toc" id="toc"></aside>
+  <article class="content">
+
+    <h2 id="stack"><span class="anchor-num">10.1</span>导航栈的全貌</h2>
+    <figure class="fig">
+      <svg viewBox="0 0 960 300" style="width:100%;height:auto;font-family:inherit">
+        <defs><marker id="nav-ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#94a3b8"/></marker></defs>
+        <g font-size="13">
+          <!-- layers -->
+          <rect x="30" y="40" width="430" height="90" rx="14" fill="#eff4ff" stroke="#93c5fd"/>
+          <text x="245" y="70" text-anchor="middle" font-weight="700" fill="#1e40af">感知层 · SLAM（第 3-8 章）</text>
+          <text x="245" y="96" text-anchor="middle" fill="#475569" font-size="12.5">激光 + 里程计 → 位姿 + 占据栅格地图</text>
+          <text x="245" y="116" text-anchor="middle" fill="#64748b" font-size="12">本课程：ICP + 位姿图 | 工业：Cartographer / slam_toolbox</text>
+
+          <rect x="500" y="40" width="430" height="90" rx="14" fill="#fff7e6" stroke="#fbbf24"/>
+          <text x="715" y="70" text-anchor="middle" font-weight="700" fill="#92400e">规划层 · 全局 + 局部（本章 + 第 9 章）</text>
+          <text x="715" y="96" text-anchor="middle" fill="#475569" font-size="12.5">A* 找全局最优走廊 → 拉直 → MPC 逐点跟踪</text>
+          <text x="715" y="116" text-anchor="middle" fill="#64748b" font-size="12">ROS 2 对应：Nav2 Planner Server + Controller Server</text>
+
+          <rect x="265" y="180" width="430" height="90" rx="14" fill="#ecfdf5" stroke="#6ee7b7"/>
+          <text x="480" y="210" text-anchor="middle" font-weight="700" fill="#065f46">执行层 · 底盘（第 3 章）</text>
+          <text x="480" y="236" text-anchor="middle" fill="#475569" font-size="12.5">v, ω 指令 → 轮速差分 → 电机</text>
+          <text x="480" y="256" text-anchor="middle" fill="#64748b" font-size="12">闭环回到感知层：机器人动了，地图继续更新</text>
+
+          <g stroke="#94a3b8" stroke-width="1.8">
+            <path d="M480 132 v46" marker-end="url(#nav-ar)"/>
+            <path d="M480 272 v-0 H240 v-88" fill="none" marker-end="url(#nav-ar)"/>
+            <path d="M480 272 v0 H720 v-88" fill="none" marker-end="url(#nav-ar)"/>
+          </g>
+          <text x="240" y="185" text-anchor="end" fill="#64748b" font-size="12">位姿反馈</text>
+          <text x="725" y="185" fill="#64748b" font-size="12">v, ω 指令</text>
+        </g>
+      </svg>
+      <figcaption><b>导航栈分层。</b>每一层只依赖下一层的接口：感知层输出"位姿 + 地图"，
+      规划层输出"速度指令"，执行层驱动底盘。ROS 2 的 Nav2 就是这张图的工程化实现。</figcaption>
+    </figure>
+
+    <h2 id="astar"><span class="anchor-num">10.2</span>A*：在栅格地图上找最优走廊</h2>
+    <p>输入是第 6 章的占据栅格（把 log-odds &gt; 阈值的格子标记为障碍）+ 起点终点，
+    输出一条格子序列。A\* 的精髓是<strong>给搜索装上"方向感"</strong>：</p>
+    <div class="math-block">$$
+      f(n) = g(n) + h(n)
+      \qquad
+      \begin{cases}
+        g(n) & \text{：从起点走到 } n \text{ 的实际代价}\\
+        h(n) & \text{：} n \text{ 到终点的启发式估计（对角欧氏距离）}
+      \end{cases}
+    $$</div>
+    <p>每次从优先队列弹出 $f$ 最小的格子扩展。<strong>$h$ 必须可采纳（admissible）：永远不高估</strong>，
+    否则可能错过最优解；对角欧氏距离满足三角不等式，是 8 连通栅格的可采纳启发式。
+    $h=0$ 时 A* 退化为 Dijkstra（全方位扩散，慢）；$h$ 恰当则搜索像"有目标感的触手"直奔终点。</p>
+
+    <div class="codeblock"><div class="cb-head"><span class="cb-file">run_astar.py —— A* 核心（优先队列版）</span><button class="copy">复制</button></div>
+<pre><code class="language-python">def astar(occ, start, goal):
+    """8 连通 A*：直行代价 1，斜行 √2；启发式 = 对角欧氏"""
+    SQ2 = np.sqrt(2.0)
+    def h(r, c):                              # 可采纳启发式
+        dr, dc = abs(r - goal[0]), abs(c - goal[1])
+        return (dr + dc) + (SQ2 - 2) * min(dr, dc)
+    g = {start: 0.0}; parent = {}; closed = set()
+    pq = [(h(*start), 0.0, start)]            # (f, g, node)
+    while pq:
+        f, gcur, cur = heapq.heappop(pq)
+        if cur == goal:
+            return backtrace(parent), closed
+        for dr, dc, w in NEIGH8:
+            nr, nc = cur[0]+dr, cur[1]+dc
+            if blocked(nr, nc): continue
+            if dr and dc and (blocked(cur[0]+dr, cur[1]) or
+                              blocked(cur[0], cur[1]+dc)):
+                continue                       # 防止斜穿墙角！
+            ng = gcur + w
+            if ng < g.get((nr, nc), inf):
+                g[(nr, nc)] = ng; parent[(nr, nc)] = cur
+                heapq.heappush(pq, (ng + h(nr, nc), ng, (nr, nc)))
+    return None, closed</code></pre></div>
+
+    <div class="box box-warn">
+      <div class="box-title">两个必踩的坑</div>
+      <ul>
+        <li><strong>斜穿墙角</strong>：8 连通时从 (0,0) 斜走到 (1,1) 可能穿过两面墙的夹缝。
+          必须检查两个直行邻格是否都自由（上面代码倒数第 6 行）。漏掉它，路径会"透墙"。</li>
+        <li><strong>忘了膨胀障碍</strong>：路径贴着墙走，机器人本体（半径 0.35 m）会撞墙。
+          所有障碍按机器人半径膨胀后再搜索——A* 只对"质心"规划，膨胀负责"把身体算进去"。</li>
+      </ul>
+    </div>
+
+    <h2 id="inflate-pull"><span class="anchor-num">10.3</span>膨胀与拉直：从格子序列到可执行路径</h2>
+    <p>A* 输出的是锯齿状格子序列，直接喂给 MPC 会造成无意义的左右抖动。两步加工：</p>
+    <ol>
+      <li><strong>障碍膨胀（inflation）</strong>：用距离变换把每个障碍"涂厚"机器人半径。
+        课程用 scipy 的 <code>distance_transform_edt</code>（对格子图做欧氏距离变换，一行完成）。
+        规划器在膨胀图上搜索，路径自然与真墙保持安全距离。</li>
+      <li><strong>视线拉直（string pulling）</strong>：从起点出发，贪心地找到"能与当前点直视的最远格点"
+        作为下一个航点——直视 = 两点连线上的格子全部自由。栅格路径 69 格被拉成 3 个航点，
+        MPC 跟踪的参考线立刻变得优雅。</li>
+    </ol>
+    <figure class="fig">
+      <img src="../assets/img/fig_astar.png" alt="A* 规划结果">
+      <figcaption><b>A* 实跑结果（真实运行）。</b>深蓝=障碍本体，浅蓝=膨胀区，
+      淡蓝格子=搜索扩展过的区域（673 格，7 ms），实线=栅格路径（69 格），橙虚线=拉直后（3 航点）。
+      注意路线紧贴膨胀边界——这正是最优性：在保证安全的前提下路线最短。</figcaption>
+    </figure>
+
+    <h2 id="bridge"><span class="anchor-num">10.4</span>与 SLAM 地图的衔接</h2>
+    <p>第 8 章的 SLAM 输出的是概率栅格（log-odds）。衔接只需两个函数：</p>
+    <div class="codeblock"><div class="cb-head"><span class="cb-file">从 SLAM 地图到规划地图</span><button class="copy">复制</button></div>
+<pre><code class="language-python"># 1) 概率栅格 → 二值占据（log-odds > 1.2 ≈ p > 77%）
+blocked = (grid.logodds > 1.2).astype(np.uint8)
+# 2) 膨胀（欧氏距离变换）
+dist = distance_transform_edt(~blocked.astype(bool)) * res
+planning_map = dist < robot_radius
+# —— 之后 A* 在 planning_map 上跑，MPC 跟踪拉直后的航点 ——</code></pre></div>
+    <p>阈值 1.2（p≈77%）的取舍：太高 → 薄墙/半占据的格子被当成可走，路径穿"影"；
+    太低 → 噪声格子全变墙，可走空间被蚕食。<strong>概率地图 → 二值地图的信息损失不可逆</strong>，
+    工业做法是保留代价地图（costmap）的连续分级，规划器按代价而非 0/1 规划（Nav2 的 costmap_2d）。</p>
+
+    <h2 id="live"><span class="anchor-num">10.5</span>实把玩：A* 工作台</h2>
+    <p>下面的工作台和 <code>run_astar.py</code> 逻辑一致，还多了手绘能力：
+    <strong>点击地图涂墙（再点擦除）、拖拽起点/终点</strong>，然后运行 A* 看扩展动画，
+    最后让 MPC 把你规划的路跑完。</p>
+
+    <div class="sim">
+      <div class="sim-head"><span class="sim-dot"></span>
+        <span class="sim-title">交互 · A* 规划工作台</span>
+        <span class="sim-hint">涂一面墙把路堵死，看 A* 怎么绕；把路堵死看它报告"无可达"</span></div>
+      <canvas id="sim-astar" style="height: 470px"></canvas>
+      <div class="sim-bar">
+        <button class="sbtn primary" id="sim-astar-run">▶ 运行 A*</button>
+        <button class="sbtn" id="sim-astar-track">MPC 跟踪</button>
+        <button class="sbtn" id="sim-astar-clear">清空手涂墙</button>
+        <button class="sbtn" id="sim-astar-reset">重置</button>
+      </div>
+      <div class="legend">
+        <span><i style="background:#18244a"></i>障碍</span>
+        <span><i style="background:rgba(96,165,250,0.35)"></i>A* 扩展区域</span>
+        <span><i style="background:#60a5fa"></i>栅格路径</span>
+        <span><i style="background:#f59e0b"></i>拉直后路径</span>
+        <span><i style="background:#93c5fd"></i>MPC 预测</span>
+      </div>
+    </div>
+
+    <h2 id="final"><span class="anchor-num">10.6</span>终章演示：三阶段全栈（首页同款）</h2>
+    <p>首页的全栈演示放在这里收尾正合适——现在你可以逐阶段说出它内部在跑什么：</p>
+
+    <div class="sim">
+      <div class="sim-head"><span class="sim-dot"></span>
+        <span class="sim-title">交互 · 导航全栈（建图 → 规划 → 跟踪）</span>
+        <span class="sim-hint">建图完成后可点击地图自定义目标点</span></div>
+      <canvas id="sim-nav" style="height: 520px"></canvas>
+      <div class="sim-bar">
+        <button class="sbtn primary" id="sim-nav-play">暂停 / 继续</button>
+        <button class="sbtn" id="sim-nav-plan">规划 → MPC</button>
+        <button class="sbtn" id="sim-nav-reset">重置</button>
+        <span class="sctl">速度
+          <input type="range" id="sim-nav-speed" min="0.5" max="4" step="0.5" value="2">
+          <span class="val" id="sim-nav-speed-val">2×</span></span>
+        <span class="badge" id="sim-nav-status">① 巡逻建图中…</span>
+      </div>
+    </div>
+
+    <div class="box box-theory">
+      <div class="box-title">回看这张导航栈，你已经拥有全部零件</div>
+      <ul>
+        <li><strong>感知层</strong>：world/robot（第 3 章）→ ICP（第 5 章）→ 栅格（第 6 章）→ 位姿图（第 7 章）→ 组装（第 8 章）</li>
+        <li><strong>规划层</strong>：栅格二值化 + 膨胀 + A* + 拉直（本章）</li>
+        <li><strong>控制层</strong>：误差模型 + QP + OSQP（第 9 章）</li>
+        <li><strong>执行层</strong>：差速运动学（第 3 章）</li>
+      </ul>
+      每一层单独看都不超过 300 行代码——<strong>复杂系统不是靠魔法，而是靠分层与接口</strong>。
+    </div>
+
+    <div class="box box-check">
+      <div class="box-title">检查点 · 离开本章前</div>
+      <ul>
+        <li>能手写 A* 主循环（含斜穿墙角检查与可采纳启发式）</li>
+        <li>解释膨胀和拉直各自把"格子序列"变成了什么</li>
+        <li>知道 SLAM 概率地图 → 规划地图的二值化取舍</li>
+        <li>在工作台里堵路成功让 A* 绕行 / 报告不可达各一次</li>
+        <li>看懂了终章演示的三个阶段各在执行什么算法</li>
+      </ul>
+    </div>
+
+    <details class="ex"><summary>练习 1 · 换成 Dijkstra 对比扩展数</summary>
+      <div class="ans">把 h 置零（<code>return 0</code>）就是 Dijkstra。同一地图同一目的地重跑，
+      对比 closed 集合大小：Dijkstra 通常扩展 3~8 倍的格子（向所有方向扩散），
+      A* 像定向触手。这张对比图放进你的项目 README，比十句话都有说服力。</div>
+    </details>
+    <details class="ex"><summary>练习 2 · 实现 Theta*（任意角路径）</summary>
+      <div class="ans">A* 的路径被 8 个方向限制；Theta* 在扩展节点 n 时额外检查
+      "parent(n) 与 n 的邻居是否直视"，若直视则 g 值按欧氏直线距离更新——
+      路径不再贴格子线，天然更短更顺。修改量约 15 行（复用 string pulling 的 los 函数）。</div>
+    </details>
+
+    <nav class="pager" id="pager"></nav>
+  </article>
+</div>
+
+<div id="site-footer"></div>
+<script src="../assets/vendor/katex/katex.min.js"></script>
+<script src="../assets/vendor/katex/contrib/auto-render.min.js"></script>
+<script src="../assets/vendor/hljs/highlight.min.js"></script>
+<script src="../js/main.js"></script>
+<script src="../js/sim/core.js"></script>
+<script src="../js/sim/sim-astar.js"></script>
+<script src="../js/sim/sim-slam.js"></script>
+<script src="../js/sim/sim-nav.js"></script>
+</body>
+</html>

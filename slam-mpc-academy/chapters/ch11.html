@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 11 章 · 进阶路线与真实机器人 | SLAM·MPC 导航课堂</title>
+<link rel="stylesheet" href="../assets/vendor/hljs/atom-one-dark.min.css">
+<link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="../css/style.css">
+<script>window.SITE_ROOT = "..";</script>
+</head>
+<body>
+<div id="site-header"></div>
+
+<header class="page-head"><div class="container">
+  <div class="crumb"><a href="../index.html">首页</a> / 第三部分 · 导航与控制</div>
+  <h1>第 11 章 · 进阶路线与真实机器人</h1>
+  <p class="sub">课程到这里，你已经拥有一个完整的 2D 激光 SLAM + MPC 导航栈。
+     这一章回答三个"然后呢"：怎么把它装到真实机器人上？工业界用什么？
+     以及——如果你想做研究/找相关工作——该往哪里继续走。</p>
+  <div class="meta-row">
+    <span class="chip blue">预计 30 分钟</span>
+    <span class="chip">前置：全课程</span>
+    <span class="chip">性质：路线图 + 书单 + FAQ</span>
+  </div>
+</div></header>
+
+<div class="chapter-wrap">
+  <aside class="toc" id="toc"></aside>
+  <article class="content">
+
+    <h2 id="real-robot"><span class="anchor-num">11.1</span>上真车：从仿真到实体的差异清单</h2>
+    <p>好消息：课程代码的<strong>算法部分（icp.py / grid_map.py / pose_graph.py）可以直接上真车</strong>，
+    需要替换的只有"数据的进出"。坏消息：真实世界的坑比仿真多一个数量级。逐项对照：</p>
+    <table class="tbl">
+      <tr><th>仿真里</th><th>真车上</th><th>应对</th></tr>
+      <tr><td>激光：解析求交，σ=2 cm 高斯</td><td>玻璃/镜面反射、黑色吸光物体、灰尘</td><td>外点修剪（已有）+ 多帧一致性过滤</td></tr>
+      <tr><td>里程计：独立高斯噪声</td><td>系统性偏差 + 打滑 + 突变</td><td>先标定（轮径/轮距），再上 SLAM</td></tr>
+      <tr><td>世界静止</td><td>人、椅子、门都在动</td><td>子地图 + 动态物体剔除；重定位机制</td></tr>
+      <tr><td>控制周期精确 50 ms</td><td>串口延迟、系统抖动</td><td>时间戳一切数据；控制器对 dt 不敏感化</td></tr>
+      <tr><td>TF 无误差</td><td>雷达安装位姿/高度有偏差</td><td>外参标定（安装角度偏差 1° = 墙顶底 5 cm 错位）</td></tr>
+      <tr><td>完美通信</td><td>话题阻塞、频率掉帧</td><td>监控各话题实际频率， watchdog 超时保护</td></tr>
+    </table>
+
+    <div class="box box-tip">
+      <div class="box-title">硬件参考清单（2026 年国内行情，入门级）</div>
+      <ul>
+        <li><strong>激光雷达</strong>：思岚 RPLIDAR S2/S3（360°，~30 m，¥1500-3000）；乐动 LD19/LD600（¥400-1200，入门首选）</li>
+        <li><strong>底盘</strong>：现成差速底盘（ Scout / Raspbot / 小R，¥500-2000，带编码器电机与 IMU）</li>
+        <li><strong>主控</strong>：树莓派 5 / Jetson Orin Nano（¥500-2500）</li>
+        <li><strong>IMU</strong>：MPU6050（¥10，够用）或 WHEELTEC N100（¥900，工业级）</li>
+        <li><strong>总计</strong>：<strong>¥2500-8000 即可拥有第一台激光 SLAM 小车</strong></li>
+      </ul>
+    </div>
+
+    <h2 id="ros2"><span class="anchor-num">11.2</span>ROS 2 路线：把课程接入工业生态</h2>
+    <p>你手写的每个模块在 ROS 2 里都有工业级对应物。<strong>正确的学习顺序是"先手写再用轮子"</strong>——
+    你已经完成了第一步，现在读 Nav2 源码时每一层都会"哦，这就是我写过的那个东西"。</p>
+    <table class="tbl">
+      <tr><th>课程模块</th><th>ROS 2 工业实现</th><th>衔接要点</th></tr>
+      <tr><td>world.py + robot.py（仿真器）</td><td>Gazebo / Webots / Ignition</td><td>传感器插件输出 <code>/scan</code>、<code>/odom</code></td></tr>
+      <tr><td>icp.py + pose_graph.py</td><td><strong>slam_toolbox</strong>（正是 2D 位姿图 SLAM！）</td><td>订阅 /scan /odom，发布 /map + TF</td></tr>
+      <tr><td>grid_map.py</td><td>nav2_costmap_2d</td><td>OccupancyGrid + 膨胀层（你写的 inflate 的豪华版）</td></tr>
+      <tr><td>run_astar.py</td><td>Nav2 Planner Server（Smac/NavFn）</td><td>A*/Hybrid-A*/Dijkstra 的工程化合集</td></tr>
+      <tr><td>run_mpc.py</td><td>Nav2 Controller（MPPI/RPP）或 <strong>rocka/mcdc</strong> 类 MPC 插件</td><td>误差模型 MPC 的亲戚们</td></tr>
+    </table>
+    <p>推荐的第一个 ROS 2 项目：在 Gazebo 里启动 TurtleBot3 + slam_toolbox 建图 + Nav2 导航，
+    然后逐个参数调崩再调好（比如把 inflation_radius 设 0.1 看机器人刮墙）。
+    你会发现<strong>调参直觉和课程完全同构</strong>。</p>
+
+    <div class="box box-theory">
+      <div class="box-title">从课程代码到 ROS 节点的映射练习</div>
+      <p>把 <code>run_slam.py</code> 拆成三个节点：<code>lidar_preproc</code>（去外点）、
+      <code>slam_frontend</code>（关键帧 + ICP + 发布相对位姿）、<code>slam_backend</code>（位姿图 + 发布 /map）。
+      这个拆分练习能帮你理解 ROS 的核心思想：<strong>数据流解耦</strong>。课程为了教学把所有东西串在一个进程里；
+      ROS 的价值恰在于此——三层各自崩溃重启互不影响。</p>
+    </div>
+
+    <h2 id="advanced"><span class="anchor-num">11.3</span>进阶技术地图</h2>
+    <ul>
+      <li><strong>更强的前端</strong>：point-to-line / point-to-plane ICP（第 5 章练习 2）→
+        NDT 配准 → 栅格相关性搜索（Cartographer 的分支定界，回环初值的天花板方案）</li>
+      <li><strong>更准的后端</strong>：解析雅可比 → 稀疏求解（第 7 章练习）→ 因子图
+        （GTSAM：把 IMU 预积分、GPS、视觉特征全部变成"边"）→ 增量平滑 iSAM2</li>
+      <li><strong>3D SLAM</strong>：LOAM / LIO-SAM 一系（激光 + IMU 紧耦合），
+        数学从 SE(2) 升级为 SE(3)，框架思想与你写过的完全同源</li>
+      <li><strong>视觉 SLAM</strong>：ORB-SLAM3、VINS-Fusion——特征点 + 光束法平差（还是最小二乘！），
+        学完本课程再看它，BA 就是"位姿图的多点版"</li>
+      <li><strong>更强的控制</strong>：MPPI（采样式 MPC，不需要线性化）、CBF 安全约束、
+        动态避障（把预测的行人轨迹写进 QP 约束）</li>
+    </ul>
+
+    <h2 id="books"><span class="anchor-num">11.4</span>书单与论文（按读得下去的顺序）</h2>
+    <ol>
+      <li><strong>《Probabilistic Robotics》</strong>（Thrun, Burgard, Fox）—— 概率机器人圣经，
+        先读第 2/3/4/7 章（估计理论、EKF、里程计、栅格建图）。本课程的 log-odds 建图就是它的 4.1.1 节。</li>
+      <li><strong>《State Estimation for Robotics》</strong>（Tim Barfoot，免费 PDF）——
+        李群/李代数讲得最清楚的第 6 章，把你第 2 章"背公式"的部分补成"懂公式"。</li>
+      <li><strong>Cartographer 论文</strong>（Hess et al., 2016, "Real-Time Loop Closure in 2D LIDAR SLAM"）——
+        你现在能读懂 90%：分支定界回环 = 第 7 章回环检测的加速版；子地图 = 建图的高级形态。</li>
+      <li><strong>ICP 经典综述</strong>（S. Rusinkiewicz, "Efficient Variants of the ICP Algorithm", 2001）——
+        点对点/点到面/修剪/拒绝策略的百科全书，第 5 章所有变体的出处。</li>
+      <li><strong>MPC 入门</strong>：Rawlings, Mayne, Diehl 《Model Predictive Control: Theory, Design, and Practice》
+        第 1-3 章；配合 OSQP 论文（Escandón et al., 2020）了解求解器内幕。</li>
+      <li><strong>SLAM 综述</strong>：Cadena et al., "Past, Present, and Future of SLAM" (IEEE T-RO 2016)——
+        入行前把它当"地图"读一遍。</li>
+    </ol>
+
+    <h2 id="faq"><span class="anchor-num">11.5</span>高频 FAQ</h2>
+    <details class="ex"><summary>我的真车地图"来回抖"，定位漂移忽大忽小？</summary>
+      <div class="ans">三查：① 雷达驱动时间戳是否稳定（频率掉没掉）；② 里程计标定了吗（系统性偏差会被 ICP 拉扯）；
+      ③ 回环 RMSE 门槛是不是太松（错误回环来回掰扯）。90% 的"抖"来自时间戳。</div>
+    </details>
+    <details class="ex"><summary>长走廊里 SLAM 沿墙滑动怎么办？</summary>
+      <div class="ans">第 5 章讲过的"几何退化"。短期方案：放慢速度靠里程计撑着；
+      中期：point-to-line ICP + 门框/角落等特征；长期：加 IMU（预积分边）补充航向约束。</div>
+    </details>
+    <details class="ex"><summary>动态物体（人）把地图弄脏了怎么办？</summary>
+      <div class="ans">栅格的"遗忘机制"：把 l_occ 降到 0.5、l_free 加深到 −0.6，
+      人走过留下的痕迹几帧内被洗掉；代价是静态墙也更容易被擦薄。
+      工业方案是"双层地图"：静态层（慢更新）+ 动态层（快更新），规划时两层取并集。</div>
+    </details>
+    <details class="ex"><summary>MPC 求解偶尔超时怎么办？</summary>
+      <div class="ans">① 热启动（OSQP 默认开）；② 降 N 或降控制频率；③ 解不精确也先用
+      （status 2 = solved inaccurate，机器人不在乎 μ 级最优）；④ 终极：换 MPPI 类采样控制器，
+      用算力换确定性延迟。</div>
+    </details>
+    <details class="ex"><summary>想找 SLAM/机器人相关工作，课程水平够吗？</summary>
+      <div class="ans">这套课程 ≈ 硕士一年级 SLAM 课的项目量。面试硬通货是：
+      能手推 GN/位姿图、能解释 ICP 的失败模式、能写 A*、能讲清 costmap 分层——
+      本课程全部覆盖。再加一个"真车部署"经历（哪怕只跑通 slam_toolbox + Nav2），
+      简历就能投了。</div>
+    </details>
+
+    <h2 id="ending"><span class="anchor-num">11.6</span>结语</h2>
+    <p>回忆一下你出发时的样子：那时"SLAM"只是一个模糊的缩写。现在——</p>
+    <ul>
+      <li>你能从一束光的几何出发，推导出光线求交的解析式；</li>
+      <li>你亲手制造过漂移，也亲手用位姿图把它拉直；</li>
+      <li>你知道 ICP 为什么会失败，知道地图上的鬼影从哪里来；</li>
+      <li>你能写出一个带约束的优化控制器，并让机器人贴着 1 cm 的精度走完全程。</li>
+    </ul>
+    <p>更重要的是那套<strong>思考方式</strong>：把大问题拆成"前端估计 + 后端优化"，
+    把不确定性当一 等 公 民（σ、信息矩阵、log-odds），把每个算法都变成能跑、能坏、能修的代码。
+    带着它，去读 Cartographer 的源码、去装第一台真车、去把导航栈接到你自己的机器人上——
+    那些曾经"高深"的论文，现在对你只是更长一点的课程章节。</p>
+    <p><strong>祝旅途愉快。下一次回环见。</strong></p>
+
+    <div class="box box-check">
+      <div class="box-title">毕业检查点 · 全课程</div>
+      <ul>
+        <li>全部 11 章的检查点清单均已打勾</li>
+        <li>run_slam.py / run_mpc.py / run_astar.py 全部亲手跑通，结果图能复现</li>
+        <li>至少完成 5 个破坏性实验（第 8.6 节清单）</li>
+        <li>能不看材料，给朋友讲清 mini-SLAM 的完整流水线（10 分钟白板版）</li>
+        <li>规划好了自己的下一步：真车 / ROS 2 / 论文，三选一起步</li>
+      </ul>
+    </div>
+
+    <nav class="pager" id="pager"></nav>
+  </article>
+</div>
+
+<div id="site-footer"></div>
+<script src="../assets/vendor/katex/katex.min.js"></script>
+<script src="../assets/vendor/katex/contrib/auto-render.min.js"></script>
+<script src="../assets/vendor/hljs/highlight.min.js"></script>
+<script src="../js/main.js"></script>
+</body>
+</html>

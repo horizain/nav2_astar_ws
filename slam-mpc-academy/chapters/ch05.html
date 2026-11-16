@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 5 章 · 扫描匹配：ICP | SLAM·MPC 导航课堂</title>
+<link rel="stylesheet" href="../assets/vendor/hljs/atom-one-dark.min.css">
+<link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="../css/style.css">
+<script>window.SITE_ROOT = "..";</script>
+</head>
+<body>
+<div id="site-header"></div>
+
+<header class="page-head"><div class="container">
+  <div class="crumb"><a href="../index.html">首页</a> / 第二部分 · mini-SLAM</div>
+  <h1>第 5 章 · 扫描匹配：ICP</h1>
+  <p class="sub">ICP（Iterative Closest Point，迭代最近点）是激光 SLAM 的心脏：它回答
+     "两帧点云之间差了哪个刚体变换"。机器人每走一步，ICP 就告诉我们"这一步实际走了多少"——
+     比里程计准一个量级。这一章你会推导出它优雅的 SVD 闭式解，并在下面的交互仿真里
+     亲眼看到它"掉进局部极小"的名场面。</p>
+  <div class="meta-row">
+    <span class="chip blue">预计 50 分钟</span>
+    <span class="chip">前置：第 2 章（SE(2)）、第 3 章</span>
+    <span class="chip">配套代码：icp.py</span>
+  </div>
+</div></header>
+
+<div class="chapter-wrap">
+  <aside class="toc" id="toc"></aside>
+  <article class="content">
+
+    <h2 id="problem"><span class="anchor-num">5.1</span>问题定义</h2>
+    <p>机器人在位置 A 打了一帧激光，得到点云 $A$；挪了半步又打一帧，得到点云 $B$。
+    两帧点云看到的是<strong>同一批墙</strong>——只是机器人的坐标系挪了。它们之间恰好差一个刚体变换：</p>
+    <div class="math-block">$$
+      \mathbf{b}_i \;=\; T_{B\leftarrow A}\,\mathbf{a}_i,\qquad
+      T_{B\leftarrow A}\in SE(2)
+    $$</div>
+    <p>求出这个 $T$，我们就知道"机器人从 A 到 B 实际动了多少"（相对位姿）——
+    它比里程计准，因为激光测的是环境几何而不是轮子。问题是：$T$ 里 3 个未知数，
+    而点云只告诉你"两坨点长得很像"，没有任何一对点的显式对应。
+    <strong>ICP 的答案是把"未知对应"和"未知变换"拆开交替求解</strong>：
+    猜一个变换 → 推出对应关系 → 用对应关系解出更好的变换 → 循环。</p>
+
+    <figure class="fig">
+      <svg viewBox="0 0 940 300" style="width:100%;height:auto;font-family:inherit">
+        <defs><marker id="icp-ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#94a3b8"/></marker></defs>
+        <g font-size="13.5">
+          <!-- loop -->
+          <rect x="40" y="40" width="250" height="90" rx="14" fill="#eff4ff" stroke="#93c5fd"/>
+          <text x="165" y="75" text-anchor="middle" font-weight="700" fill="#1e40af">① 固定变换，找对应</text>
+          <text x="165" y="100" text-anchor="middle" fill="#475569" font-size="12.5">B 的每个点在 A 里找最近点</text>
+          <text x="165" y="120" text-anchor="middle" font-family="monospace" font-size="12.5" fill="#64748b">c(i) = argmin_j ‖T·bᵢ − aⱼ‖²</text>
+
+          <rect x="345" y="40" width="250" height="90" rx="14" fill="#fff7e6" stroke="#fbbf24"/>
+          <text x="470" y="75" text-anchor="middle" font-weight="700" fill="#92400e">② 固定对应，解变换</text>
+          <text x="470" y="100" text-anchor="middle" fill="#475569" font-size="12.5">最小二乘求最优刚体变换</text>
+          <text x="470" y="120" text-anchor="middle" font-family="monospace" font-size="12.5" fill="#64748b">T = argmin Σ ‖T·bᵢ − a_c(i)‖²</text>
+
+          <rect x="650" y="40" width="250" height="90" rx="14" fill="#ecfdf5" stroke="#6ee7b7"/>
+          <text x="775" y="75" text-anchor="middle" font-weight="700" fill="#065f46">③ 收敛了吗？</text>
+          <text x="775" y="100" text-anchor="middle" fill="#475569" font-size="12.5">RMSE 变化 &lt; ε 则退出</text>
+          <text x="775" y="120" text-anchor="middle" font-family="monospace" font-size="12.5" fill="#64748b">否则回到 ①，通常 5~15 轮</text>
+
+          <path d="M290 85 h50" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#icp-ar)"/>
+          <path d="M595 85 h50" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#icp-ar)"/>
+          <path d="M775 135 v40 H165 v-45" fill="none" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#icp-ar)"/>
+          <text x="470" y="190" text-anchor="middle" fill="#64748b" font-size="12.5">两个子问题各自都"平凡可解"，交替逼近整体解 —— 每轮 RMSE 单调不增，故必收敛</text>
+          <text x="470" y="222" text-anchor="middle" fill="#ef4444" font-size="12.5">⚠ 但只保证局部最优：初值太差会"对错地方"（5.4 节亲自体验）</text>
+        </g>
+      </svg>
+      <figcaption><b>ICP 的三步循环。</b>①②交替固定一个变量解另一个——这是"交替最小化"思想，
+      与 EM 算法同宗。</figcaption>
+    </figure>
+
+    <h2 id="closed-form"><span class="anchor-num">5.2</span>核心：最优刚体变换的闭式解</h2>
+    <p>步骤②值得单独推导——它有一个漂亮的解析解，<strong>一行迭代都不用</strong>。
+    给定一一对应的点对 $(\mathbf{a}_i, \mathbf{b}_i)$，求 $R,\mathbf{t}$ 最小化：</p>
+    <div class="math-block">$$
+      \min_{R,\mathbf{t}} \sum_i \|\,R\,\mathbf{b}_i + \mathbf{t} - \mathbf{a}_i\,\|^2
+    $$</div>
+    <p><strong>第一步：平移分离。</strong>对 $\mathbf{t}$ 求导置零，立即得到
+    $\mathbf{t} = \bar{\mathbf{a}} - R\,\bar{\mathbf{b}}$（$\bar{\cdot}$ 为质心）——
+    平移总是"把两个质心对齐"。代回原式，问题只剩旋转：</p>
+    <div class="math-block">$$
+      \max_R \;\sum_i \mathbf{a}_i^{\prime\top} R\, \mathbf{b}_i^{\prime}
+      \quad\text{其中 } \mathbf{a}' = \mathbf{a}-\bar{\mathbf{a}},\ \mathbf{b}' = \mathbf{b}-\bar{\mathbf{b}}
+    $$</div>
+    <p><strong>第二步：2D 特解。</strong>在 2D 里 $R(\theta)$ 只有一个自由度，展开
+    $\mathbf{b}^{\prime\top}R\mathbf{b}' = \cos\theta\,(\mathbf{a}'\!\cdot\!\mathbf{b}') + \sin\theta\,(\mathbf{a}'\!\times\!\mathbf{b}')$，
+    对 $\theta$ 求导置零，得到教科书级公式：</p>
+    <div class="math-block">$$
+      \boxed{\;\theta^\* = \mathrm{atan2}\Big(\sum_i \mathbf{a}'_i\times\mathbf{b}'_i,\;\;
+      \sum_i \mathbf{a}'_i\cdot\mathbf{b}'_i\Big)\;}
+    $$</div>
+    <p>分子收集"旋转趋势"，分母收集"对齐程度"——几何意义一目了然。
+    <strong>一般情形</strong>（3D 或想要数值稳健）则用 SVD：构造互协方差
+    $H = \sum \mathbf{b}'_i\mathbf{a}_i^{\prime\top}$，SVD 分解 $H = U\Sigma V^\top$，
+    $R = UV^\top$（$\det<0$ 时翻转最后一列防镜像）。两者在 2D 完全等价，课程代码 <code>icp.py</code> 用的是 SVD 版（与主流实现一致）。</p>
+
+    <div class="codeblock"><div class="cb-head"><span class="cb-file">icp.py —— 闭式拟合（best_fit_transform）</span><button class="copy">复制</button></div>
+<pre><code class="language-python">def best_fit_transform(A, B):
+    """求 T 使 Σ‖T·aᵢ − bᵢ‖² 最小（一一对应已知时的闭式解）"""
+    centroid_A = A.mean(axis=0)
+    centroid_B = B.mean(axis=0)
+    H = (A - centroid_A).T @ (B - centroid_B)   # 2×2 互协方差
+    U, S, Vt = np.linalg.svd(H)
+    R = Vt.T @ U.T
+    if np.linalg.det(R) < 0:                    # 防止解出"镜像"反射
+        Vt[-1, :] *= -1
+        R = Vt.T @ U.T
+    t = centroid_B - R @ centroid_A             # 质心对齐的平移
+    return as_homogeneous(R, t)</code></pre></div>
+
+    <h2 id="full-algo"><span class="anchor-num">5.3</span>完整算法与三个工程细节</h2>
+    <p>把闭式解装进循环，加上三个工程细节，就是工业可用的 ICP：</p>
+    <div class="codeblock"><div class="cb-head"><span class="cb-file">icp.py —— 主循环</span><button class="copy">复制</button></div>
+<pre><code class="language-python">def icp(ref_pts, cur_pts, init_pose=(0, 0, 0), max_iter=30,
+        tol=1e-5, trim_ratio=0.8):
+    """把 cur_pts 对齐到 ref_pts。init_pose 来自里程计（很重要！）"""
+    ref_tree = cKDTree(ref_pts)              # 细节①：KD 树加速最近点查询
+    T = se2_to_matrix(init_pose)
+    prev_err = None
+    for it in range(max_iter):
+        transformed = apply(T, cur_pts)      # 用当前估计变换 cur
+        dist, idx = ref_tree.query(transformed, k=1)
+        order = np.argsort(dist)
+        keep = order[: int(len(order) * trim_ratio)]   # 细节②：修剪 20% 最差点
+        rmse = np.sqrt(np.mean(dist[keep] ** 2))
+        T_delta = best_fit_transform(cur_pts[keep], ref_pts[idx[keep]])
+        T = T_delta @ T                      # 细节③：左乘累积增量
+        if prev_err is not None and abs(prev_err - rmse) < tol:
+            break                            # 收敛：RMSE 不再下降
+        prev_err = rmse
+    return T, rmse, it + 1</code></pre></div>
+    <ul>
+      <li><strong>细节① KD 树</strong>：暴力最近点是 $O(N^2)$（120×120=1.4 万次距离比较，其实也不慢）；
+        KD 树把它降到 $O(N\log N)$，点云上万时必需。scipy 的 <code>cKDTree</code> 一行搞定。</li>
+      <li><strong>细节② 修剪（trimming）</strong>：按距离排序丢掉最差的 20% 点对。
+        它们往往是外点——动态障碍（人走过）、玻璃反射、落灰的镜面。不修剪的话几个坏点就能把整帧配准带歪。</li>
+      <li><strong>细节③ 增量左乘</strong>：每轮求出的 $T_\Delta$ 是"修正量"，累积必须用矩阵乘法
+        $T \leftarrow T_\Delta T$，而不是把角度和坐标分别相加——角度直接相加在多次迭代后会引入数值漂移。</li>
+    </ul>
+
+    <div class="sim">
+      <div class="sim-head"><span class="sim-dot"></span>
+        <span class="sim-title">交互 · ICP 逐步对齐（可拖拽！）</span>
+        <span class="sim-hint">拖动橙色点云或点"打乱初值"，再运行 ICP —— 感受初值的力量</span></div>
+      <canvas id="sim-icp" style="height: 460px"></canvas>
+      <div class="sim-bar">
+        <button class="sbtn primary" id="sim-icp-run">▶ 运行 ICP（动画）</button>
+        <button class="sbtn" id="sim-icp-joggle">打乱初值</button>
+        <button class="sbtn" id="sim-icp-reset">还原初值</button>
+        <span class="sctl">扰动幅度
+          <input type="range" id="sim-icp-jolt" min="0.1" max="1.5" step="0.1" value="0.6">
+          <span class="val" id="sim-icp-jolt-val">0.6 m</span></span>
+        <span class="badge" id="sim-icp-status">等待运行</span>
+      </div>
+      <div class="legend">
+        <span><i style="background:#94a3b8"></i>扫描 A（参考帧，固定）</span>
+        <span><i style="background:#f59e0b"></i>扫描 B（当前估计位置，可拖拽）</span>
+        <span><i style="background:rgba(239,68,68,0.7)"></i>本轮最近点对应关系</span>
+      </div>
+    </div>
+
+    <h2 id="pitfalls"><span class="anchor-num">5.4</span>ICP 的软肋：局部极小与退化解</h2>
+    <p>在上方仿真里做两个实验：</p>
+    <ol>
+      <li><strong>小幅扰动（0.3 m）</strong>：ICP 稳稳收敛，RMSE ≈ 0.03–0.06 m（受光束噪声和采样密度限制，不可能为 0）。</li>
+      <li><strong>大幅扰动（1.2 m 以上）</strong>：红线（对应关系）明显"拧着"，ICP 收敛到错误位置且 RMSE 高居不下——
+        <strong>这就是局部极小</strong>。每一步都在"最小化自己眼中的误差"，但对应关系是错的，越努力越错。</li>
+    </ol>
+    <p>实践中给 ICP 好初值的三个来源：<strong>里程计</strong>（相邻帧，误差 &lt; 5 cm——课程采用）、
+    <strong>栅格相关性搜索</strong>（暴力扫一圈所有可能的平移旋转，打分取优，Cartographer 的做法）、
+    <strong>NDT/特征法</strong>（先对齐分布或角点特征）。另外注意一个几何陷阱：
+    <strong>长直走廊会让 ICP 沿墙"滑动"</strong>——沿墙方向没有任何几何特征约束平移，
+    解虽然收敛了但沿墙的位置是任意的。房间多面墙夹击能缓解；真正的解法叫 point-to-line ICP 或特征约束。</p>
+
+    <figure class="fig">
+      <img src="../assets/img/fig_icp.png" alt="ICP 配准前后">
+      <figcaption><b>课程流水线里的真实一帧（run_slam.py 生成）。</b>左：按里程计初值摆放的 B 帧；
+      右：ICP 7 轮迭代后对齐，RMSE 0.065 m。注意残差不是 0——那是激光噪声 σ=2 cm 与
+      光束采样模式差异的"地板"，理论预期一致。</figcaption>
+    </figure>
+
+    <div class="box box-warn">
+      <div class="box-title">踩坑提醒 · RMSE 不是越低越可信</div>
+      <p>把 B 帧所有点缩到很近的一团也能让 RMSE 变小（退化解）。所以回环检测（第 8 章）判断
+      "匹配是否可信"时，除了 RMSE 还要看<strong>匹配上的点数</strong>是否充足、以及初值与结果的一致性。
+      工业实现还会检查协方差条件数——"数据是否真的约束了 3 个自由度"。</p>
+    </div>
+
+    <h2 id="summary"><span class="anchor-num">5.5</span>ICP 在课程流水线里的位置</h2>
+    <ul>
+      <li><strong>相邻关键帧配准</strong>（第 8 章）：初值来自里程计，输出"运动边"；</li>
+      <li><strong>回环验证</strong>：老地方的两帧扫描做 ICP，RMSE 低到 0.12 m 以内才算"确认回环"，
+        输出"回环边"；</li>
+      <li>每条边的 RMSE 还会转化成<strong>信任权重</strong>（信息矩阵）：RMSE 越大，这条边在位姿图里说话越没分量。</li>
+    </ul>
+
+    <div class="box box-check">
+      <div class="box-title">检查点 · 离开本章前</div>
+      <ul>
+        <li>能写出 ICP 三步循环并解释"为什么每轮 RMSE 单调不增"</li>
+        <li>能推导 2D 闭式旋转公式（至少复述 atan2(Σ×, Σ·) 的构造）</li>
+        <li>在仿真里亲手制造过一次局部极小，能解释它为何发生</li>
+        <li>说出修剪（trim）、KD 树、增量左乘各自解决什么工程问题</li>
+      </ul>
+    </div>
+
+    <details class="ex"><summary>练习 1 · 把 trim 关掉看看会发生什么</summary>
+      <div class="ans">把 <code>icp.py</code> 里 <code>trim_ratio=0.8</code> 改成 1.0，
+      并人为给某帧激光加 5 个"飞点"（在 <code>run_slam.py</code> 的 <code>scans[i][3:8]</code> 上加 5 米）。
+      重跑：不修剪时这些点强行把整个变换拽偏十几厘米；恢复 0.8 后完全无感。
+      这就是"鲁棒统计"的价值——最小二乘对离群点零容忍，修剪等价于把损失函数从 L2 换成截断 L2。</div>
+    </details>
+    <details class="ex"><summary>练习 2 · 点到点 vs 点到线</summary>
+      <div class="ans">点对点 ICP 的残差地板来自"两帧采样模式不同"。点到线 ICP 把残差定义为
+      cur 点到 ref 线段的<strong>垂线距离</strong>，沿墙方向的误差不再计入——走廊里不再滑动，RMSE 地板也降低。
+      实现要点：先为 ref 点云拟合局部直线（KD 树取邻域 + 最小二乘），残差变成 $|n^\top(T b - a)|$。
+      这是第 11 章进阶路线的推荐作业。</div>
+    </details>
+
+    <nav class="pager" id="pager"></nav>
+  </article>
+</div>
+
+<div id="site-footer"></div>
+<script src="../assets/vendor/katex/katex.min.js"></script>
+<script src="../assets/vendor/katex/contrib/auto-render.min.js"></script>
+<script src="../assets/vendor/hljs/highlight.min.js"></script>
+<script src="../js/main.js"></script>
+<script src="../js/sim/core.js"></script>
+<script src="../js/sim/sim-icp.js"></script>
+</body>
+</html>
