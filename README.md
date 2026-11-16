@@ -37,6 +37,11 @@ colcon test-result --verbose
 ./activate_nav.sh
 ```
 
+> 如果 `ros2 launch` 报 `package not found`，但 `install/<pkg>/` 明明存在，
+> 先跑 `./check_workspace.sh` 做环境自检；确认是 install 前缀损坏后，
+> 用 `./check_workspace.sh --fix` 备份并重建（不要只删 `build/`）。
+> 原因见 [18 工程优化 §5](docs/18_工程优化与实战技巧.md)。
+
 只想跑原来的 A* + MPPI 官方控制器：
 
 ```bash

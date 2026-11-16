@@ -10,9 +10,16 @@ compile_commands.json
 __pycache__/
 *.py[cod]
 
-# 编辑器 / IDE
+# CTest 产物（src/mini_slam 直接 cmake 构建时产生）
+Testing/
+
+# mini_slam 生成的地图/轨迹输出（由 data/ 数据集重新生成）
+src/mini_slam/out_*/
+
+# 编辑器 / IDE / 本地 AI 代理配置
 .vscode/
 .idea/
+.commandcode/
 *.swp
 
 # 录包与临时文件

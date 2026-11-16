@@ -40,6 +40,9 @@ for pkg in nav2_astar_planner nav2_controller_lab nav2_controller_lab_rviz; do
         echo "  colcon build --packages-select nav2_astar_planner nav2_controller_lab nav2_controller_lab_rviz \\"
         echo "    --cmake-args -DCMAKE_BUILD_TYPE=Release"
         echo "  source install/setup.bash"
+        echo
+        echo "若 install/ 前缀损坏（曾删过 build/），用："
+        echo "  cd ~/ros2_jazzy/nav2_astar_ws && ./check_workspace.sh --fix"
         exit 1
     fi
 done
