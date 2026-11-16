@@ -297,30 +297,33 @@ FollowPath:
 FollowPath:
   plugin: "nav2_controller_lab::MpcController"
   transform_tolerance: 0.1
-  goal_tolerance: 0.25
+  goal_tolerance: 0.34
 
   min_linear_velocity: 0.0
   max_linear_velocity: 0.5
   max_angular_velocity: 1.9
-  horizon_steps: 10
+  horizon_steps: 15
   iterations: 8
-  line_search_steps: 3
   model_dt: 0.1
-  gradient_step: 0.05
-  gradient_epsilon: 0.01
+  max_linear_acceleration: 1.0
+  max_angular_acceleration: 3.2
   terminal_weight: 2.0
   smoothness_weight: 0.05
 
-  path_weight: 1.0
+  path_weight: 5.0
   goal_weight: 2.0
-  obstacle_weight: 100.0
+  obstacle_weight: 8.0
   heading_weight: 0.5
   velocity_weight: 0.2
   control_weight: 0.05
   collision_cost: 1000000.0
-  collision_threshold: 254
+  collision_threshold: 253
   desired_linear_velocity: 0.5
 ```
+
+采用多初值和确定性控制块搜索，所有候选按测量速度约束加速度并检查预测碰撞。普通重规划保留热启动；无可行解时清空旧解并报错。旧的 gradient_step、gradient_epsilon、line_search_steps 参数仅保留兼容，不参与新求解。
+
+预测评分跟踪近期路径参考点，避免绕行时被全局终点距离困住；大转角先执行经过碰撞检查的路径对齐。末端按直线距离进入朝向调整，停止距离须小于 Nav2 的位置验收容差。
 
 ### 5.6 运行时切换（推荐）
 

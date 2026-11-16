@@ -456,6 +456,86 @@ TEST(MpcCore, RejectsAllCollidingTrajectories)
   EXPECT_FALSE(result.valid);
 }
 
+TEST(MpcCore, AlignsBeforeFollowingPathWhenFacingBackwards)
+{
+  MpcCore core;
+  auto path = makeStraightPath(3.0);
+  Pose2D pose{0.0, 0.0, 3.141592653589793};
+  Control velocity{};
+  const auto clear = [](double, double) -> uint8_t {return 0;};
+  for (int i = 0; i < 400 && distance(pose, path.back()) > 0.3; ++i) {
+    auto result = core.compute(pose, path, clear, velocity.linear, 0.05, velocity.angular);
+    ASSERT_TRUE(result.valid);
+    EXPECT_LE(std::abs(result.control.linear - velocity.linear), 0.050001);
+    EXPECT_LE(std::abs(result.control.angular - velocity.angular), 0.160001);
+    velocity = result.control;
+    pose = rolloutConstantControl(pose, velocity.linear, velocity.angular, 1, 0.05).back();
+  }
+  EXPECT_LT(distance(pose, path.back()), 0.3);
+}
+
+TEST(MpcCore, RejectsInscribedObstacleRegion)
+{
+  MpcCore core;
+  EXPECT_FALSE(core.compute({}, makeStraightPath(3.0),
+    [](double, double) -> uint8_t {return 253;}, 0.0).valid);
+}
+
+TEST(MpcCore, RecoversAfterBlockedMapBecomesClear)
+{
+  MpcCore core;
+  auto path = makeStraightPath(3.0);
+  EXPECT_FALSE(core.compute({}, path, [](double, double) -> uint8_t {return 254;}, 0).valid);
+  auto result = core.compute({}, path, [](double, double) -> uint8_t {return 0;}, 0);
+  ASSERT_TRUE(result.valid);
+  EXPECT_GT(result.control.linear, 0.0);
+}
+
+TEST(MpcCore, ClosedLoopCornerWithQuantizedInflationAndAccelerationLimits)
+{
+  MpcParams params;
+  params.cost.obstacle_weight = 2.0;
+  params.goal_tolerance = 0.2;
+  MpcCore core(params);
+  auto path = makeStraightPath(1.5);
+  for (double y = 0.1; y <= 1.5; y += 0.1) {path.push_back({1.5, y, 1.57079632679});}
+  const auto cost = [](double x, double y) -> uint8_t {
+      // Quantized inflation beside the route, with a lethal wall further away.
+      if (y < -0.4 || x > 2.0) {return 254;}
+      return y < -0.15 ? 180 : 0;
+    };
+  Pose2D pose{};
+  Control velocity{};
+  int moving = 0;
+  for (int i = 0; i < 500 && distance(pose, path.back()) > 0.22; ++i) {
+    const auto result = core.compute(pose, path, cost, velocity.linear, 0.05, velocity.angular);
+    ASSERT_TRUE(result.valid) << "cycle " << i;
+    EXPECT_LE(std::abs(result.control.linear - velocity.linear), 0.050001);
+    EXPECT_LE(std::abs(result.control.angular - velocity.angular), 0.160001);
+    if (result.control.linear > 0.02) {++moving;}
+    velocity = result.control;
+    pose = rolloutConstantControl(pose, velocity.linear, velocity.angular, 1, 0.05).back();
+    ASSERT_LT(cost(pose.x, pose.y), 254);
+  }
+  EXPECT_LT(distance(pose, path.back()), 0.25);
+  EXPECT_GT(moving, 40);
+}
+
+TEST(MpcCore, EscapesCollidingStraightSeedByTurning)
+{
+  MpcParams params;
+  params.cost.obstacle_weight = 2.0;
+  MpcCore core(params);
+  auto path = makeStraightPath(2.0);
+  auto cost = [](double x, double y) -> uint8_t {
+      return x > 0.20 && std::abs(y) < 0.12 ? 254 : 0;
+    };
+  auto result = core.compute({}, path, cost, 0.0);
+  ASSERT_TRUE(result.valid);
+  auto prediction = rolloutConstantControl({}, result.control.linear, result.control.angular, 1, 0.05);
+  EXPECT_LT(cost(prediction.back().x, prediction.back().y), 254);
+}
+
 // ---- CBF 安全过滤器（2026-11，详见 docs/17）----
 // 每个用例都能用纸笔验证：约束 v·cos(ψ) ≤ α·h，h = range - d_safe
 

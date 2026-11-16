@@ -21,6 +21,6 @@
   </class>
   <class type="nav2_controller_lab::MpcController"
          base_class_type="nav2_core::Controller">
-    <description>MPC-lite：有限差分梯度 + 投影 + 线搜索的滚动优化</description>
+    <description>MPC：多初值、加速度约束与路径参考跟踪的滚动优化</description>
   </class>
 </library>

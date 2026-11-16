@@ -41,7 +41,7 @@ AStarAlgorithm makeAStar(
       if (cost == 255) {
         return allow_unknown;
       }
-      return cost < 254;
+      return cost < 253;
     });
   astar.setOptionOverrides(allow_diagonal, allow_unknown, 0.0, 1.0, 1000000);
   return astar;
@@ -76,6 +76,26 @@ TEST(AStarAlgorithm, ReturnsNoPathWhenWallBlocks)
   auto astar = makeAStar(map, W, H);
 
   EXPECT_EQ(astar.plan({1, 1}, {3, 3}), AStarAlgorithm::Result::NO_PATH);
+}
+
+TEST(AStarAlgorithm, RoutesAroundInscribedRegion)
+{
+  auto map = makeMap(7, 7);
+  for (unsigned int y = 1; y < 7; ++y) {setCell(map, 7, 3, y, 253);}
+  auto astar = makeAStar(map, 7, 7, true);
+  ASSERT_EQ(astar.plan({1, 3}, {5, 3}), AStarAlgorithm::Result::SUCCESS);
+  for (const auto & cell : astar.getPath()) {
+    EXPECT_LT(map[cell.y * 7 + cell.x], 253);
+  }
+}
+
+TEST(AStarAlgorithm, RejectsInscribedWallAndGoal)
+{
+  auto map = makeMap(5, 5);
+  for (unsigned int y = 0; y < 5; ++y) {setCell(map, 5, 2, y, 253);}
+  auto astar = makeAStar(map, 5, 5);
+  EXPECT_EQ(astar.plan({1, 1}, {3, 3}), AStarAlgorithm::Result::NO_PATH);
+  EXPECT_EQ(astar.plan({1, 1}, {2, 3}), AStarAlgorithm::Result::GOAL_INVALID);
 }
 
 TEST(AStarAlgorithm, AllowsStartOnInscribedObstacle)

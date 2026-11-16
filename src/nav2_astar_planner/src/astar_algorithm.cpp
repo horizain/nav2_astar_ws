@@ -18,8 +18,8 @@ namespace
 // nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE = 253
 // nav2_costmap_2d::LETHAL_OBSTACLE = 254
 // nav2_costmap_2d::NO_INFORMATION = 255
-// 只有 254 (LETHAL_OBSTACLE) 是真正的物理障碍；253 是内切膨胀，可以走
-constexpr uint8_t LETHAL_THRESHOLD = 254;
+// Robot centers must not enter the inscribed inflated region.
+constexpr uint8_t LETHAL_THRESHOLD = 253;
 constexpr uint8_t NO_INFORMATION = 255;
 }  // namespace
 
@@ -129,7 +129,7 @@ AStarAlgorithm::Result AStarAlgorithm::plan(
 
   // 起点判定：起点通常位于机器人当前位置，即使代价稍高也应允许出发，
   // 但如果是硬障碍则无意义。这里对起点放宽为「非致命」。
-  if (costs_[start_index] >= LETHAL_THRESHOLD && costs_[start_index] != NO_INFORMATION) {
+  if (costs_[start_index] >= 254 && costs_[start_index] != NO_INFORMATION) {
     // 起点在致命障碍内，仍允许尝试（机器人可能刚被推入），但记录
   }
   if (!isTraversable(goal_index)) {

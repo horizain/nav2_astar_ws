@@ -29,6 +29,7 @@ from rclpy.parameter import Parameter
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import LaserScan
 from std_srvs.srv import Trigger
+from std_msgs.msg import String
 from tf2_ros import Buffer, TransformListener
 
 
@@ -173,16 +174,17 @@ class Acceptance(Node):
         finally:
             self.destroy_client(client)
 
-    def plan_goal(self):
+    def plan_goal(self, minimum=0.70, maximum=0.95, turn=0.0):
         grid = self.static
         x, y, yaw = self.map_pose()
         origin, res = grid.info.origin.position, grid.info.resolution
         candidates = []
         radius = max(1, int(0.22 / res))
-        for dx in range(-20, 21, 2):
-            for dy in range(-20, 21, 2):
+        cells = int(maximum / res) + 2
+        for dx in range(-cells, cells + 1, 2):
+            for dy in range(-cells, cells + 1, 2):
                 distance = math.hypot(dx * res, dy * res)
-                if not 0.70 <= distance <= 0.95:
+                if not minimum <= distance <= maximum:
                     continue
                 px, py = x + dx * res, y + dy * res
                 ix, iy = int((px - origin.x) / res), int((py - origin.y) / res)
@@ -192,7 +194,8 @@ class Acceptance(Node):
                 if all(grid.data[(iy+yy)*grid.info.width+ix+xx] == 0
                        for yy in range(-radius, radius+1)
                        for xx in range(-radius, radius+1)):
-                    candidates.append((abs(math.atan2(dy, dx) - yaw), px, py))
+                    angle = math.atan2(dy, dx) - yaw - turn
+                    candidates.append((abs(math.atan2(math.sin(angle), math.cos(angle))), px, py))
         candidates.sort()
         for _, px, py in candidates[:35]:
             req = ComputePathToPose.Goal()
@@ -258,6 +261,9 @@ def main():
     parser.add_argument("--domain", type=int, default=191)
     parser.add_argument("--output-dir", default="/tmp")
     parser.add_argument("--stationary-seconds", type=float, default=60)
+    parser.add_argument("--controller", default="FollowPath",
+                        choices=["FollowPath", "PID", "Stanley", "DWB", "MPPI", "MPC"])
+    parser.add_argument("--extended-navigation", action="store_true")
     args = parser.parse_args()
     if not 0 <= args.domain <= 232:
         parser.error("domain must be in [0, 232]")
@@ -296,6 +302,12 @@ def main():
                                               start_new_session=True))
         rclpy.init()
         node = Acceptance()
+        selector = node.create_publisher(
+            String, "/controller_selector",
+            QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                       reliability=ReliabilityPolicy.RELIABLE))
+        selector.publish(String(data=args.controller))
+        print(f"Selected controller: {args.controller}", flush=True)
         node.wait_for(lambda: node.scan is not None and node.odom is not None
                       and node.mapping is not None and node.map_pose() is not None,
                       100, "mapping scan, odom, map and TF", processes)
@@ -388,6 +400,27 @@ def main():
         print(f"Navigation status: {result.status}; motion: {distance:.3f} m", flush=True)
         if result.status != 4 or distance < 0.15:
             raise RuntimeError("Navigation did not complete with sufficient motion")
+
+        if args.extended_navigation:
+            for turn in (1.0, -1.0):
+                px, py, yaw, count = node.plan_goal(1.2, 1.6, turn)
+                req = NavigateToPose.Goal()
+                req.pose.header.frame_id = "map"
+                req.pose.header.stamp = node.get_clock().now().to_msg()
+                req.pose.pose.position.x, req.pose.pose.position.y = px, py
+                req.pose.pose.orientation.z = math.sin(yaw / 2)
+                req.pose.pose.orientation.w = math.cos(yaw / 2)
+                begin = node.map_pose()
+                handle = node.action_result(node.navigator.send_goal_async(req), 15)
+                if not handle.accepted:
+                    raise RuntimeError("Extended navigation rejected")
+                result = node.action_result(handle.get_result_async(), 100)
+                end = node.map_pose()
+                travel = math.hypot(end[0] - begin[0], end[1] - begin[1])
+                print(f"Extended turn {turn:+.1f}: {count} path poses; "
+                      f"status {result.status}; displacement {travel:.3f} m", flush=True)
+                if result.status != 4 or travel < 0.8:
+                    raise RuntimeError("Extended turning navigation failed")
 
         # 定位模式加载损坏图失败时，仍须恢复上一张导航地图和图路径。
         expected_grid = node.static

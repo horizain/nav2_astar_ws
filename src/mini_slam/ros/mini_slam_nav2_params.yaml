@@ -238,26 +238,26 @@ controller_server:
     MPC:
       plugin: "nav2_controller_lab::MpcController"
       transform_tolerance: 0.1
-      goal_tolerance: 0.40
+      goal_tolerance: 0.34
       min_linear_velocity: 0.0
       max_linear_velocity: 0.5
       max_angular_velocity: 1.9
-      horizon_steps: 10
+      horizon_steps: 15
       iterations: 8
       line_search_steps: 3
       model_dt: 0.1
-      gradient_step: 0.05
-      gradient_epsilon: 0.01
+      max_linear_acceleration: 1.0
+      max_angular_acceleration: 3.2
       terminal_weight: 2.0
       smoothness_weight: 0.05
-      path_weight: 1.0
+      path_weight: 5.0
       goal_weight: 2.0
-      obstacle_weight: 100.0
+      obstacle_weight: 8.0
       heading_weight: 0.5
       velocity_weight: 0.2
       control_weight: 0.05
       collision_cost: 1000000.0
-      collision_threshold: 254
+      collision_threshold: 253
       desired_linear_velocity: 0.5
 
 

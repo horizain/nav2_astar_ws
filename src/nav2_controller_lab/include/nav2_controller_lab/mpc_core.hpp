@@ -1,9 +1,9 @@
 // Copyright (c) 2026
-// MPC-lite：有限差分梯度 + 投影 + 线搜索的滚动优化
+// MPC：多初值、带加速度约束的确定性滚动搜索
 //
 // 和 MPPI 的区别：
 //   MPPI：随机采样控制序列，软最大加权
-//   MPC ：对同一个控制序列做梯度下降，投影到控制约束内
+//   MPC ：对多个可行初值做控制块模式搜索，投影到速度与加速度约束内
 //
 // 这是一个教学用简化 MPC，不是工业级 QP/NLP 求解器。
 //
@@ -28,7 +28,7 @@ struct MpcParams
   double max_linear_velocity{0.5};
   double max_angular_velocity{1.9};
 
-  int horizon_steps{10};
+  int horizon_steps{15};
   double dt{0.1};
   int iterations{8};
   int line_search_steps{3};
@@ -36,11 +36,19 @@ struct MpcParams
   double gradient_step{0.05};
   double gradient_epsilon{0.01};
 
+  double max_linear_acceleration{1.0};
+  double max_angular_acceleration{3.2};
   double goal_tolerance{0.25};
   double terminal_weight{2.0};
   double smoothness_weight{0.05};
 
-  TrajectoryCostParams cost;
+  TrajectoryCostParams cost = [] {
+      TrajectoryCostParams value;
+      value.path_weight = 5.0;
+      value.obstacle_weight = 8.0;
+      value.collision_threshold = 253;
+      return value;
+    }();
 };
 
 /**
@@ -56,8 +64,8 @@ struct MpcParams
  *   ω ∈ [-max_w, max_w]
  *
  * 求解：
- *   从上一周期解（或匀速直行）出发，做有限差分梯度下降，
- *   每步投影回约束，并用回溯线搜索保证代价不上升。
+ *   结合上一周期解和路径引导初值，对控制块做确定性模式搜索。
+ *   每个候选先投影到速度与加速度约束，再完整检查预测轨迹。
  */
 class MpcCore
 {
@@ -68,7 +76,7 @@ public:
     const Pose2D & robot,
     const std::vector<Pose2D> & path,
     const std::function<uint8_t(double, double)> & cost_at,
-    double current_speed);
+    double current_speed, double control_dt = 0.05, double current_angular = 0.0);
 
   void reset();
 

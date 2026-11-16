@@ -135,7 +135,8 @@ nav_msgs::msg::Path AStarPlanner::createPlan(
             std::to_string(goal.pose.position.y) + ") 超出地图范围");
   }
 
-  if (costmap_->getCost(mx_goal, my_goal) == nav2_costmap_2d::LETHAL_OBSTACLE) {
+  if (costmap_->getCost(mx_goal, my_goal) == nav2_costmap_2d::LETHAL_OBSTACLE ||
+    costmap_->getCost(mx_goal, my_goal) == nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE) {
     throw nav2_core::GoalOccupied(
             "终点 (" + std::to_string(goal.pose.position.x) + ", " +
             std::to_string(goal.pose.position.y) + ") 位于致命障碍上");
@@ -170,18 +171,14 @@ nav_msgs::msg::Path AStarPlanner::createPlan(
   //   254      LETHAL_OBSTACLE         真实障碍
   //   255      NO_INFORMATION          未知区域
   //
-  // 只有 254 是「物理上不可通过」的。
-  // 253 表示代价很高但可以走 —— 关键点：机器人起点常常正处在 253 的
-  // 膨胀区内（贴墙停车时），若把 253 判为不可通行，起点会被判成死路，
-  // A* 一个邻居都扩展不出去，直接报「无可行路径」。
-  // 官方 navfn 只对终点检查 LETHAL_OBSTACLE，其余交给代价场引导，即此理。
+  // 253 is inside the robot footprint exclusion region, not a traversable high cost.
   const bool allow_unknown = allow_unknown_;
   astar_->setTraversabilityChecker(
     [allow_unknown](unsigned int, uint8_t cost) -> bool {
       if (cost == nav2_costmap_2d::NO_INFORMATION) {
         return allow_unknown;
       }
-      return cost < nav2_costmap_2d::LETHAL_OBSTACLE;
+      return cost < nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE;
     });
 
   // -------- 执行 A* --------

@@ -68,6 +68,8 @@ void MpcController::configureParams(
     node, "desired_linear_velocity",
     params_.max_linear_velocity, params_.cost.desired_linear_velocity);
 
+  declareAndGet(node, "max_linear_acceleration", 1.0, params_.max_linear_acceleration);
+  declareAndGet(node, "max_angular_acceleration", 3.2, params_.max_angular_acceleration);
   params_.goal_tolerance = goal_tolerance_;
   params_.dt = std::max(1e-3, params_.dt);
   params_.horizon_steps = std::max(1, params_.horizon_steps);
@@ -87,7 +89,7 @@ Control MpcController::computeCommand(
   const Pose2D & robot,
   const std::vector<Pose2D> & path,
   double current_speed,
-  double /*dt*/)
+  double dt)
 {
   auto cost_at = [this](double wx, double wy) -> uint8_t {
       unsigned int mx = 0;
@@ -98,7 +100,7 @@ Control MpcController::computeCommand(
       return costmap_->getCost(mx, my);
     };
 
-  const auto result = core_.compute(robot, path, cost_at, current_speed);
+  const auto result = core_.compute(robot, path, cost_at, current_speed, dt, current_angular_);
   if (!result.valid) {
     throw nav2_core::NoValidControl("MPC-lite 没有找到可行控制序列");
   }
