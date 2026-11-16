@@ -1,0 +1,24 @@
+[INFO] [1794645874.495329667] [e2e_nav_test]: [TF] odom->base_footprint OK: (0.00, 0.00)
+[INFO] [1794645874.495839652] [e2e_nav_test]: [LIFECYCLE] 阶段1：激活定位组（map_server → amcl）
+[WARN] [1794645883.525458169] [e2e_nav_test]: [INIT] 第1次：服务不通，回退到 /initialpose 话题连发
+[INFO] [1794645886.030150488] [e2e_nav_test]: [INIT] 已生效：map→odom TF 出现
+[INFO] [1794645886.030958252] [e2e_nav_test]: [LIFECYCLE] 阶段2：激活导航组（初始位姿已生效）
+[INFO] [1794645887.294557631] [e2e_nav_test]: [TF] map->odom OK（AMCL 已开始定位）
+[INFO] [1794645888.198660694] [e2e_nav_test]: [CTRL] 已请求切换控制器到 DWB
+[INFO] [1794645888.215754763] [e2e_nav_test]: [GOAL] 等待 bt_navigator action server...
+[INFO] [1794645888.216456126] [e2e_nav_test]: [GOAL] 发送目标 (3.50, 1.00, yaw=90°)，超时 300.0s
+[INFO] [1794645888.218677541] [e2e_nav_test]: [WAIT] 已等待 0s ...
+[INFO] [1794645888.219916550] [e2e_nav_test]: [FEEDBACK] 当前 (-0.00, -0.00) 剩余 0.00 m
+[INFO] [1794645889.229759960] [e2e_nav_test]: [FEEDBACK] 当前 (0.32, 0.00) 剩余 3.61 m
+[INFO] [1794645890.239652516] [e2e_nav_test]: [FEEDBACK] 当前 (0.78, 0.04) 剩余 3.10 m
+[INFO] [1794645891.239593223] [e2e_nav_test]: [FEEDBACK] 当前 (1.22, 0.13) 剩余 2.63 m
+[INFO] [1794645892.249827574] [e2e_nav_test]: [FEEDBACK] 当前 (1.68, 0.13) 剩余 2.16 m
+[INFO] [1794645893.249763130] [e2e_nav_test]: [FEEDBACK] 当前 (1.98, 0.11) 剩余 1.95 m
+[INFO] [1794645894.249941369] [e2e_nav_test]: [FEEDBACK] 当前 (2.23, 0.21) 剩余 1.66 m
+[INFO] [1794645895.260001917] [e2e_nav_test]: [FEEDBACK] 当前 (2.55, 0.53) 剩余 1.13 m
+[INFO] [1794645896.269297914] [e2e_nav_test]: [FEEDBACK] 当前 (2.70, 0.78) 剩余 0.82 m
+[INFO] [1794645897.269563553] [e2e_nav_test]: [FEEDBACK] 当前 (2.81, 0.86) 剩余 0.78 m
+[INFO] [1794645898.219757576] [e2e_nav_test]: [WAIT] 已等待 10s ...
+[INFO] [1794645898.279214404] [e2e_nav_test]: [FEEDBACK] 当前 (3.13, 1.00) 剩余 0.37 m
+[INFO] [1794645899.280102162] [e2e_nav_test]: [FEEDBACK] 当前 (3.18, 0.99) 剩余 0.35 m
+[INFO] [1794645899.669555407] [e2e_nav_test]: [RESULT] ✅ 到达目标（SUCCEEDED）

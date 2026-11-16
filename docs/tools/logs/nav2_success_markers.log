@@ -1,0 +1,20 @@
+[planner_server-10] [INFO] [1794588121.611049321] [planner_server]: A* 规划完成: 扩展 145 节点, 打开 228 节点, 路径 26 格, 代价 30.38, 耗时 0.18 ms
+[planner_server-10] [INFO] [1794588122.630973694] [planner_server]: A* 规划完成: 扩展 119 节点, 打开 196 节点, 路径 25 格, 代价 29.80, 耗时 0.13 ms
+[planner_server-10] [INFO] [1794588123.660738222] [planner_server]: A* 规划完成: 扩展 134 节点, 打开 216 节点, 路径 26 格, 代价 30.80, 耗时 0.10 ms
+[planner_server-10] [INFO] [1794588124.690932623] [planner_server]: A* 规划完成: 扩展 137 节点, 打开 217 节点, 路径 26 格, 代价 30.38, 耗时 0.14 ms
+[planner_server-10] [INFO] [1794588125.720760971] [planner_server]: A* 规划完成: 扩展 138 节点, 打开 218 节点, 路径 26 格, 代价 30.38, 耗时 0.10 ms
+[planner_server-10] [INFO] [1794588126.740748383] [planner_server]: A* 规划完成: 扩展 137 节点, 打开 218 节点, 路径 26 格, 代价 29.97, 耗时 0.10 ms
+[planner_server-10] [INFO] [1794588127.760986209] [planner_server]: A* 规划完成: 扩展 137 节点, 打开 218 节点, 路径 26 格, 代价 29.97, 耗时 0.17 ms
+[planner_server-10] [INFO] [1794588128.780946542] [planner_server]: A* 规划完成: 扩展 145 节点, 打开 228 节点, 路径 26 格, 代价 29.56, 耗时 0.16 ms
+[planner_server-10] [INFO] [1794588129.800952990] [planner_server]: A* 规划完成: 扩展 76 节点, 打开 130 节点, 路径 22 格, 代价 24.73, 耗时 0.22 ms
+[planner_server-10] [INFO] [1794588130.820886918] [planner_server]: A* 规划完成: 扩展 22 节点, 打开 69 节点, 路径 22 格, 代价 21.00, 耗时 0.11 ms
+[planner_server-10] [INFO] [1794588131.841014245] [planner_server]: A* 规划完成: 扩展 97 节点, 打开 161 节点, 路径 23 格, 代价 24.07, 耗时 0.09 ms
+[planner_server-10] [INFO] [1794588132.871008041] [planner_server]: A* 规划完成: 扩展 110 节点, 打开 175 节点, 路径 23 格, 代价 24.49, 耗时 0.13 ms
+[planner_server-10] [INFO] [1794588133.890747846] [planner_server]: A* 规划完成: 扩展 110 节点, 打开 175 节点, 路径 23 格, 代价 24.49, 耗时 0.13 ms
+[planner_server-10] [INFO] [1794588134.910962689] [planner_server]: A* 规划完成: 扩展 32 节点, 打开 95 节点, 路径 22 格, 代价 23.90, 耗时 0.10 ms
+[planner_server-10] [INFO] [1794588135.930863002] [planner_server]: A* 规划完成: 扩展 32 节点, 打开 95 节点, 路径 22 格, 代价 23.90, 耗时 0.08 ms
+[planner_server-10] [INFO] [1794588136.960917824] [planner_server]: A* 规划完成: 扩展 32 节点, 打开 97 节点, 路径 19 格, 代价 20.90, 耗时 0.15 ms
+[planner_server-10] [INFO] [1794588137.981088143] [planner_server]: A* 规划完成: 扩展 32 节点, 打开 84 节点, 路径 15 格, 代价 16.90, 耗时 0.11 ms
+[planner_server-10] [INFO] [1794588139.010673481] [planner_server]: A* 规划完成: 扩展 12 节点, 打开 39 节点, 路径 7 格, 代价 8.07, 耗时 0.09 ms
+[controller_server-8] [INFO] [1794588139.371295015] [controller_server]: Reached the goal!
+[bt_navigator-13] [INFO] [1794588139.400401464] [bt_navigator]: Goal succeeded

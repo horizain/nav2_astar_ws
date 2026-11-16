@@ -1,0 +1,28 @@
+[INFO] [1794595313.940219262] [e2e_nav_test]: [TF] odom->base_footprint OK: (0.00, 0.00)
+[INFO] [1794595313.940677148] [e2e_nav_test]: [LIFECYCLE] 阶段1：激活定位组（map_server → amcl）
+[WARN] [1794595322.512459414] [e2e_nav_test]: [INIT] 第1次：服务不通，回退到 /initialpose 话题连发
+[INFO] [1794595325.016470345] [e2e_nav_test]: [INIT] 已生效：map→odom TF 出现
+[INFO] [1794595325.016993525] [e2e_nav_test]: [LIFECYCLE] 阶段2：激活导航组（初始位姿已生效）
+[INFO] [1794595326.227779945] [e2e_nav_test]: [TF] map->odom OK（AMCL 已开始定位）
+[INFO] [1794595327.131547278] [e2e_nav_test]: [CTRL] 已请求切换控制器到 DWB
+[INFO] [1794595327.147105223] [e2e_nav_test]: [GOAL] 等待 bt_navigator action server...
+[INFO] [1794595327.147938740] [e2e_nav_test]: [GOAL] 发送目标 (1.50, 0.50, yaw=90°)，超时 420.0s
+[INFO] [1794595327.149351614] [e2e_nav_test]: [WAIT] 已等待 0s ...
+[INFO] [1794595327.151001936] [e2e_nav_test]: [FEEDBACK] 当前 (-2.00, -0.50) 剩余 0.00 m
+[INFO] [1794595328.160469830] [e2e_nav_test]: [FEEDBACK] 当前 (-1.68, -0.50) 剩余 3.54 m
+[INFO] [1794595329.161029471] [e2e_nav_test]: [FEEDBACK] 当前 (-1.22, -0.47) 剩余 3.07 m
+[INFO] [1794595330.170524013] [e2e_nav_test]: [FEEDBACK] 当前 (-0.75, -0.39) 剩余 2.58 m
+[INFO] [1794595331.180829753] [e2e_nav_test]: [FEEDBACK] 当前 (-0.31, -0.43) 剩余 2.18 m
+[INFO] [1794595332.190724168] [e2e_nav_test]: [FEEDBACK] 当前 (-0.02, -0.45) 剩余 1.90 m
+[INFO] [1794595333.190627804] [e2e_nav_test]: [FEEDBACK] 当前 (0.09, -0.42) 剩余 1.77 m
+[INFO] [1794595334.200719376] [e2e_nav_test]: [FEEDBACK] 当前 (0.18, -0.38) 剩余 1.63 m
+[INFO] [1794595335.210436439] [e2e_nav_test]: [FEEDBACK] 当前 (0.18, -0.36) 剩余 1.65 m
+[INFO] [1794595336.211126828] [e2e_nav_test]: [FEEDBACK] 当前 (0.18, -0.36) 剩余 1.65 m
+[INFO] [1794595337.150916174] [e2e_nav_test]: [WAIT] 已等待 10s ...
+[INFO] [1794595337.220583777] [e2e_nav_test]: [FEEDBACK] 当前 (0.18, -0.37) 剩余 1.65 m
+[INFO] [1794595338.221311031] [e2e_nav_test]: [FEEDBACK] 当前 (0.41, -0.19) 剩余 1.32 m
+[INFO] [1794595339.220903288] [e2e_nav_test]: [FEEDBACK] 当前 (0.69, 0.14) 剩余 0.94 m
+[INFO] [1794595340.231177157] [e2e_nav_test]: [FEEDBACK] 当前 (0.86, 0.35) 剩余 0.66 m
+[INFO] [1794595341.240389073] [e2e_nav_test]: [FEEDBACK] 当前 (1.15, 0.48) 剩余 0.30 m
+[INFO] [1794595342.240583228] [e2e_nav_test]: [FEEDBACK] 当前 (1.13, 0.51) 剩余 0.37 m
+[INFO] [1794595342.500352675] [e2e_nav_test]: [RESULT] ✅ 到达目标（SUCCEEDED）

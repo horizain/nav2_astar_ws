@@ -1,0 +1,25 @@
+[INFO] [1794596759.148259459] [e2e_nav_test]: [TF] odom->base_footprint OK: (0.00, 0.00)
+[INFO] [1794596759.148742031] [e2e_nav_test]: [LIFECYCLE] 阶段1：激活定位组（map_server → amcl）
+[WARN] [1794596769.174896205] [e2e_nav_test]: [INIT] 第1次：服务不通，回退到 /initialpose 话题连发
+[INFO] [1794596771.679286620] [e2e_nav_test]: [INIT] 已生效：map→odom TF 出现
+[INFO] [1794596771.679680706] [e2e_nav_test]: [LIFECYCLE] 阶段2：激活导航组（初始位姿已生效）
+[INFO] [1794596772.872300775] [e2e_nav_test]: [TF] map->odom OK（AMCL 已开始定位）
+[INFO] [1794596773.775963594] [e2e_nav_test]: [CTRL] 已请求切换控制器到 DWB
+[INFO] [1794596773.789893556] [e2e_nav_test]: [GOAL] 等待 bt_navigator action server...
+[INFO] [1794596773.790561798] [e2e_nav_test]: [GOAL] 发送目标 (1.50, 0.50, yaw=90°)，超时 300.0s
+[INFO] [1794596773.791984274] [e2e_nav_test]: [WAIT] 已等待 0s ...
+[INFO] [1794596773.793908849] [e2e_nav_test]: [FEEDBACK] 当前 (-2.00, -0.50) 剩余 0.00 m
+[INFO] [1794596774.803437393] [e2e_nav_test]: [FEEDBACK] 当前 (-1.69, -0.50) 剩余 3.60 m
+[INFO] [1794596775.803479153] [e2e_nav_test]: [FEEDBACK] 当前 (-1.23, -0.48) 剩余 3.07 m
+[INFO] [1794596776.813554228] [e2e_nav_test]: [FEEDBACK] 当前 (-0.78, -0.39) 剩余 2.58 m
+[INFO] [1794596777.813663019] [e2e_nav_test]: [FEEDBACK] 当前 (-0.34, -0.39) 剩余 2.23 m
+[INFO] [1794596778.823864546] [e2e_nav_test]: [FEEDBACK] 当前 (-0.00, -0.41) 剩余 1.91 m
+[INFO] [1794596779.833752129] [e2e_nav_test]: [FEEDBACK] 当前 (0.32, -0.26) 剩余 1.42 m
+[INFO] [1794596780.843401872] [e2e_nav_test]: [FEEDBACK] 当前 (0.60, 0.04) 剩余 1.08 m
+[INFO] [1794596781.843639777] [e2e_nav_test]: [FEEDBACK] 当前 (0.72, 0.24) 剩余 0.79 m
+[INFO] [1794596782.853813219] [e2e_nav_test]: [FEEDBACK] 当前 (1.01, 0.48) 剩余 0.39 m
+[INFO] [1794596783.792596066] [e2e_nav_test]: [WAIT] 已等待 10s ...
+[INFO] [1794596783.863482074] [e2e_nav_test]: [FEEDBACK] 当前 (1.10, 0.45) 剩余 0.35 m
+[INFO] [1794596784.873569240] [e2e_nav_test]: [FEEDBACK] 当前 (1.12, 0.42) 剩余 0.35 m
+[INFO] [1794596785.873621804] [e2e_nav_test]: [FEEDBACK] 当前 (1.14, 0.41) 剩余 0.37 m
+[INFO] [1794596786.153159409] [e2e_nav_test]: [RESULT] ✅ 到达目标（SUCCEEDED）

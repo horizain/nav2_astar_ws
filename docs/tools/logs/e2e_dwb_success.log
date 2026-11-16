@@ -1,0 +1,26 @@
+[INFO] [1794590504.106662658] [e2e_nav_test]: [TF] odom->base_footprint OK: (0.00, 0.00)
+[WARN] [1794590512.123271785] [e2e_nav_test]: [INIT] 服务不通，回退到 /initialpose 话题发布
+[INFO] [1794590514.629938425] [e2e_nav_test]: [LIFECYCLE] 激活 nav2 生命周期节点...
+[INFO] [1794590515.657827239] [e2e_nav_test]:   planner_server       -> active
+[INFO] [1794590515.676481354] [e2e_nav_test]:   behavior_server      -> active
+[INFO] [1794590515.834898312] [e2e_nav_test]:   bt_navigator         -> active
+[INFO] [1794590515.851251275] [e2e_nav_test]:   velocity_smoother    -> active
+[INFO] [1794590515.867838382] [e2e_nav_test]:   collision_monitor    -> active
+[INFO] [1794590515.884334041] [e2e_nav_test]:   waypoint_follower    -> active
+[INFO] [1794590515.890935262] [e2e_nav_test]: [TF] map->odom OK（AMCL 已开始定位）
+[INFO] [1794590516.794949647] [e2e_nav_test]: [CTRL] 已请求切换控制器到 DWB
+[INFO] [1794590516.811017051] [e2e_nav_test]: [GOAL] 等待 bt_navigator action server...
+[INFO] [1794590516.811654827] [e2e_nav_test]: [GOAL] 发送目标 (1.50, 0.50, yaw=90°)，超时 420.0s
+[INFO] [1794590516.813333933] [e2e_nav_test]: [WAIT] 已等待 0s ...
+[INFO] [1794590516.814475182] [e2e_nav_test]: [FEEDBACK] 当前 (-2.00, -0.50) 剩余 0.00 m
+[INFO] [1794590517.824470544] [e2e_nav_test]: [FEEDBACK] 当前 (-1.66, -0.50) 剩余 3.54 m
+[INFO] [1794590518.834762132] [e2e_nav_test]: [FEEDBACK] 当前 (-1.20, -0.47) 剩余 3.07 m
+[INFO] [1794590519.845049823] [e2e_nav_test]: [FEEDBACK] 当前 (-0.76, -0.37) 剩余 2.58 m
+[INFO] [1794590520.854489575] [e2e_nav_test]: [FEEDBACK] 当前 (-0.31, -0.44) 剩余 2.18 m
+[INFO] [1794590521.864439851] [e2e_nav_test]: [FEEDBACK] 当前 (0.15, -0.45) 剩余 1.71 m
+[INFO] [1794590522.874402985] [e2e_nav_test]: [FEEDBACK] 当前 (0.50, -0.17) 剩余 1.24 m
+[INFO] [1794590523.874980562] [e2e_nav_test]: [FEEDBACK] 当前 (0.68, 0.17) 剩余 0.94 m
+[INFO] [1794590524.874533106] [e2e_nav_test]: [FEEDBACK] 当前 (0.93, 0.48) 剩余 0.49 m
+[INFO] [1794590525.884391509] [e2e_nav_test]: [FEEDBACK] 当前 (1.13, 0.50) 剩余 0.35 m
+[INFO] [1794590526.814126873] [e2e_nav_test]: [WAIT] 已等待 10s ...
+[INFO] [1794590526.814589519] [e2e_nav_test]: [RESULT] ✅ 到达目标（SUCCEEDED）

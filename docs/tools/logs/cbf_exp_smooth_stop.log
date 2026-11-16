@@ -1,0 +1,18 @@
+[INFO] [1794595696.805975899] [cbf_experiment]: 模式=cbf 速度=0.2 时长=10.0s
+t=  2.2  pos=(+3.26,+2.29)  nearest_range=0.538  h=+0.318  cbf_out=+0.20
+t=  2.7  pos=(+3.27,+2.41)  nearest_range=0.467  h=+0.247  cbf_out=+0.20
+t=  3.2  pos=(+3.27,+2.49)  nearest_range=0.374  h=+0.154  cbf_out=+0.20
+t=  3.7  pos=(+3.28,+2.54)  nearest_range=0.344  h=+0.124  cbf_out=+0.20
+t=  4.2  pos=(+3.28,+2.57)  nearest_range=0.308  h=+0.088  cbf_out=+0.12
+t=  4.7  pos=(+3.28,+2.59)  nearest_range=0.300  h=+0.080  cbf_out=+0.09
+t=  5.2  pos=(+3.28,+2.61)  nearest_range=0.278  h=+0.058  cbf_out=+0.06
+t=  5.7  pos=(+3.28,+2.61)  nearest_range=0.278  h=+0.058  cbf_out=+0.05
+t=  6.2  pos=(+3.28,+2.62)  nearest_range=0.265  h=+0.045  cbf_out=+0.00
+t=  6.7  pos=(+3.28,+2.62)  nearest_range=0.263  h=+0.043  cbf_out=+0.01
+t=  7.2  pos=(+3.28,+2.63)  nearest_range=0.273  h=+0.053  cbf_out=+0.04
+t=  7.7  pos=(+3.28,+2.62)  nearest_range=0.271  h=+0.051  cbf_out=+0.02
+t=  8.2  pos=(+3.28,+2.62)  nearest_range=0.258  h=+0.038  cbf_out=-0.02
+t=  8.7  pos=(+3.28,+2.62)  nearest_range=0.270  h=+0.050  cbf_out=+0.02
+t=  9.2  pos=(+3.28,+2.63)  nearest_range=0.262  h=+0.042  cbf_out=-0.02
+t=  9.7  pos=(+3.28,+2.63)  nearest_range=0.264  h=+0.044  cbf_out=+0.00
+[INFO] [1794595706.806884824] [cbf_experiment]: 实验结束（已停车）
