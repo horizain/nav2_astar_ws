@@ -1,0 +1,880 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>pf.html · SLAM 可视化课堂</title>
+<link rel="stylesheet" href="vendor/katex/katex.min.css">
+<script defer src="vendor/katex/katex.min.js"></script>
+<script defer src="vendor/katex/contrib/auto-render.min.js"
+  onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'\(',right:'\)',display:false}],throwOnError:false});"></script>
+<style>:root{
+  --bg0:#06080f; --panel:rgba(18,24,40,.72); --panel2:rgba(26,34,56,.6);
+  --line:rgba(120,140,190,.16); --text:#e6edf8; --dim:#94a3bd;
+  --cy:#22d3ee; --vi:#a78bfa; --pk:#f472b6; --ok:#34d399; --wa:#fbbf24; --bad:#fb7185;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{
+  background:
+    radial-gradient(1200px 600px at 15% -10%, rgba(34,211,238,.10), transparent 60%),
+    radial-gradient(1000px 700px at 110% 10%, rgba(167,139,250,.10), transparent 55%),
+    radial-gradient(900px 700px at 50% 120%, rgba(244,114,182,.08), transparent 60%),
+    var(--bg0);
+  color:var(--text);
+  font-family:"Segoe UI","Microsoft YaHei","PingFang SC",system-ui,sans-serif;
+  line-height:1.8; min-height:100vh;
+}
+::selection{background:rgba(34,211,238,.35)}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-thumb{background:rgba(120,140,190,.25);border-radius:8px}
+.wrap{max-width:1180px;margin:0 auto;padding:0 22px}
+.topnav{position:sticky;top:0;z-index:50;
+  background:rgba(8,11,20,.78);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
+  border-bottom:1px solid var(--line)}
+.topnav .wrap{display:flex;align-items:center;gap:10px;padding:10px 22px;flex-wrap:wrap}
+.brand{font-weight:800;font-size:16px;letter-spacing:.5px;text-decoration:none;
+  background:linear-gradient(120deg,#22d3ee,#818cf8 55%,#f472b6);
+  -webkit-background-clip:text;background-clip:text;color:transparent;white-space:nowrap}
+.topnav a{color:var(--dim);text-decoration:none;font-size:13.5px;padding:6px 12px;border-radius:8px;transition:.15s;white-space:nowrap}
+.topnav a:hover{color:var(--text);background:rgba(120,140,190,.10)}
+.topnav a.on{color:#06101f;background:linear-gradient(120deg,#22d3ee,#67e8f9);font-weight:700}
+.hero{padding:46px 0 10px}
+.hero .tag{display:inline-block;background:rgba(34,211,238,.12);border:1px solid rgba(34,211,238,.35);
+  color:var(--cy);border-radius:999px;padding:3px 16px;font-size:14px;font-weight:700;margin-bottom:14px}
+.hero h1{font-size:36px;line-height:1.3;font-weight:900}
+.hero .lead{color:var(--dim);font-size:15.5px;max-width:860px;margin-top:12px}
+.hero .lead p.big{color:var(--text)}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:16px;
+  padding:26px 30px;margin-top:22px;backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+  transition:border-color .2s;position:relative;overflow:hidden}
+.card:hover{border-color:rgba(34,211,238,.4)}
+.card h2{font-size:22px;margin-bottom:6px}
+.card h2 .no{color:var(--vi);font-family:Consolas,monospace;margin-right:10px}
+.sub{color:var(--dim);font-size:14px;margin-bottom:10px}
+h3{font-size:16px;margin:20px 0 8px;color:var(--cy)}
+h4{font-size:14.5px;margin:14px 0 6px;color:var(--vi)}
+p{margin:9px 0;font-size:15px}
+li{margin:6px 0;font-size:15px;margin-left:24px}
+.muted{color:var(--dim)}
+.formula{background:rgba(8,11,20,.85);border:1px solid var(--line);border-left:3px solid var(--vi);
+  border-radius:10px;padding:13px 18px;font-family:Consolas,"Cascadia Code",monospace;font-size:14.5px;
+  color:#a5f3fc;margin:12px 0;overflow-x:auto;white-space:pre;line-height:1.8}
+.formula .hl{color:var(--wa)}
+.note{background:rgba(34,211,238,.07);border-left:3px solid var(--cy);border-radius:8px;
+  padding:11px 15px;font-size:14.5px;margin:12px 0}
+.warnbox{background:rgba(251,191,36,.07);border-left:3px solid var(--wa);border-radius:8px;
+  padding:11px 15px;font-size:14.5px;margin:12px 0}
+canvas{background:rgba(8,11,20,.9);border:1px solid var(--line);border-radius:12px;
+  display:block;margin:14px auto;max-width:100%;box-shadow:0 0 40px rgba(34,211,238,.06) inset}
+.ctrls{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:14px 0}
+.ctrls button{background:linear-gradient(120deg,#22d3ee,#60a5fa);color:#06101f;border:0;
+  padding:9px 18px;border-radius:9px;cursor:pointer;font-size:13.5px;font-weight:700;transition:.15s}
+.ctrls button:hover{filter:brightness(1.12);transform:translateY(-1px)}
+.ctrls button.ghost{background:var(--panel2);color:var(--text);border:1px solid var(--line);font-weight:600}
+.ctrls label{color:var(--dim);font-size:13px}
+.ctrls input[type=range]{width:160px;accent-color:#22d3ee;vertical-align:middle}
+.readout{background:rgba(8,11,20,.9);border:1px solid var(--line);border-radius:10px;
+  padding:11px 15px;font-family:Consolas,monospace;font-size:12.5px;color:#86efac;
+  margin-top:12px;white-space:pre-wrap;overflow-x:auto;line-height:1.6}
+table{border-collapse:collapse;width:100%;margin:12px 0;font-size:14px}
+th,td{border:1px solid var(--line);padding:7px 12px;text-align:left}
+th{background:rgba(26,34,56,.7);color:var(--cy);font-weight:700}
+td.mono,span.mono{font-family:Consolas,monospace;color:#a5f3fc}
+tr:hover td{background:rgba(34,211,238,.04)}
+.kbd{background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:1px 8px;
+  font-family:Consolas,monospace;font-size:12.5px;color:#a5f3fc}
+details{background:var(--panel2);border:1px solid var(--line);border-radius:10px;
+  padding:10px 16px;margin:12px 0}
+details summary{cursor:pointer;color:var(--vi);font-size:14.5px;font-weight:700}
+details[open] summary{margin-bottom:8px}
+b.cy{color:var(--cy)} b.vi{color:var(--vi)} b.pk{color:var(--pk)} b.ok{color:var(--ok)} b.wa{color:var(--wa)} b.bad{color:var(--bad)}
+.math{margin:16px 0;overflow-x:auto;overflow-y:hidden;text-align:center;padding:4px 0}
+.math .katex-display{margin:10px 0}
+.math .katex{font-size:1.14em;text-align:left}
+.math .muted{font-size:14px;text-align:left}
+.katex-display>.katex{white-space:normal}
+.quiz-opt{list-style:none;margin:10px 0;padding:0}
+.quiz-opt li{margin:8px 0;border:1px solid var(--line);border-radius:10px;padding:8px 16px;font-size:15px}
+.quiz-opt li.good{background:rgba(52,211,153,.10);border-color:rgba(52,211,153,.4)}
+.pn{display:flex;justify-content:space-between;gap:14px;margin-top:28px}
+.pn a{flex:1;background:var(--panel2);border:1px solid var(--line);border-radius:10px;
+  padding:12px 16px;text-decoration:none;color:var(--text);transition:.15s}
+.pn a:hover{border-color:var(--cy)}
+.pn .dir{color:var(--dim);font-size:12px}
+.pn .ttl{color:var(--cy);font-size:14px;font-weight:700}
+.pn .next{text-align:right}
+footer{color:var(--dim);font-size:12.5px;padding:26px 0 40px;text-align:center}
+</style>
+</head>
+<body>
+<nav class="topnav"><div class="wrap">
+  <a class="brand" href="index.html">SLAM 可视化课堂</a>
+  <a href="index.html">首页</a><a href="sim.html">仿真实验室</a><a href="og.html">① 栅格建图</a><a href="bf.html">② 贝叶斯滤波</a><a href="ekf.html">③ EKF</a><a href="pf.html" class="on">④ 粒子滤波</a><a href="sm.html">⑤ 扫描匹配</a><a href="go.html">⑥ 图优化回环</a><a href="eng.html">⑦ 工程实战</a><a href="res.html">资源</a>
+</div></nav>
+<div class="wrap">
+<div class="hero"><span class="tag">第 ④ 讲 · 粒子滤波</span><h1>这一讲回答：双峰、非高斯的世界怎么定位？</h1><div class="lead"><p class="big">第②讲走廊例子的遗留问题：信念是<b class="cy">双峰</b>的（两扇门都可能），高斯表达不了。
+             第③讲 EKF 单峰破产。</p>
+             <p>粒子滤波的答案朴实到惊人：<b class="vi">别算分布了，直接养 N 个"活样本"代表它</b>。</p>
+             <p>这一讲跑通：加权 → 重采样 → 收敛的完整循环，最后看它怎么长成 Gmapping/AMCL 这两大工程支柱。</p></div></div>
+<div class="card"><h2><span class="no">0</span>核心思想：用 N 个假设代替一张概率表</h2>
+          <div class="formula">概率分布（解析）          粒子云（采样）
+bel = {0.444, 0.111,     ≈   粒子1 @格1  权重 0.8
+       0.444}                粒子2 @格3  权重 0.8
+                             粒子3 @格2  权重 0.2
+                             …（共 N 个）</div>
+          <p>三个要点：</p>
+          <li><b class="cy">粒子 = 一个完整的假设</b>："如果我真在位置 x，世界应该是这样" —— 粒子自带位姿（Gmapping 里还自带一张地图！）</li>
+          <li><b class="vi">权重 = 这个假设的可信度</b>（来自观测的似然）</li>
+          <li><b class="pk">粒子云的形状 = 信念分布的形状</b>：多峰？散开就是两个团。非高斯？随便什么形状都行</li>
+          <div class="note">和直方图滤波比：格子法在所有格子上"全面开花"，粒子法只把计算花在<b>可能的地方</b> —— 高维时省得惊人。</div></div>
+<div class="card"><h2><span class="no">1</span>算法循环：四步，永远循环</h2>
+          <div class="formula" style="font-size:16px">① <span class="hl">预测</span>   每个粒子按运动模型动一步（各自带噪声）
+② <span class="hl">加权</span>   用观测给每个粒子打分 w_i = P(z | 粒子i的位置)
+③ <span class="hl">重采样</span>  按权重抽签：高分粒子多生，低分粒子绝育（可选，按需触发）
+④ <span class="hl">估计</span>   加权平均 = 当前位置估计 → 回到 ①</div>
+          <table>
+            <tr><th>对应贝叶斯滤波</th><th>粒子版实现</th></tr>
+            <tr><td>预测（搬运）</td><td>每个粒子独立采样运动（蒙特卡洛积分）</td></tr>
+            <tr><td>更新（打折）</td><td>乘似然作权重</td></tr>
+            <tr><td>归一化</td><td>权重除以总和</td></tr>
+          </table>
+          <div class="note">重采样不是每帧必须：权重越悬殊越该抽。判断指标 Neff —— 后面专页讲。</div></div>
+<div class="card"><h2><span class="no">2</span>权重怎么算：高斯核打分</h2>
+          <p>观测 z（如"距最近门 0.45 m"），粒子预测值 ẑᵢ（"按我的位置算应该是 0.4 m"）：</p>
+          <div class="math">$$
+w_i = \exp\!\Big(-\frac{(z - \hat z_i)^2}{2\sigma^2}\Big)
+\qquad\text{（}\sigma = \text{传感器噪声标准差}\text{）}
+$$</div>
+          <div class="math">$$
+\hat z_i = z \;\text{差}\; 0 \rightarrow w = 1\;\text{（完美吻合）}
+\qquad \text{差}\;2\sigma \rightarrow w = 0.14\;\text{（边缘）}
+\qquad \text{差}\;5\sigma \rightarrow w \approx 0\;\text{（死刑）}
+$$</div>
+          <p>本质：把"预测 − 实测"的距离换算成概率。σ 是唯一的旋钮 ——
+          <b class="vi">σ 就是传感器的诚实度</b>：激光测距 σ≈0.02~0.05 m，所以粒子滤波里错 10 cm 的粒子直接判死。</p>
+          <div class="warnbox">工程坑：σ 调太小 → 所有粒子权重同时≈0（全灭）；调太大 → 好坏粒子权重一样（失去分辨力）。要和真实噪声匹配。</div></div>
+<div class="card"><h2><span class="no">3</span>重采样：轮盘赌怎么杀粒子</h2>
+          <div class="formula">权重 [0.5, 0.3, 0.15, 0.05] 归一化后做一条轮盘：
+
+  |——— 粒子1 50% ———|— 粒子2 30% —|— 3 15% —|4|
+  ↑ 转动 N 次指针，落在谁的扇区就复制谁</div>
+          <p>规则：<b class="cy">概率 = 权重</b>。期望上，权重 0.5 的粒子被复制 N×0.5 次；权重 0.05 的粒子大概率一次都轮不到 —— 直接消失。</p>
+          <li>复制体保持原位姿（可能加微小抖动 = 粗化）</li>
+          <li>重采样后所有权重重置为 1/N（"新的一代重新起跑"）</li>
+          <li><b class="wa">副作用</b>：低权重粒子里的"少数派正确答案"可能被一起杀掉 —— 多样性损失，本讲后段专治</li></div>
+<div class="card"><h2><span class="no">4</span>手算 · 5 粒子迷你版（走廊同世界）</h2>
+          <p>走廊 3 格，门在格 1、3（第②讲同款）。初始 5 个粒子：[1, 1, 2, 3, 3]，权重各 0.2。</p>
+          <table>
+            <tr><th>回合</th><th>粒子位置</th><th>权重（观测后）</th><th>重采样后</th></tr>
+            <tr><td>观测"门"</td><td>[1,1,2,3,3]</td><td>[0.235, 0.235, <b class="bad">0.059</b>, 0.235, 0.235]<br><span class="mono">η=3.4</span></td><td>[1,1,3,3,1] <span class="mono">格2 绝育</span></td></tr>
+            <tr><td>右移一格<br>(80%右/20%留)</td><td>[2,2,3,3,2]</td><td>—</td><td>—</td></tr>
+            <tr><td>观测"门"</td><td>[2,2,3,3,2]</td><td>[<b class="bad">0.091</b>, 0.091, <b class="ok">0.364</b>, 0.364, 0.091]<br><span class="mono">η=2.2</span></td><td>[3,3,3,3,2] <span class="mono">格3 胜出</span></td></tr>
+          </table>
+          <p class="big">读法：格 2 的粒子每轮都是 0.2 的误报概率 → 权重最低 → 先绝育；
+          格 1、3 双峰靠<b class="vi">运动+第二次观测</b>分胜负 —— 和第②讲的 0.745 收敛完全同源，只是这次用 5 个"活样本"表达。</p></div>
+<div class="card"><h2><span class="no">▶</span>交互实验：200 粒子从迷失到锁定</h2><div class="sub">逐步点"测距→移动→测距"，看粒子云形态</div><div class="demo" data-demo="pf"><canvas id="pfcv" width="980" height="240"></canvas>
+  <div class="ctrls">
+    <button onclick="PF.measure()">测距 + 加权重采样</button>
+    <button onclick="PF.move()">前进 0.7m</button>
+    <button class="ghost" onclick="PF.reset()">重置</button>
+    <button class="ghost" onclick="PF.auto()">自动完整序列</button>
+    <button class="ghost" onclick="PF.tTruth()" id="pfTruthBtn">显示真值</button>
+  </div>
+  <div class="readout" id="pfOut"></div></div><div class="note"><b class="cy">👀 观察任务</b><ul style="margin-top:4px"><li style="margin-left:20px"><b>初始</b>：粒子均匀撒满世界 —— "完全迷失"的样子</li><li style="margin-left:20px"><b>第一次测距</b>：大部分粒子死亡，存活簇贴在真值附近</li><li style="margin-left:20px"><b>移动+测距</b>：粒子云整体平移并继续收紧</li><li style="margin-left:20px"><b>锁定后</b>：粒子标准差不再变小 —— 这是"收敛"的信号，继续跑不会更准</li></ul></div></div>
+<div class="card"><h2><span class="no">5</span>粒子数 N 怎么选：一张 trade-off 表</h2>
+          <table>
+            <tr><th>N</th><th>CPU</th><th>表达力</th><th>典型用途</th></tr>
+            <tr><td>几十</td><td>极低</td><td>只够单峰</td><td>收敛后的<b>跟踪</b>（AMCL 后期）</td></tr>
+            <tr><td>几百~几千</td><td>低</td><td>2~3 个峰、中等噪声</td><td>室内 SLAM 常规（Gmapping 默认 30~50 粒子另算）</td></tr>
+            <tr><td>上万</td><td>中</td><td>绑架恢复、大初始不确定</td><td>AMCL 初始撒点、重定位</td></tr>
+            <tr><td>十万+</td><td>高</td><td>高维/超多峰</td><td>通常不值得 —— 该换方法了</td></tr>
+          </table>
+          <p class="big">工程共识：<b class="cy">前期多、后期少</b> —— AMCL 的 KLD 自适应采样就是干这个的（后页）。</p>
+          <p>判断粒子够不够的土办法：把 N 减半再跑一遍，结果轨迹不变 → N 够了。</p></div>
+<div class="card"><h2><span class="no">6</span>粒子退化与 Neff：什么时候该重采样</h2>
+          <div class="math">$$
+N_{\text{eff}} = \frac{1}{\sum_i w_i^2}
+$$</div>
+          <p class="muted">权重均匀 [1/N × N] → N_eff = N（健康：别重采样，白抽）；
+权重集中 [1, 0, 0, …] → N_eff = 1（退化：必须重采样）。</p>
+          <p>退化是<b class="bad">必然趋势</b>：每轮观测都会拉开权重差距，几轮后权重全堆在少数粒子上。</p>
+          <li>N_eff &lt; N/2 → 触发重采样（AMCL 默认策略）</li>
+          <li>重采样过频 → 多样性损失（下一页）；过疏 → 拿一堆死粒子做平均 → 估计有偏</li>
+          <div class="note">N_eff 就是"信念实际由几个粒子撑着"。它同时是输出质量的体检指标：
+          锁定后 N_eff 低是正常的（单峰），但<b>探索期</b> N_eff 就很低 = 粒子太少的警报。</div></div>
+<div class="card"><h2><span class="no">7</span>重采样的三种抽法 + 多样性急救</h2>
+          <table>
+            <tr><th>方法</th><th>做法</th><th>特点</th></tr>
+            <tr><td>轮盘赌</td><td>独立抽 N 次</td><td>简单；方差最大（可能重复抽中同一个）</td></tr>
+            <tr><td><b class="cy">系统采样</b> ★</td><td>一根指针 + N 个等距刻度，每刻度复制对应粒子</td><td>方差小、O(N)、工程默认</td></tr>
+            <tr><td>残差采样</td><td>整数部分直接复制，小数部分轮盘</td><td>介于两者之间</td></tr>
+          </table>
+          <div class="frag"><p class="big" style="margin-top:10px">急救多样性两招：</p>
+            <li><b class="vi">粗化 roughening</b>：重采样后给每个粒子加微小随机抖动（σ≈N^(−2/D)），把"挤成一团"重新撑开</li>
+            <li><b class="vi">随机注入</b>：每轮随机撒少量均匀粒子（如 1%），权重极低但"保底"—— 绑架恢复的种子。AMCL 的 random limit 参数</li></div></div>
+<div class="card"><h2><span class="no">8</span>从粒子到 Gmapping：每个粒子背一张地图</h2>
+          <div class="formula">纯 PF：粒子 = 位姿假设
+Gmapping：粒子 = 位姿假设 + 一张专属栅格地图    ← Rao-Blackwell 化
+
+为什么能这样：给定"我确实走了这条轨迹"，地图的更新是第①讲的确定性计算
+（log-odds 投票）—— 不需要再采样，直接算。</div>
+          <p class="big">这就是 <b class="cy">FastSLAM 的分解智慧</b>：位置用粒子硬扛（多峰），
+          地图用解析更新（便宜）。</p>
+          <li>每个粒子维护自己的轨迹 + 自己的地图 → 回环时，正确轨迹的地图自洽、权重涨；错误轨迹的地图对不上、权重跌 → 自然选择</li>
+          <li>代价：内存 × N 张地图。所以 Gmapping 默认只有 <b class="wa">30 个粒子</b>（不是几千）</li></div>
+<div class="card"><h2><span class="no">9</span>Gmapping 参数对照（第⑦讲会实操）</h2>
+          <table>
+            <tr><th>参数</th><th>默认</th><th>含义 / 对应本讲概念</th></tr>
+            <tr><td><span class="mono">particles</span></td><td>30</td><td>N 个假设（每粒子一张地图，别开大）</td></tr>
+            <tr><td><span class="mono">srr / srt</span></td><td>0.01</td><td>平移/旋转耦合的里程计噪声 —— 预测步的 Q</td></tr>
+            <tr><td><span class="mono">stt</span></td><td>0.01</td><td>纯旋转噪声</td></tr>
+            <tr><td><span class="mono">sigma_hit</span></td><td>0.147</td><td>似然打分的高斯 σ —— 权重页的 σ</td></tr>
+            <tr><td><span class="mono">lstep / astep</span></td><td>10</td><td>粗到细搜索步 —— 第⑤讲的评分搜索</td></tr>
+            <tr><td><span class="mono">map_update_interval</span></td><td>5 s</td><td>/map 发布频率（不是内部更新频率）</td></tr>
+          </table>
+          <div class="warnbox">新手通病：把 particles 调到 300 想"更准" → 内存与 CPU 爆炸，精度几乎不变。
+          精度瓶颈通常在 <span class="mono">sigma_hit</span> 与里程计噪声模型，不在粒子数。</div></div>
+<div class="card"><h2><span class="no">10</span>粒子滤波什么时候会失败</h2>
+          <li>❌ <b class="bad">绑架问题（kidnapped robot）</b>：机器人被抱到完全陌生的位置 ——
+          所有粒子都错、权重全 0、没有假设幸存。对策：随机注入（前页）+ 权重和过低时全局重撒</li>
+          <li>❌ <b class="bad">粒子饥饿</b>：真值恰好在某粒子附近，但它在上一轮被绝育 —— 1000 个粒子也救不了。
+          对策：粗化 + 注入；根本解是增加粒子或降低重采样频率</li>
+          <li>❌ <b class="bad">高维状态</b>：状态 6 维（AMCL 只有 3 维）时，覆盖同样密度需要指数级粒子 —— 换 EKF/UKF 或图优化</li>
+          <li>❌ <b class="bad">动态场景误锁</b>：一走廊的人把所有粒子的观测都对成"人墙" —— 需要鲁棒似然（截断高斯）</li></div>
+<div class="card"><h2><span class="no">11</span>AMCL：粒子滤波在定位岗位上的工程形态</h2>
+          <p>地图建好后，PF 换个岗位：<b class="cy">已知地图上定位</b>（蒙特卡洛定位 MCL）。粒子不再背地图，只背位姿 —— 轻多了。</p>
+          <table>
+            <tr><th>AMCL 的工程改进</th><th>解决什么</th></tr>
+            <tr><td>KLD 自适应采样</td><td>信念散（迷失）时自动加粒子，收敛后自动减 —— CPU 花在刀刃上</td></tr>
+            <tr><td>随机粒子注入 (random limit)</td><td>绑架恢复的种子</td></tr>
+            <tr><td>odom alpha 5 参数</td><td>运动模型噪声（第②讲那个 20% 的精细化版）</td></tr>
+            <tr><td>laser z_hit / z_rand</td><td>观测模型："真命中" 与 "随机噪声" 的混合比例</td></tr>
+          </table>
+          <div class="note">nav2 默认定位栈 = <span class="mono">map_server + amcl</span>。
+          AMCL 崩掉的三大常见原因（初始位姿没给、odom 噪声 alpha 乱设、地图分辨率不匹配）—— 第⑦讲排障表见。</div></div>
+<div class="card"><h2><span class="no">✎</span>测验</h2><p class="big" style="font-size:16.5px">重采样后，某个"少数派但正确"的粒子簇权重被杀光。这属于粒子滤波的什么失败模式？</p><ul class="quiz-opt" style="max-width:900px"><li class=""><b class="muted">A.</b> 绑架问题</li><li class="good"><b class="ok">B.</b> 粒子饥饿 / 多样性损失</li><li class=""><b class="muted">C.</b> 数值下溢</li><li class=""><b class="muted">D.</b> 过度自信</li></ul><details><summary>看答案与解析</summary><div class="note">✅ 正确答案：<b class="ok">B. 粒子饥饿 / 多样性损失</b><br>重采样是自然选择，会牺牲少数派。真值若恰在少数派中，后续观测再也救不回来（没有假设了）。粗化+注入是对策。</div></details></div>
+<div class="card"><h2><span class="no">✎</span>测验</h2><p class="big" style="font-size:16.5px">Gmapping 默认只有 30 个粒子，为什么不敢开几百个？</p><ul class="quiz-opt" style="max-width:900px"><li class=""><b class="muted">A.</b> 粒子太多数值不稳定</li><li class="good"><b class="ok">B.</b> 每个粒子携带一张完整栅格地图，内存与更新开销 × N</li><li class=""><b class="muted">C.</b> 粒子多会互相干扰</li><li class=""><b class="muted">D.</b> ROS 消息大小限制</li></ul><details><summary>看答案与解析</summary><div class="note">✅ 正确答案：<b class="ok">B. 每个粒子携带一张完整栅格地图，内存与更新开销 × N</b><br>Gmapping 粒子=位姿+地图（Rao-Blackwell 化的代价）。AMCL 粒子只装位姿，所以敢开几千。</div></details></div>
+<div class="card"><h2><span class="no">12</span>一页总结：粒子滤波</h2><div class="formula" style="font-size:16px">N 个带权假设 = 信念分布的采样表达
+循环：预测（各自动）→ 加权（似然）→ 重采样（按权重抽签）→ 估计（加权平均）
+体检：N_eff = 1/Σwᵢ²      触发重采样 + 质量报警
+衍生：Gmapping（粒子+地图 → 建图）、AMCL（粒子+已知地图 → 定位）</div>
+          <p class="big">带走三句话：<b class="cy">粒子云=信念的形状</b> · <b class="vi">重采样=自然选择（会饿死少数派）</b> · <b class="pk">N 不是精度旋钮</b></p>
+          <div class="note">下一讲：粒子之间毕竟还是"独立假设"。两帧激光怎么直接对齐出精确位姿？—— 扫描匹配，评分函数登场。</div></div>
+<div class="pn"><a href="ekf.html"><div class="dir">← 上一篇</div><div class="ttl">③ EKF-SLAM</div></a><a class="next" href="sm.html"><div class="dir">下一篇 →</div><div class="ttl">⑤ 扫描匹配</div></a></div>
+</div>
+<footer>nav2 教学实验室 · SLAM 可视化课堂 · 由 slides/build.py 生成（编辑 slides/c_*.py 后重新运行）</footer>
+<script>window.__demos = {};
+__demos['sim'] = function(){
+
+const SIM=(()=>{
+  const cv=document.getElementById('simcv'), ctx=cv.getContext('2d');
+  const RES=0.05, GW=136, GH=136;
+  const GOX=-3.4, GOY=-3.4;
+  const MAXR=6.0, NRAYS=120;
+  let world=null, running=false, speed=3, frame=0;
+  let rob=null, deadTrail=[], corrTrail=[], keyframes=0, corrections=0, corrSum=0;
+  let grid=null, showRays=true, showTruth=true, showGrid=true;
+  function makeWorld(seed){
+    const w={segs:[],circs:[]};
+    const R=3.0, pts=[];
+    for(let i=0;i<6;i++){ const a=i*Math.PI/3; pts.push([R*Math.cos(a),R*Math.sin(a)]); }
+    for(let i=0;i<6;i++) w.segs.push({a:pts[i],b:pts[(i+1)%6]});
+    const rs=(s=>()=> (s=(s*1664525+1013904223)%4294967296)/4294967296)(seed||12345);
+    for(let ix=-1;ix<=1;ix++) for(let iy=-1;iy<=1;iy++){
+      w.circs.push({x:ix*1.1+(rs()-.5)*.06, y:iy*1.1+(rs()-.5)*.06, r:0.15});
+    }
+    return w;
+  }
+  function rayCircle(ox,oy,dx,dy,c){
+    const fx=ox-c.x, fy=oy-c.y;
+    const b=fx*dx+fy*dy, cc=fx*fx+fy*fy-c.r*c.r;
+    const disc=b*b-cc; if(disc<0) return Infinity;
+    const t=-b-Math.sqrt(disc); return t>0.01?t:Infinity;
+  }
+  function raySeg(ox,oy,dx,dy,s){
+    const ax=s.a[0],ay=s.a[1],bx=s.b[0],by=s.b[1];
+    const ex=bx-ax,ey=by-ay;
+    const den=dx*ey-dy*ex; if(Math.abs(den)<1e-12) return Infinity;
+    const t=((ax-ox)*ey-(ay-oy)*ex)/den;
+    const u=((ax-ox)*dy-(ay-oy)*dx)/den;
+    if(t>0.01 && u>=0 && u<=1) return t;
+    return Infinity;
+  }
+  function castRay(ox,oy,ang,maxr){
+    const dx=Math.cos(ang), dy=Math.sin(ang); let t=maxr;
+    for(const s of world.segs){ const tt=raySeg(ox,oy,dx,dy,s); if(tt<t)t=tt; }
+    for(const c of world.circs){ const tt=rayCircle(ox,oy,dx,dy,c); if(tt<t)t=tt; }
+    return t;
+  }
+  function collides(x,y){
+    const RR=0.11;
+    for(const c of world.circs) if(Math.hypot(x-c.x,y-c.y)<c.r+RR) return true;
+    for(const s of world.segs){
+      const ax=s.a[0],ay=s.a[1],bx=s.b[0],by=s.b[1];
+      const ex=bx-ax,ey=by-ay,L2=ex*ex+ey*ey;
+      let t=((x-ax)*ex+(y-ay)*ey)/L2; t=Math.max(0,Math.min(1,t));
+      if(Math.hypot(x-(ax+t*ex),y-(ay+t*ey))<RR) return true;
+    }
+    return false;
+  }
+  function cellIdx(x,y){
+    const c=Math.floor((x-GOX)/RES), r=Math.floor((y-GOY)/RES);
+    return (c>=0&&c<GW&&r>=0&&r<GH)?{c,r}:null;
+  }
+  function gridAdd(x,y,val){
+    const ci=cellIdx(x,y); if(!ci) return;
+    const i=ci.r*GW+ci.c;
+    grid.l[i]=Math.max(-4,Math.min(4,grid.l[i]+val));
+  }
+  function insertScan(pose,rays){
+    const [x,y,th]=pose;
+    for(const [ang,r] of rays){
+      const rr=Math.min(r,MAXR-0.05);
+      const steps=Math.floor(rr/RES);
+      for(let s=0;s<steps;s++){
+        const d=(s+0.5)*RES;
+        gridAdd(x+Math.cos(th+ang)*d, y+Math.sin(th+ang)*d, -0.4);
+      }
+      gridAdd(x+Math.cos(th+ang)*rr, y+Math.sin(th+ang)*rr, +1.2);
+    }
+  }
+  function reset(){
+    world=makeWorld(Math.floor(Math.random()*1e6));
+    grid={l:new Float32Array(GW*GH)};
+    rob={x:-2.0,y:-0.5,th:0, dx:-2.0,dy:-0.5,dth:0,
+         lastKF:0, state:'DRIVE', turnRem:0, stuckT:performance.now(),
+         backUntil:0, winPos:[-2.0,-0.5], winT:performance.now(), stuck:0, turnT0:0};
+    deadTrail=[]; corrTrail=[]; keyframes=0; corrections=0; corrSum=0; frame=0;
+    const rays=scanRays(rob);
+    insertScan([rob.x,rob.y,rob.th],rays);
+    corrTrail.push([rob.x,rob.y]); deadTrail.push([rob.dx,rob.dy]);
+  }
+  function scanRays(r){
+    const rays=[];
+    for(let i=0;i<NRAYS;i++){
+      const ang=-Math.PI + i*(2*Math.PI/NRAYS);
+      const noisy=1+(Math.sin(frame*13+i*7)*0.004);
+      rays.push([ang, castRay(r.x,r.y,r.th+ang,MAXR)*noisy]);
+    }
+    return rays;
+  }
+  function matchCorrect(rays,drPose){
+    let best=null;
+    for(let ddx=-0.15;ddx<=0.151;ddx+=0.075)
+    for(let ddy=-0.15;ddy<=0.151;ddy+=0.075)
+    for(let dt=-0.15;dt<=0.151;dt+=0.075){
+      const px=drPose[0]+ddx, py=drPose[1]+ddy, pt=drPose[2]+dt;
+      let sc=0;
+      for(let i=0;i<rays.length;i+=4){
+        const ang=rays[i][0], r=rays[i][1];
+        const ci=cellIdx(px+Math.cos(pt+ang)*r, py+Math.sin(pt+ang)*r);
+        if(ci) sc+=grid.l[ci.r*GW+ci.c];
+      }
+      if(!best || sc>best.sc) best={sc,x:px,y:py,th:pt};
+    }
+    return best;
+  }
+  function step(dt){
+    const r=rob;
+    let v=0.22, om=0;
+    const rays=scanRays(r);
+    let front=Infinity, left=Infinity, right=Infinity, bestAng=0, bestR=0;
+    rays.forEach(p=>{
+      const deg=p[0]*180/Math.PI, rr=p[1];
+      if(rr>bestR){ bestR=rr; bestAng=p[0]; }
+      if(Math.abs(deg)<32) front=Math.min(front,rr);
+      else if(deg>=35&&deg<95) left=Math.min(left,rr);
+      else if(deg<=-35&&deg>-95) right=Math.min(right,rr);
+    });
+    const now=performance.now();
+    const moved=Math.hypot(r.x-r.winPos[0], r.y-r.winPos[1]);
+    if(now-r.winT>3000){
+      if(moved<0.25){ r.stuck=(r.stuck||0)+1;
+        if(r.stuck>=2){ r.backUntil=now+800; r.stuck=0; } }
+      else r.stuck=0;
+      r.winPos=[r.x,r.y]; r.winT=now;
+    }
+    const stuck = moved<0.15 && now-r.winT>2500;
+    if(r.state==='DRIVE'){
+      if(stuck || (front<0.38 && r.lastKF>0)){
+        const dir = bestR>0.8 ? Math.sign(bestAng||1) : (left<=right? -1 : 1);
+        r.turnRem = dir*((70+Math.random()*70)*Math.PI/180);
+        r.state='TURN'; r.turnT0=now;
+      } else { v=Math.min(0.22, Math.max(0.05,(front-0.25))); }
+    }
+    if(r.state==='TURN'){
+      if(now<(r.backUntil||0)) v=-0.15;
+      const stepRot=Math.min(0.9*dt, Math.abs(r.turnRem));
+      om=Math.sign(r.turnRem)*stepRot/dt;
+      r.turnRem-=Math.sign(r.turnRem)*stepRot;
+      if(Math.abs(r.turnRem)<0.03 && now>(r.backUntil||0)){
+        r.state='DRIVE'; r.winPos=[r.x,r.y]; r.winT=now;
+      }
+      if(now-r.turnT0>4000){ r.turnRem=0; r.state='DRIVE'; r.winPos=[r.x,r.y]; r.winT=now; }
+    }
+    const nx=r.x+v*Math.cos(r.th)*dt, ny=r.y+v*Math.sin(r.th)*dt;
+    if(!collides(nx,ny)){ r.x=nx; r.y=ny; }
+    r.th+=om*dt;
+    const drift=1+Math.sin(frame*0.7)*0.006;
+    r.dx+=v*Math.cos(r.dth)*dt*drift;
+    r.dy+=v*Math.sin(r.dth)*dt*drift;
+    r.dth+=om*dt;
+    if(r.state==='DRIVE') r.lastKF+=v*dt;
+    if(r.lastKF>=1.5 || (r.state==='TURN'&&r.lastKF>0.8)){
+      keyframes++;
+      const best=matchCorrect(rays,[r.dx,r.dy,r.dth]);
+      if(best){
+        const err=Math.hypot(best.x-r.dx,best.y-r.dy);
+        corrSum+=err; corrections++;
+        r.dx=best.x; r.dy=best.y; r.dth=best.th;
+        r.lastKF=0;
+        insertScan([r.x,r.y,r.th],rays);
+      }
+    } else { insertScan([r.x,r.y,r.th],rays); }
+    deadTrail.push([r.dx,r.dy]); if(deadTrail.length>3000) deadTrail=deadTrail.filter((_,i)=>i%2===0);
+    corrTrail.push([r.x,r.y]);   if(corrTrail.length>3000) corrTrail=corrTrail.filter((_,i)=>i%2===0);
+    frame++;
+  }
+  function draw(){
+    ctx.clearRect(0,0,cv.width,cv.height);
+    const scale=Math.min(cv.width,cv.height)/(RES*GW);
+    const mx=(cv.width-RES*GW*scale)/2;
+    const my=(cv.height-RES*GH*scale)/2;
+    const x2px=v=>mx+(v-GOX)*scale;
+    const y2px=v=>my+(v-GOY)*scale;
+    if(showGrid){
+      const off=document.createElement('canvas'); off.width=GW; off.height=GH;
+      const octx=off.getContext('2d'), img=octx.createImageData(GW,GH);
+      for(let i=0;i<GW*GH;i++){
+        const p=1/(1+Math.exp(-grid.l[i]));
+        let R,G,B;
+        if(p<0.35){ R=126;G=142;B=172; }
+        else if(p<0.65){ R=17;G=22;B=36; }
+        else { R=251;G=113;B=133; }
+        img.data[i*4]=R; img.data[i*4+1]=G; img.data[i*4+2]=B; img.data[i*4+3]=230;
+      }
+      octx.putImageData(img,0,0);
+      ctx.imageSmoothingEnabled=false;
+      ctx.drawImage(off, x2px(GOX), y2px(GOY), RES*GW*scale, RES*GH*scale);
+      ctx.imageSmoothingEnabled=true;
+    }
+    ctx.strokeStyle='rgba(255,107,129,0.55)'; ctx.lineWidth=2;
+    for(const s of world.segs){ ctx.beginPath();
+      ctx.moveTo(x2px(s.a[0]),y2px(s.a[1])); ctx.lineTo(x2px(s.b[0]),y2px(s.b[1])); ctx.stroke(); }
+    for(const c of world.circs){ ctx.beginPath();
+      ctx.arc(x2px(c.x),y2px(c.y),c.r*scale,0,7); ctx.stroke(); }
+    ctx.lineWidth=1;
+    if(showTruth){ ctx.strokeStyle='rgba(52,211,153,0.95)'; ctx.lineWidth=2; ctx.beginPath();
+      corrTrail.forEach(([x,y],i)=>{ const px=x2px(x),py=y2px(y); i?ctx.lineTo(px,py):ctx.moveTo(px,py); });
+      ctx.stroke(); ctx.lineWidth=1; }
+    ctx.strokeStyle='rgba(244,114,182,0.85)'; ctx.lineWidth=1.5; ctx.setLineDash([4,3]);
+    ctx.beginPath(); deadTrail.forEach(([x,y],i)=>{ const px=x2px(x),py=y2px(y); i?ctx.lineTo(px,py):ctx.moveTo(px,py); });
+    ctx.stroke(); ctx.setLineDash([]); ctx.lineWidth=1;
+    if(showRays){
+      const rays=scanRays(rob);
+      ctx.strokeStyle='rgba(251,191,36,0.25)';
+      rays.forEach(p=>{ ctx.beginPath();
+        ctx.moveTo(x2px(rob.x),y2px(rob.y));
+        ctx.lineTo(x2px(rob.x+p[1]*Math.cos(rob.th+p[0])), y2px(rob.y+p[1]*Math.sin(rob.th+p[0])));
+        ctx.stroke(); });
+    }
+    const rx=x2px(rob.x), ry=y2px(rob.y);
+    ctx.save(); ctx.translate(rx,ry); ctx.rotate(rob.th);
+    ctx.fillStyle='#22d3ee'; ctx.beginPath();
+    ctx.moveTo(10,0); ctx.lineTo(-7,6); ctx.lineTo(-7,-6); ctx.closePath(); ctx.fill();
+    ctx.restore();
+    ctx.fillStyle='#f472b6'; ctx.beginPath();
+    ctx.arc(x2px(rob.dx),y2px(rob.dy),4,0,7); ctx.fill();
+    ctx.font='12px sans-serif'; ctx.textAlign='left';
+    const ly=cv.height-46;
+    ctx.fillStyle='#22d3ee'; ctx.fillText('▲ 机器人(真值)', 20, ly);
+    ctx.fillStyle='#f472b6'; ctx.fillText('● 航位推算(漂移)', 150, ly);
+    ctx.fillStyle='#34d399'; ctx.fillText('── 纠偏后轨迹', 310, ly);
+    ctx.fillStyle='#fbbf24'; ctx.fillText('── 激光射线', 440, ly);
+    ctx.fillStyle='#fb7185'; ctx.fillText('■ 占据(墙/柱)', 560, ly);
+    ctx.fillStyle='#7e8eac'; ctx.fillText('▢ 自由', 675, ly);
+    ctx.fillStyle='#546079'; ctx.fillText('▨ 未知/遮挡阴影', 745, ly);
+    const stat=document.getElementById('simOut');
+    const avg=corrections?(corrSum/corrections).toFixed(3):'—';
+    const dr=Math.hypot(rob.dx-rob.x,rob.dy-rob.y).toFixed(3);
+    let covered=0; for(let i=0;i<grid.l.length;i++) if(Math.abs(grid.l[i])>0.3) covered++;
+    stat.textContent=
+`时间帧 ${frame}   关键帧 ${keyframes}   扫描匹配纠偏 ${corrections} 次（平均修正 ${avg} m）
+当前航位推算漂移 ${dr} m —— 粉虚线与绿线的分叉-汇合 = 漂移与纠偏的循环
+已覆盖栅格 ${covered} / ${GW*GH}`;
+  }
+  setInterval(function tick(){
+    if(!running) return;
+    for(let i=0;i<speed;i++) step(0.05);
+    draw();
+  }, 50);
+  return {
+    toggle(){ running=!running;
+      document.getElementById('simPlay').textContent=running?'⏸ 暂停':'▶ 继续探索';
+      if(running) draw(); },
+    toggleRays(){ showRays=!showRays; draw(); },
+    toggleTruth(){ showTruth=!showTruth; draw(); },
+    toggleGrid(){ showGrid=!showGrid; draw(); },
+    newWorld(){ reset(); draw(); },
+    reset(){ reset(); draw(); },
+    ensure(){ if(!world){ reset(); } draw(); },
+    draw(){ draw(); }
+  };
+})();
+SIM.ensure();
+
+try { window.SIM = SIM; } catch(e) {}
+};
+
+__demos['og'] = function(){
+
+const OG=(()=>{
+  const cv=document.getElementById('ogcv'), ctx=cv.getContext('2d');
+  const N=12, ROBOT=2, BEAM=6;
+  let l=new Array(N).fill(0), pocc=0.7, count=0, lastEnd=null;
+  function pOf(i){ return 1/(1+Math.exp(-l[i])); }
+  function draw(){
+    ctx.clearRect(0,0,cv.width,cv.height);
+    const pad=46, w=(cv.width-2*pad)/N, y0=64, h=52;
+    for(let i=0;i<N;i++){
+      const p=pOf(i), x=pad+i*w;
+      ctx.fillStyle = p<0.35?`rgba(79,163,255,${0.25+0.5*(p/0.35)})`
+                    : p<0.65?`rgba(100,110,140,0.5)`
+                    : `rgba(255,107,129,${0.4+0.6*((p-0.65)/0.35)})`;
+      ctx.fillRect(x+2,y0,w-4,h);
+      ctx.strokeStyle='#2a3550'; ctx.strokeRect(x+2,y0,w-4,h);
+      ctx.fillStyle='#dbe4f5'; ctx.font='11px monospace'; ctx.textAlign='center';
+      ctx.fillText(p.toFixed(2), x+w/2, y0+h+16);
+      ctx.fillText('l='+l[i].toFixed(2), x+w/2, y0+h+32);
+      if(i===ROBOT){ ctx.fillStyle='#3ddc84'; ctx.beginPath();
+        ctx.arc(x+w/2,y0-14,7,0,7); ctx.fill();
+        ctx.fillText('机器人', x+w/2, y0-30); }
+    }
+    if(lastEnd!==null){
+      const xr=pad+ROBOT*w+w/2, xe=pad+lastEnd*w+w/2;
+      ctx.strokeStyle='rgba(251,191,36,0.9)'; ctx.setLineDash([6,4]); ctx.lineWidth=2;
+      ctx.beginPath(); ctx.moveTo(xr,y0+h/2); ctx.lineTo(xe,y0+h/2); ctx.stroke();
+      ctx.setLineDash([]); ctx.lineWidth=1;
+      ctx.fillStyle='#ffb454'; ctx.beginPath(); ctx.arc(xe,y0+h/2,6,0,7); ctx.fill();
+    }
+    ctx.fillStyle='#8b98b8'; ctx.font='12px sans-serif'; ctx.textAlign='left';
+    ctx.fillText('12 格 1D 世界 · 格色 = 占据概率（蓝=自由 灰=未知 红=占据）', pad, 24);
+  }
+  function beam(noise){
+    count++;
+    const end = noise? ROBOT+3 : ROBOT+BEAM;
+    const name= noise? '噪声假回波（束端=格5）' : '正常回波（束端=格8）';
+    const lo=Math.log(pocc/(1-pocc)), lf=Math.log((1-pocc)/pocc);
+    const rows=[];
+    for(let c=0;c<N;c++){
+      if(c===end){ l[c]+=lo; rows.push(`格${c}: l=${l[c].toFixed(3)} p=${pOf(c).toFixed(3)} 【束端→占据】`); }
+      else if(c>ROBOT&&c<end){ l[c]+=lf; rows.push(`格${c}: l=${l[c].toFixed(3)} p=${pOf(c).toFixed(3)} 【束中→自由】`); }
+    }
+    lastEnd=end;
+    draw();
+    document.getElementById('ogOut').textContent=
+      `第 ${count} 束（${name}）\n`+rows.join('\n')
+      +`\n墙格8 当前: l=${l[8].toFixed(3)} → p=${pOf(8).toFixed(3)}`
+      +`\n噪声对冲演示：格5 若先累积 2 次自由（l=-1.694），一次误占（+0.847）→ 回到 -0.847（p=0.30）`;
+  }
+  function reset(){ l=new Array(N).fill(0); count=0; lastEnd=null; draw();
+    document.getElementById('ogOut').textContent='已重置（全部 l=0, p=0.5）'; }
+  reset();
+  return { beam, reset };
+})();
+
+try { window.OG = OG; } catch(e) {}
+};
+
+__demos['bf'] = function(){
+
+const BF=(()=>{
+  const cv=document.getElementById('bfcv'), ctx=cv.getContext('2d');
+  const doors=[true,false,true];
+  let bel=[1/3,1/3,1/3], step=0, msg='';
+  const P_MOVE=0.8,P_STAY=0.2,PDD=0.8,PDN=0.2;
+  function draw(){
+    ctx.clearRect(0,0,cv.width,cv.height);
+    const w=200,gap=120,x0=(cv.width-3*w-2*gap)/2,y0=56,h=70;
+    ctx.font='13px sans-serif';
+    for(let i=0;i<3;i++){
+      const x=x0+i*(w+gap);
+      ctx.fillStyle='#1e2740'; ctx.fillRect(x,y0,w,h);
+      ctx.strokeStyle='#2a3550'; ctx.strokeRect(x,y0,w,h);
+      if(doors[i]){ ctx.fillStyle='#ffb454'; ctx.font='22px sans-serif'; ctx.textAlign='center';
+        ctx.fillText('⌂',x+w/2,y0+34); ctx.font='11px sans-serif'; ctx.fillText('门',x+w/2,y0+52); }
+      ctx.fillStyle='#dbe4f5'; ctx.font='13px sans-serif';
+      ctx.fillText(`格子 ${i+1}`,x+w/2,y0-10);
+      const bh=bel[i]*130;
+      ctx.fillStyle='rgba(79,163,255,0.85)'; ctx.fillRect(x+20,y0+h+10+(130-bh),w-40,bh);
+      ctx.strokeStyle='#2a3550'; ctx.strokeRect(x+20,y0+h+10,w-40,130);
+      ctx.fillStyle='#4fa3ff'; ctx.font='13px monospace';
+      ctx.fillText((bel[i]*100).toFixed(1)+'%',x+w/2,y0+h+10+130+18);
+    }
+    ctx.fillStyle='#8b98b8'; ctx.textAlign='left';
+    ctx.fillText('信念条 = 机器人对各格子的置信度',x0,24);
+    if(msg){ ctx.fillStyle='#ffb454'; ctx.font='14px sans-serif'; ctx.fillText(msg,x0,42); }
+  }
+  function show(m){ msg=m; draw();
+    document.getElementById('bfOut').textContent=m+'\n当前信念: ['
+      +bel.map(b=>(b*100).toFixed(1)+'%').join(', ')+']'; }
+  return {
+    measure(){ step++;
+      const unn=bel.map((b,i)=>b*(doors[i]?PDD:PDN));
+      const eta=unn.reduce((a,b)=>a+b,0); bel=unn.map(u=>u/eta);
+      show(`第${step}步 观测（报门）——未归一化 [${unn.map(u=>u.toFixed(3)).join(', ')}], η=${eta.toFixed(3)}`); },
+    move(){ step++;
+      const pred=[0,0,0];
+      bel.forEach((b,i)=>{ const d=Math.min(i+1,2); pred[d]+=b*P_MOVE; pred[i]+=b*P_STAY; });
+      bel=pred; show(`第${step}步 预测（右移一格：80%成功/20%打滑；格3右墙=原地）`); },
+    reset(){ bel=[1/3,1/3,1/3]; step=0; show('重置（均匀先验：完全不知道在哪）'); },
+    auto(){ this.reset();
+      [()=>this.measure(),()=>this.move(),()=>this.measure()].forEach((f,i)=>setTimeout(f,800*(i+1))); },
+    draw(){ draw(); }
+  };
+})();
+BF.reset();
+
+try { window.BF = BF; } catch(e) {}
+};
+
+__demos['ekf'] = function(){
+
+const EKF=(()=>{
+  const cv=document.getElementById('ekfcv'), ctx=cv.getContext('2d');
+  const sm=document.getElementById('ekm'), sr=document.getElementById('ekr');
+  function calc(){
+    const Q=+sm.value, R=+sr.value, X0=1.0, U=1.0, LM=3.0, Z=1.2;
+    let x=[X0,LM], S=[[1.5,0],[0,0.5]];
+    x=[x[0]+U, LM]; S=[[1.5+Q,0],[0,0.5]];
+    const H=[-1,1];
+    const innov=Z-(H[0]*x[0]+H[1]*x[1]);
+    const Sh=H[0]*H[0]*S[0][0]+H[0]*H[1]*S[0][1]+H[1]*H[0]*S[1][0]+H[1]*H[1]*S[1][1]+R;
+    const K0=(S[0][0]*H[0]+S[0][1]*H[1])/Sh, K1=(S[1][0]*H[0]+S[1][1]*H[1])/Sh;
+    x=[x[0]+K0*innov, x[1]+K1*innov];
+    const KH=[[K0*H[0],K0*H[1]],[K1*H[0],K1*H[1]]];
+    const S2=[[0,0],[0,0]];
+    for(let i=0;i<2;i++) for(let j=0;j<2;j++){
+      let v=0; for(let k=0;k<2;k++) v+=((i===k?1:0)-KH[i][k])*S[k][j]; S2[i][j]=v;
+    }
+    return {x,S:S2,K:[K0,K1],innov,Sh,Sp:[[1.5+Q,0],[0,0.5]],pr:1.5+Q};
+  }
+  function draw(){
+    const c=calc();
+    ctx.clearRect(0,0,cv.width,cv.height);
+    const x2px=v=>90+v*160, y0=90;
+    ctx.strokeStyle='#2a3550'; ctx.beginPath(); ctx.moveTo(70,y0); ctx.lineTo(cv.width-70,y0); ctx.stroke();
+    ctx.fillStyle='#8b98b8'; ctx.font='12px sans-serif'; ctx.textAlign='center';
+    for(let v=0;v<=5;v++) ctx.fillText(v+'m',x2px(v),y0+20);
+    const bw=Math.sqrt(c.Sp[0][0])*2*160;
+    ctx.fillStyle='rgba(79,163,255,0.16)'; ctx.fillRect(x2px(2.0)-bw,y0-16,bw*2,32);
+    ctx.fillStyle='#4fa3ff'; ctx.beginPath(); ctx.arc(x2px(2.0),y0,9,0,7); ctx.fill();
+    ctx.fillText('预测 x̄=2.0',x2px(2.0),y0-26);
+    ctx.fillStyle='#34d399'; ctx.beginPath(); ctx.arc(x2px(c.x[0]),y0,9,0,7); ctx.fill();
+    ctx.fillText('更新 x='+c.x[0].toFixed(3),x2px(c.x[0]),y0+42);
+    ctx.fillStyle='#fbbf24'; ctx.beginPath(); ctx.arc(x2px(3.0),y0,9,0,7); ctx.fill();
+    ctx.fillText('路标 3.0 → '+c.x[1].toFixed(3),x2px(3.0),y0-26);
+    ctx.strokeStyle='rgba(52,211,153,0.6)'; ctx.setLineDash([5,4]);
+    ctx.beginPath(); ctx.moveTo(x2px(c.x[0]),y0); ctx.lineTo(x2px(3.0),y0); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle='#34d399'; ctx.fillText('观测 z=1.2（残差 '+c.innov.toFixed(2)+'）',
+      (x2px(c.x[0])+x2px(3.0))/2,y0+60);
+    document.getElementById('ekfOut').textContent=
+`预测后 Σ̄ = [[${c.Sp[0][0].toFixed(2)}, 0], [0, 0.5]]     残差 = ${c.innov.toFixed(2)}
+S = H·Σ̄·Hᵀ + R = ${c.Sh.toFixed(3)}     K = [${c.K[0].toFixed(3)}, ${c.K[1].toFixed(3)}]
+更新后 x = [${c.x[0].toFixed(3)}, ${c.x[1].toFixed(3)}]
+Σ' = [[${c.S[0][0].toFixed(3)}, ${c.S[0][1].toFixed(3)}], [${c.S[1][0].toFixed(3)}, ${c.S[1][1].toFixed(3)}]]
+机器人方差 ${c.pr.toFixed(2)} → ${c.S[0][0].toFixed(3)}   交叉协方差 ${c.S[0][1].toFixed(3)} ≠ 0（关联诞生）`;
+  }
+  return { draw, reset(){ sm.value=0.5; sr.value=0.25;
+    document.getElementById('ekmV').textContent='0.50';
+    document.getElementById('ekrV').textContent='0.25'; draw(); } };
+})();
+['ekm','ekr'].forEach(id=>document.getElementById(id).addEventListener('input',e=>{
+  document.getElementById(id+'V').textContent=(+e.target.value).toFixed(2); }));
+EKF.draw();
+
+try { window.EKF = EKF; } catch(e) {}
+};
+
+__demos['pf'] = function(){
+
+const PF=(()=>{
+  const cv=document.getElementById('pfcv'), ctx=cv.getContext('2d');
+  const DOORS=[1.0,3.3], WORLD=7;
+  let particles=[], trueX=2.15, showT=false, seed=42;
+  function rng(){ seed=(seed*1664525+1013904223)%4294967296; return seed/4294967296; }
+  function nearest(x){ return Math.min(Math.abs(x-DOORS[0]),Math.abs(x-DOORS[1])); }
+  function reset(){ particles=[]; trueX=2.15; seed=42;
+    for(let i=0;i<200;i++) particles.push(rng()*WORLD); draw(); }
+  function measure(){
+    const z=nearest(trueX)+(rng()-0.5)*0.1;
+    const w=particles.map(p=>Math.exp(-((nearest(p)-z)**2)/(2*0.05**2)));
+    const sum=w.reduce((a,b)=>a+b,0);
+    const acc=[]; let c=0;
+    w.forEach(ww=>{c+=ww;acc.push(c);});
+    particles=particles.map(()=>{ const r=rng()*c; let j=0;
+      while(j<acc.length-1&&acc[j]<r)j++; return particles[j]; })
+      .map(p=>p+(rng()-0.5)*0.02);
+    draw();
+  }
+  function move(){ trueX+=0.7+(rng()-0.5)*0.06;
+    particles=particles.map(p=>p+0.7+(rng()-0.5)*0.06); draw(); }
+  function draw(){
+    ctx.clearRect(0,0,cv.width,cv.height);
+    const x2px=v=>50+v*(cv.width-100)/WORLD;
+    const bins=70,h0=90,hh=54;
+    const hist=new Array(bins).fill(0);
+    particles.forEach(p=>{ const b=Math.min(bins-1,Math.floor(p/WORLD*bins)); hist[b]++; });
+    const mx=Math.max(...hist,1);
+    for(let b=0;b<bins;b++){
+      const t=hist[b]/mx;
+      ctx.fillStyle=t>0?`rgba(79,163,255,${0.25+0.75*t})`:'rgba(20,26,40,0.5)';
+      const bx=x2px(b/bins*WORLD), bw=(cv.width-100)/bins;
+      ctx.fillRect(bx,h0+hh*(1-t),bw-1,hh*t);
+    }
+    ctx.strokeStyle='#2a3550'; ctx.strokeRect(x2px(0),h0,cv.width-100,hh);
+    ctx.fillStyle='#8b98b8'; ctx.font='12px sans-serif'; ctx.textAlign='left';
+    ctx.fillText('粒子分布直方图（上）· 世界 [0,7m] 与两扇门（下）',50,24);
+    const w0=170,wh=34;
+    ctx.strokeStyle='#2a3550'; ctx.beginPath(); ctx.moveTo(x2px(0),w0); ctx.lineTo(x2px(WORLD),w0); ctx.stroke();
+    DOORS.forEach(d=>{ ctx.fillStyle='#ffb454'; ctx.fillRect(x2px(d)-3,w0-wh,6,wh);
+      ctx.fillText('门 '+d.toFixed(1),x2px(d)-22,w0-wh-8); });
+    particles.forEach(p=>{ ctx.fillStyle='rgba(79,163,255,0.8)';
+      ctx.fillRect(x2px(p)-1,w0-3,2,6); });
+    if(showT){ ctx.fillStyle='#ff6b81'; ctx.beginPath();
+      ctx.moveTo(x2px(trueX),w0-6); ctx.lineTo(x2px(trueX)-6,w0-18); ctx.lineTo(x2px(trueX)+6,w0-18);
+      ctx.closePath(); ctx.fill(); ctx.fillText('真值',x2px(trueX)-14,w0-24); }
+    const mean=particles.reduce((a,b)=>a+b,0)/particles.length;
+    const sd=Math.sqrt(particles.reduce((a,b)=>a+(b-mean)**2,0)/particles.length);
+    ctx.fillStyle='#34d399'; ctx.fillText(`粒子均值 ${mean.toFixed(2)}  标准差 ${sd.toFixed(3)}（置信度）`,50,150);
+    document.getElementById('pfOut').textContent=
+      `粒子数 ${particles.length}  均值 ${mean.toFixed(3)}  标准差 ${sd.toFixed(3)}`
+      +(showT?`  真值 ${trueX.toFixed(2)}  误差 ${Math.abs(mean-trueX).toFixed(3)}`:'')
+      +`\n标准差大 = 迷失（多峰存活）   标准差小 = 锁定`;
+  }
+  return {
+    measure(){ showT=true; measure(); },
+    move(){ move(); },
+    reset(){ reset(); },
+    auto(){ reset(); showT=true;
+      [()=>measure(),()=>move(),()=>measure(),()=>move(),()=>measure()]
+        .forEach((f,i)=>setTimeout(f,850*(i+1))); },
+    tTruth(){ showT=!showT; draw(); },
+    draw(){ draw(); }
+  };
+})();
+PF.reset();
+
+try { window.PF = PF; } catch(e) {}
+};
+
+__demos['sm'] = function(){
+
+const SM=(()=>{
+  const cv=document.getElementById('smcv'), ctx=cv.getContext('2d');
+  const wall=new Set(['3,1','3,2','3,3']);
+  const S=[[2,1],[2,2],[2,3]];
+  const xs=document.getElementById('smx'), ls=document.getElementById('sml');
+  function draw(){
+    const dx=+xs.value, lam=+ls.value;
+    document.getElementById('smxV').textContent=dx.toFixed(2);
+    document.getElementById('smlV').textContent=lam.toFixed(1);
+    ctx.clearRect(0,0,cv.width,cv.height);
+    const cell=64, ox=(cv.width-5*cell)/2-40, oy=40;
+    for(let r=0;r<5;r++) for(let c=0;c<5;c++){
+      const x=ox+c*cell,y=oy+r*cell;
+      const isWall=wall.has(`${c},${r}`);
+      ctx.fillStyle=isWall?'#7a2a35':'#141b2c';
+      ctx.fillRect(x,y,cell-2,cell-2);
+      ctx.strokeStyle='#2a3550'; ctx.strokeRect(x,y,cell-2,cell-2);
+      if(isWall){ ctx.fillStyle='#ff6b81'; ctx.font='11px sans-serif'; ctx.textAlign='center';
+        ctx.fillText('墙10',x+cell/2-1,y+cell/2+4); }
+    }
+    let match=0; const det=[];
+    S.forEach(([sx,sy],i)=>{
+      const cx=Math.round(sx+dx), cy=sy;
+      const c=wall.has(`${cx},${cy}`)?10:0; match+=c;
+      const x=ox+(sx+dx)*cell+cell/2, y=oy+sy*cell+cell/2;
+      ctx.fillStyle='#34d399'; ctx.beginPath(); ctx.arc(x,y,7,0,7); ctx.fill();
+      ctx.fillStyle='#34d399'; ctx.fillText('S'+(i+1),x,y-12);
+      det.push(`S${i+1}→(${cx},${cy})=${c}`);
+    });
+    ctx.fillStyle='#8b98b8'; ctx.textAlign='left';
+    ctx.fillText('绿点 = 平移后的激光投影（栅格化）',ox,oy-10);
+    const pen=lam*((dx-0.1)**2);
+    document.getElementById('smOut').textContent=
+      `偏移 dx=${dx.toFixed(2)}  匹配代价 ${match}（${det.join('  ')}）`
+      +`\n里程计罚 ${pen.toFixed(2)}（λ=${lam.toFixed(1)}）  总分 ${((match+pen)).toFixed(2)}（越低越好）`
+      +`\n对照：dx=0 最优 0.02   dx=−1 → ${(lam*1.21).toFixed(2)}   dx=+1 撞墙 30+罚=${(30+lam*0.81).toFixed(2)}`;
+  }
+  return { draw };
+})();
+SM.draw();
+
+try { window.SM = SM; } catch(e) {}
+};
+
+__demos['go'] = function(){
+
+const GO=(()=>{
+  const cv=document.getElementById('gocv'), ctx=cv.getContext('2d');
+  const gol=document.getElementById('gol'), goo=document.getElementById('goo');
+  function draw(){
+    const sl=+gol.value, so=+goo.value;
+    document.getElementById('golV').textContent=sl.toFixed(2);
+    document.getElementById('gooV').textContent=so.toFixed(2);
+    const k=so*so/(sl*sl);
+    const A=[[2,-1],[-1,1+k]], b=[0,1+1.8*k];
+    const det=A[0][0]*A[1][1]-A[0][1]*A[1][0];
+    const x2=(b[0]*A[1][1]-A[0][1]*b[1])/det;
+    const x3=(A[0][0]*b[1]-b[0]*A[1][0])/det;
+    ctx.clearRect(0,0,cv.width,cv.height);
+    const x2px=v=>90+v*(cv.width-160)/4.5, y0=110;
+    ctx.strokeStyle='#2a3550'; ctx.beginPath(); ctx.moveTo(70,y0); ctx.lineTo(cv.width-70,y0); ctx.stroke();
+    ctx.fillStyle='#8b98b8'; ctx.font='12px sans-serif'; ctx.textAlign='center';
+    for(let v=0;v<=4;v++) ctx.fillText(v+'m',x2px(v),y0+22);
+    ctx.strokeStyle='rgba(139,152,184,0.5)'; ctx.setLineDash([5,5]);
+    ctx.beginPath(); ctx.arc(x2px(2.0),y0,12,0,7); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillText('里程计漂移位 2.0',x2px(2.0),y0-44);
+    function spring(a,b,tension){
+      ctx.strokeStyle=`rgba(79,163,255,${0.3+0.7*tension})`;
+      ctx.lineWidth=1+3*tension;
+      const x1=x2px(a),x2=x2px(b),n=8,amp=8*(1-tension);
+      ctx.beginPath(); ctx.moveTo(x1,y0);
+      for(let i=1;i<n;i++){ const t=i/n; ctx.lineTo(x1+(x2-x1)*t,y0+((i%2)?amp:-amp)); }
+      ctx.lineTo(x2,y0); ctx.stroke(); ctx.lineWidth=1;
+    }
+    spring(0,x2,Math.min(1,1/so/10));
+    spring(x2,x3,Math.min(1,1/so/10));
+    spring(0,x3,Math.min(1,1/sl/5));
+    function node(v,rad,color,label,above){
+      ctx.fillStyle=color; ctx.beginPath(); ctx.arc(x2px(v),y0,rad,0,7); ctx.fill();
+      ctx.strokeStyle='#0b101c'; ctx.stroke();
+      ctx.fillText(label+'='+v.toFixed(3),x2px(v),y0+(above?-30:26));
+    }
+    node(0,8,'#e6edf8','x1=0（锚定）',true);
+    node(x2,6+Math.sqrt(so)*10,'#60a5fa','x2',false);
+    node(x3,6+Math.sqrt(sl)*10,'#34d399','x3',true);
+    ctx.fillStyle='#8b98b8'; ctx.textAlign='left';
+    ctx.fillText('圆=位姿节点（大小∝σ）  线=约束弹簧（粗细∝权重1/σ²）  灰虚圈=漂移位',50,30);
+    document.getElementById('goOut').textContent=
+      `σ_loop=${sl.toFixed(2)}  σ_odo=${so.toFixed(2)}  k=σ_odo²/σ_loop²=${k.toFixed(3)}`
+      +`\n全局解：x2=${x2.toFixed(4)}  x3=${x3.toFixed(4)}`
+      +`\n对照：里程计漂移说 x3=2.0，回环说 x3=1.8 → 全局解偏向可信者`
+      +`\nσ_loop=0.2 / σ_odo=0.1（doc 21 §7.2 手算）：x2=0.9667, x3=1.9333`;
+  }
+  return { draw, reset(){ gol.value=0.2; goo.value=0.1; draw(); } };
+})();
+['gol','goo'].forEach(id=>document.getElementById(id).addEventListener('input',e=>{
+  document.getElementById(id+'V').textContent=(+e.target.value).toFixed(2); }));
+GO.draw();
+
+try { window.GO = GO; } catch(e) {}
+};
+// 启动本页用到的演示
+try { __demos['pf'](); } catch(e) { console.error('demo pf error:', e); }
+</script>
+</body>
+</html>
