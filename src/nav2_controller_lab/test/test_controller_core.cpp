@@ -456,6 +456,23 @@ TEST(MpcCore, RejectsAllCollidingTrajectories)
   EXPECT_FALSE(result.valid);
 }
 
+TEST(MpcCore, ExposesSelectedModelPredictionAndClearsInvalidHistory)
+{
+  MpcCore core;
+  const Pose2D robot{0, 0, 0};
+  const auto result = core.compute(robot, makeStraightPath(3.0),
+    [](double, double) -> uint8_t {return 0;}, 0);
+  ASSERT_TRUE(result.valid);
+  const auto & predicted = core.predictedTrajectory();
+  ASSERT_EQ(predicted.size(), static_cast<size_t>(core.params().horizon_steps + 1));
+  EXPECT_DOUBLE_EQ(predicted.front().x, 0);
+  EXPECT_NEAR(predicted[1].x, result.control.linear * core.params().dt, 1e-12);
+  EXPECT_NEAR(predicted[1].yaw, result.control.angular * core.params().dt, 1e-12);
+  EXPECT_FALSE(core.compute(robot, makeStraightPath(3.0),
+    [](double, double) -> uint8_t {return 254;}, 0).valid);
+  EXPECT_TRUE(core.predictedTrajectory().empty());
+}
+
 TEST(MpcCore, AlignsBeforeFollowingPathWhenFacingBackwards)
 {
   MpcCore core;

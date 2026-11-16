@@ -28,6 +28,7 @@
 #include "geometry_msgs/msg/twist_stamped.hpp"
 #include "tf2_ros/buffer.h"
 
+#include "diagnostic_msgs/msg/diagnostic_array.hpp"
 #include "nav2_controller_lab/controller_types.hpp"
 
 namespace nav2_controller_lab
@@ -58,6 +59,16 @@ public:
   void setSpeedLimit(const double & speed_limit, const bool & percentage) override;
 
 protected:
+  virtual geometry_msgs::msg::TwistStamped computeVelocityCommandsImpl(
+    const geometry_msgs::msg::PoseStamped & pose,
+    const geometry_msgs::msg::Twist & velocity, nav2_core::GoalChecker * goal_checker);
+  void publishDiagnostics(
+    const std::string & stage, const std::string & detail, double compute_ms,
+    const geometry_msgs::msg::TwistStamped * command);
+  rclcpp_lifecycle::LifecyclePublisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr diagnostics_pub_;
+  std::string control_stage_{"waiting"};
+  double goal_error_m_{-1.0};
+  double goal_yaw_error_rad_{-1.0};
   /**
    * @brief 读取本控制器自己的参数
    *

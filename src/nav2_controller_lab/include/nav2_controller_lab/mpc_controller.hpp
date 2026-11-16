@@ -18,8 +18,10 @@ class MpcController : public ControllerBase
 public:
   MpcController() = default;
   ~MpcController() override = default;
+  void activate() override;
+  void deactivate() override;
 
-  geometry_msgs::msg::TwistStamped computeVelocityCommands(
+  geometry_msgs::msg::TwistStamped computeVelocityCommandsImpl(
     const geometry_msgs::msg::PoseStamped & pose,
     const geometry_msgs::msg::Twist & velocity, nav2_core::GoalChecker * checker) override
   {
@@ -29,8 +31,15 @@ public:
     const Pose2D robot{pose.pose.position.x, pose.pose.position.y,
       std::atan2(2.0 * (q.w * q.z + q.x * q.y),
       1.0 - 2.0 * (q.y * q.y + q.z * q.z))};
+    if (!path.empty()) {
+      goal_error_m_ = distance(robot, path.back());
+      goal_yaw_error_rad_ = std::abs(normalizeAngle(path_terminal_yaw_ - robot.yaw));
+    }
     // Nav2 checks Euclidean goal distance, not remaining polyline arc length.
     if (!path.empty() && distance(robot, path.back()) <= goal_tolerance_) {
+      control_stage_ = "terminal_rotation";
+      core_.reset();
+      publishPrediction();
       const auto command = rotateInPlace(robot, path_terminal_yaw_, terminal_angular_velocity_);
       geometry_msgs::msg::TwistStamped output;
       output.header.frame_id = base_frame_;
@@ -38,7 +47,7 @@ public:
       output.twist.angular.z = command.angular;
       return output;
     }
-    return ControllerBase::computeVelocityCommands(pose, velocity, checker);
+    return ControllerBase::computeVelocityCommandsImpl(pose, velocity, checker);
   }
 
 protected:
@@ -59,6 +68,8 @@ protected:
   double maxLinearVelocity() const override {return params_.max_linear_velocity;}
 
 private:
+  void publishPrediction();
+  rclcpp_lifecycle::LifecyclePublisher<nav_msgs::msg::Path>::SharedPtr prediction_pub_;
   double current_angular_{0.0};
   MpcCore core_;
   MpcParams params_;

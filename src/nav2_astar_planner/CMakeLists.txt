@@ -68,6 +68,11 @@ install(DIRECTORY params launch rviz
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
+  ament_add_gtest(test_planner_contract test/test_planner_contract.cpp)
+  target_link_libraries(test_planner_contract ${library_name})
+  ament_target_dependencies(test_planner_contract ${dependencies})
+  set_tests_properties(test_planner_contract PROPERTIES TIMEOUT 60
+    ENVIRONMENT "ROS_DOMAIN_ID=96")
 
   ament_add_gtest(test_astar_algorithm
     test/test_astar_algorithm.cpp

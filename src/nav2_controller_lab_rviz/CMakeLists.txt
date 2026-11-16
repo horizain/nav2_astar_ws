@@ -11,6 +11,9 @@ find_package(rclcpp REQUIRED)
 find_package(rviz_common REQUIRED)
 find_package(Qt5 REQUIRED COMPONENTS Core Gui Widgets)
 find_package(std_msgs REQUIRED)
+find_package(diagnostic_msgs REQUIRED)
+find_package(action_msgs REQUIRED)
+find_package(std_srvs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(visualization_msgs REQUIRED)
@@ -33,6 +36,10 @@ target_include_directories(controller_lab_panel PUBLIC
 ament_target_dependencies(controller_lab_panel
   rclcpp
   rviz_common
+  diagnostic_msgs
+  action_msgs
+  std_srvs
+  nav_msgs
   std_msgs
   geometry_msgs
   Qt5
@@ -76,6 +83,10 @@ ament_export_libraries(controller_lab_panel)
 ament_export_dependencies(
   rclcpp
   rviz_common
+  diagnostic_msgs
+  action_msgs
+  std_srvs
+  nav_msgs
   std_msgs
   geometry_msgs
   nav_msgs

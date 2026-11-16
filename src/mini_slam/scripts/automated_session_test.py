@@ -6,6 +6,9 @@ process groups, publishes motion only in the selected ROS domain / Gazebo
 partition, and leaves its uniquely named map and logs in --output-dir.
 """
 import argparse
+import json
+import sys
+import hashlib
 import math
 import os
 from pathlib import Path
@@ -19,9 +22,10 @@ import uuid
 
 import rclpy
 from action_msgs.srv import CancelGoal
+from diagnostic_msgs.msg import DiagnosticArray
 from geometry_msgs.msg import PoseWithCovarianceStamped, Twist
 from nav2_msgs.action import ComputePathToPose, NavigateToPose
-from nav_msgs.msg import OccupancyGrid, Odometry
+from nav_msgs.msg import OccupancyGrid, Odometry, Path as NavPath
 from rcl_interfaces.srv import GetParameters, SetParameters
 from rclpy.action import ActionClient
 from rclpy.node import Node
@@ -31,6 +35,11 @@ from sensor_msgs.msg import LaserScan
 from std_srvs.srv import Trigger
 from std_msgs.msg import String
 from tf2_ros import Buffer, TransformListener
+
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "docs/tools"))
+from navigation_metrics import write_report
+from owned_gui import close_gazebo_gui
 
 
 class Acceptance(Node):
@@ -43,7 +52,17 @@ class Acceptance(Node):
         self.scan = self.odom = self.mapping = self.static = self.display = None
         self.map_seq = 0
         self.static_events = []
+        self.control_events = []
+        self.events = []
+        self.goal_serial = 0
+        self.current_goal_id = None
+        self.prediction_samples = 0
+        self.requested_controller = "FollowPath"
+        self.last_pose_stamp = None
         self.subs = [
+            self.create_subscription(
+                DiagnosticArray, "/controller_lab/controller_diagnostics",
+                self.control_diagnostics_cb, 100),
             self.create_subscription(LaserScan, "/scan", self.scan_cb, sensor),
             self.create_subscription(Odometry, "/odom", self.odom_cb, 10),
             self.create_subscription(OccupancyGrid, "/mini/map", self.map_cb, transient),
@@ -53,12 +72,94 @@ class Acceptance(Node):
                            reliability=ReliabilityPolicy.RELIABLE)),
             self.create_subscription(OccupancyGrid, "/mini/display_map", self.display_cb, transient),
         ]
+        self.subs.append(self.create_subscription(
+            NavPath, "/plan", self.plan_cb, 10))
+        self.subs.append(self.create_subscription(
+            NavPath, "/controller_lab/predicted_trajectory", self.prediction_cb, 100))
+        for topic in ("cmd_vel_nav", "cmd_vel_smoothed", "cmd_vel_cbf", "cmd_vel"):
+            self.subs.append(self.create_subscription(
+                Twist, "/" + topic, lambda msg, name=topic: self.command_cb(msg, name), 100))
+        self.pose_timer = self.create_timer(0.05, self.sample_pose)
         self.velocity = self.create_publisher(Twist, "/cmd_vel", 10)
         self.initial = self.create_publisher(PoseWithCovarianceStamped, "/initialpose", 10)
         self.tf = Buffer()
         self.listener = TransformListener(self.tf, self)
         self.planner = ActionClient(self, ComputePathToPose, "/compute_path_to_pose")
         self.navigator = ActionClient(self, NavigateToPose, "/navigate_to_pose")
+
+    def sim_time(self):
+        return self.get_clock().now().nanoseconds * 1e-9
+
+    def sample_pose(self):
+        try:
+            transform = self.tf.lookup_transform("map", "base_link", rclpy.time.Time())
+        except Exception:
+            return
+        stamp = transform.header.stamp.sec + transform.header.stamp.nanosec * 1e-9
+        if stamp == self.last_pose_stamp:
+            return
+        self.last_pose_stamp = stamp
+        p, q = transform.transform.translation, transform.transform.rotation
+        self.events.append(dict(kind="pose", t=stamp, frame_id="map", x=p.x, y=p.y,
+                                yaw=math.atan2(2*(q.w*q.z+q.x*q.y), 1-2*(q.y*q.y+q.z*q.z))))
+
+    def plan_cb(self, msg):
+        self.events.append(dict(
+            kind="path", t=msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9,
+            frame_id=msg.header.frame_id,
+            points=[[p.pose.position.x, p.pose.position.y] for p in msg.poses]))
+
+    def prediction_cb(self, msg):
+        if len(msg.poses) > 1:
+            self.prediction_samples += 1
+        points = [[p.pose.position.x, p.pose.position.y] for p in msg.poses]
+        frame = msg.header.frame_id
+        transform_source = "not_transformed"
+        if points:
+            try:
+                transform = self.tf.lookup_transform(
+                    "map", frame, rclpy.time.Time())
+                q, origin = transform.transform.rotation, transform.transform.translation
+                yaw = math.atan2(2*(q.w*q.z+q.x*q.y), 1-2*(q.y*q.y+q.z*q.z))
+                points = [[origin.x+math.cos(yaw)*x-math.sin(yaw)*y,
+                           origin.y+math.sin(yaw)*x+math.cos(yaw)*y] for x, y in points]
+                frame, transform_source = "map", "latest_tf_at_prediction_receipt"
+            except Exception:
+                pass  # Preserve the original frame explicitly; never relabel untransformed points.
+        self.events.append(dict(
+            kind="prediction", t=msg.header.stamp.sec+msg.header.stamp.nanosec*1e-9,
+            frame_id=frame, source_frame_id=msg.header.frame_id,
+            transform_source=transform_source, source="MPC_selected_sequence", points=points))
+
+    def command_cb(self, msg, topic):
+        self.events.append(dict(kind="command", t=self.sim_time(), topic=topic,
+                                v=msg.linear.x, w=msg.angular.z))
+
+    def start_navigation(self, request, purpose="reach_goal"):
+        self.goal_serial += 1
+        self.current_goal_id = str(self.goal_serial)
+        p, q = request.pose.pose.position, request.pose.pose.orientation
+        self.events.append(dict(
+            kind="goal", t=self.sim_time(), goal_id=self.current_goal_id,
+            frame_id=request.pose.header.frame_id, controller=self.requested_controller, purpose=purpose,
+            x=p.x, y=p.y,
+            yaw=math.atan2(2*(q.w*q.z+q.x*q.y), 1-2*(q.y*q.y+q.z*q.z))))
+        return self.navigator.send_goal_async(request)
+
+    def control_diagnostics_cb(self, msg):
+        for status in msg.status:
+            if not status.name.startswith("controller_lab/"):
+                continue
+            event = {item.key: item.value for item in status.values}
+            event.update(level=(int.from_bytes(status.level, "little")
+                                if isinstance(status.level, bytes) else int(status.level)),
+                         detail=status.message,
+                         sim_time=msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9)
+            self.control_events.append(event)
+            self.events.append(dict(
+                kind="diagnostic", t=event["sim_time"], controller=event.get("controller"),
+                stage=event.get("stage"), compute_ms=float(event["compute_ms"]),
+                detail=event["detail"]))
 
     def scan_cb(self, msg):
         self.scan = msg
@@ -163,7 +264,13 @@ class Acceptance(Node):
         rclpy.spin_until_future_complete(self, future, timeout_sec=timeout)
         if not future.done() or future.exception():
             raise RuntimeError("Action request timed out")
-        return future.result()
+        result = future.result()
+        if hasattr(result, "status") and isinstance(getattr(result, "result", None), NavigateToPose.Result):
+            names = {4: "succeeded", 5: "canceled", 6: "aborted"}
+            self.events.append(dict(kind="result", t=self.sim_time(),
+                                    goal_id=self.current_goal_id,
+                                    status=names.get(result.status, "unknown")))
+        return result
 
     def cancel(self, name):
         client = self.create_client(CancelGoal, name)
@@ -246,14 +353,23 @@ class ConsoleSession:
         raise RuntimeError(f"Console did not print {text}: {self.output[start:]}")
 
     def close(self):
-        if self.process.poll() is None:
-            try:
-                self.send("q")
-                self.process.wait(timeout=8)
-            except (OSError, subprocess.TimeoutExpired):
-                os.killpg(self.process.pid, signal.SIGTERM)
-                self.process.wait(timeout=8)
-        os.close(self.master)
+        try:
+            if self.process.poll() is None:
+                try:
+                    self.send("q")
+                    self.process.wait(timeout=8)
+                except (OSError, subprocess.TimeoutExpired):
+                    try:
+                        os.killpg(self.process.pid, signal.SIGTERM)
+                    except ProcessLookupError:
+                        pass
+                    try:
+                        self.process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        os.killpg(self.process.pid, signal.SIGKILL)
+                        self.process.wait(timeout=5)
+        finally:
+            os.close(self.master)
 
 
 def main():
@@ -264,6 +380,8 @@ def main():
     parser.add_argument("--controller", default="FollowPath",
                         choices=["FollowPath", "PID", "Stanley", "DWB", "MPPI", "MPC"])
     parser.add_argument("--extended-navigation", action="store_true")
+    parser.add_argument("--ground-truth", action="store_true",
+                        help="independent Gazebo model world pose, not wheel odometry")
     args = parser.parse_args()
     if not 0 <= args.domain <= 232:
         parser.error("domain must be in [0, 232]")
@@ -282,26 +400,69 @@ def main():
             "/opt/ros/jazzy/share/nav2_minimal_tb3_sim/models:/opt/ros/jazzy/share",
     })
     os.environ.update(env)
+    from ament_index_python.packages import get_package_prefix
     launch = root / "src/mini_slam/ros/launch/mini_slam_simulation.launch.py"
     params = root / "src/mini_slam/ros/mini_slam_nav2_params.yaml"
     commands = [
         ["ros2", "launch", str(launch), "headless:=False", "use_rviz:=False",
          "use_visualizer:=False", "use_composition:=False", f"params_file:={params}"],
-        ["ros2", "run", "mini_slam", "mini_slam_node", "--ros-args",
+        [str(Path(get_package_prefix("mini_slam")) / "lib/mini_slam/mini_slam_node"), "--ros-args",
          "-p", "use_sim_time:=true", "-r", "/map:=/mini/map"],
     ]
+    if args.ground_truth:
+        from ament_index_python.packages import get_package_share_directory
+        robot = Path(get_package_share_directory("nav2_minimal_tb3_sim")) / "urdf/gz_waffle.sdf.xacro"
+        model = robot.read_text()
+        plugin = """
+        <plugin filename="gz-sim-odometry-publisher-system"
+                name="gz::sim::systems::OdometryPublisher">
+          <odom_frame>world</odom_frame>
+          <robot_base_frame>base_footprint</robot_base_frame>
+          <odom_topic>/teaching/ground_truth</odom_topic>
+          <odom_publish_frequency>20</odom_publish_frequency>
+          <dimensions>2</dimensions><gaussian_noise>0</gaussian_noise>
+          <tf_topic>/teaching/ground_truth_tf_unused</tf_topic>
+        </plugin>
+        """
+        if model.count("</model>") != 1:
+            raise RuntimeError("Unexpected robot model structure for truth plugin")
+        truth_robot = out / "robot_truth.sdf.xacro"
+        truth_robot.write_text(model.replace("</model>", plugin + "</model>"))
+        commands[0].append(f"robot_sdf:={truth_robot}")
+        commands.append([str(Path(get_package_prefix("ros_gz_bridge")) / "lib/ros_gz_bridge/parameter_bridge"),
+                         "/teaching/ground_truth@nav_msgs/msg/Odometry[gz.msgs.Odometry",
+                         "--ros-args", "-p", "use_sim_time:=true"])
     processes = []
     node = None
     console = None
     log = (out / "session.log").open("w")
     print(f"Artifacts: {out}", flush=True)
+    acceptance_success = False
+    cleanup_errors = []
     try:
-        for command in commands:
-            processes.append(subprocess.Popen(command, env=env, stdout=log,
-                                              stderr=subprocess.STDOUT,
-                                              start_new_session=True))
+        for index, command in enumerate(commands):
+            destination = log if index == 0 else (out / ("slam.log" if index == 1 else "truth_bridge.log")).open("w")
+            try:
+                processes.append(subprocess.Popen(command, env=env, stdout=destination,
+                                                  stderr=subprocess.STDOUT, start_new_session=True))
+            finally:
+                if destination is not log:
+                    destination.close()
         rclpy.init()
         node = Acceptance()
+        node.requested_controller = args.controller
+        if args.ground_truth:
+            def truth_callback(message):
+                p, q = message.pose.pose.position, message.pose.pose.orientation
+                node.events.append(dict(
+                    kind="truth",
+                    t=message.header.stamp.sec + message.header.stamp.nanosec * 1e-9,
+                    frame_id=message.header.frame_id,
+                    source="gazebo_model_world_pose",
+                    x=p.x, y=p.y,
+                    yaw=math.atan2(2*(q.w*q.z+q.x*q.y), 1-2*(q.y*q.y+q.z*q.z))))
+            node.subs.append(node.create_subscription(
+                Odometry, "/teaching/ground_truth", truth_callback, 100))
         selector = node.create_publisher(
             String, "/controller_selector",
             QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL,
@@ -311,6 +472,9 @@ def main():
         node.wait_for(lambda: node.scan is not None and node.odom is not None
                       and node.mapping is not None and node.map_pose() is not None,
                       100, "mapping scan, odom, map and TF", processes)
+        if args.ground_truth:
+            node.wait_for(lambda: any(e["kind"] == "truth" for e in node.events),
+                          20, "independent Gazebo world pose", processes)
         print("Mapping data ready", flush=True)
         moved = node.move_forward(3.0)
         print(f"Manual mapping motion: {moved:.3f} m", flush=True)
@@ -320,7 +484,7 @@ def main():
         node.wait_for(lambda: node.map_seq > previous, 20, "fresh map")
         before = node.map_pose()
         console = ConsoleSession(env, root)
-        console.wait(node, "Q quit", 20)
+        console.wait(node, "Console ready", 20)
         console.send("3")
         console.wait(node, "Map name")
         console.send(str(prefix) + chr(10))
@@ -390,7 +554,7 @@ def main():
         req.pose.pose.orientation.w = math.cos(yaw / 2)
         start = node.odom.pose.pose.position
         sx, sy = start.x, start.y
-        handle = node.action_result(node.navigator.send_goal_async(req), 15)
+        handle = node.action_result(node.start_navigation(req), 15)
         if not handle.accepted:
             raise RuntimeError("Navigation goal rejected")
         result = node.action_result(handle.get_result_async(), 100)
@@ -411,7 +575,7 @@ def main():
                 req.pose.pose.orientation.z = math.sin(yaw / 2)
                 req.pose.pose.orientation.w = math.cos(yaw / 2)
                 begin = node.map_pose()
-                handle = node.action_result(node.navigator.send_goal_async(req), 15)
+                handle = node.action_result(node.start_navigation(req), 15)
                 if not handle.accepted:
                     raise RuntimeError("Extended navigation rejected")
                 result = node.action_result(handle.get_result_async(), 100)
@@ -421,6 +585,10 @@ def main():
                       f"status {result.status}; displacement {travel:.3f} m", flush=True)
                 if result.status != 4 or travel < 0.8:
                     raise RuntimeError("Extended turning navigation failed")
+
+        node.wait_for(
+            lambda: any(event.get("controller") == args.controller for event in node.control_events),
+            10, "actual selected controller diagnostics")
 
         # 定位模式加载损坏图失败时，仍须恢复上一张导航地图和图路径。
         expected_grid = node.static
@@ -476,7 +644,7 @@ def main():
         req.pose.pose.orientation.w = math.cos(yaw / 2)
         start = node.odom.pose.pose.position
         sx, sy = start.x, start.y
-        handle = node.action_result(node.navigator.send_goal_async(req), 15)
+        handle = node.action_result(node.start_navigation(req), 15)
         if not handle.accepted:
             raise RuntimeError("Navigation goal after reload was rejected")
         result = node.action_result(handle.get_result_async(), 100)
@@ -500,7 +668,7 @@ def main():
         req.pose.pose.orientation.w = math.cos(yaw / 2)
         start = node.odom.pose.pose.position
         sx, sy = start.x, start.y
-        moving_goal = node.action_result(node.navigator.send_goal_async(req), 15)
+        moving_goal = node.action_result(node.start_navigation(req, purpose="cancel_test"), 15)
         if not moving_goal.accepted:
             raise RuntimeError("Navigation goal for cancellation was rejected")
         node.wait_for(
@@ -557,34 +725,83 @@ def main():
         for ext in (".mmpg", ".yaml", ".pgm"):
             if not Path(str(continued) + ext).is_file():
                 raise RuntimeError("Resumed mapping snapshot is incomplete")
-        print("PASS mapping -> localization -> navigation -> graph reload -> "
-              "navigation -> resumed mapping and snapshot", flush=True)
+        events = [e for e in node.control_events if e.get("controller") == args.controller]
+        timings = sorted(float(e["compute_ms"]) for e in events)
+        if not timings:
+            raise RuntimeError("No actual controller timing samples")
+        if args.controller == "MPC" and node.prediction_samples == 0:
+            raise RuntimeError("No selected MPC prediction observed")
+        print(f"Selected MPC predictions observed: {node.prediction_samples}", flush=True)
+        print(f"Actual controller {args.controller}: {len(events)} calls; "
+              f"max computation {max(timings):.3f} ms", flush=True)
+        acceptance_success = True
     finally:
-        if console is not None:
+        primary_failure = sys.exc_info()[0] is not None
+        # Artifact failures must never prevent cancellation and owned-process cleanup.
+        def cleanup_step(label, function):
             try:
-                console.close()
-            finally:
-                (out / "console.log").write_text(console.output)
+                function()
+            except Exception as exc:
+                cleanup_errors.append(f"{label}: {exc}")
+                print(f"Cleanup {label}: {exc}", flush=True)
+
+        if console is not None:
+            cleanup_step("console", console.close)
+            cleanup_step("console log", lambda: (out / "console.log").write_text(console.output))
         if node is not None:
+            cleanup_step("raw experiment events", lambda: (out / "events.jsonl").write_text(
+                "".join(json.dumps(e, ensure_ascii=False, allow_nan=False) + "\n"
+                        for e in node.events)))
+            cleanup_step("experiment report", lambda: write_report(
+                node.events, out / "metrics",
+                metadata=dict(
+                    scenario="adaptive_session_acceptance",
+                    controller_requested=args.controller,
+                    extended_navigation=args.extended_navigation,
+                    comparison_warning="adaptive goals; not a fixed-course controller ranking",
+                    params_sha256=hashlib.sha256(params.read_bytes()).hexdigest(),
+                    truth_source="gazebo_model_world_pose" if args.ground_truth else None,
+                    alignment_source="known_spawn_world(-2,-0.5,0)_to_initial_map_origin"
+                    if args.ground_truth else None),
+                alignment=(2.0, 0.5, 0.0) if args.ground_truth else None))
+            cleanup_step("diagnostic log", lambda: (out / "controller_diagnostics.json").write_text(
+                json.dumps(node.control_events, ensure_ascii=False, indent=2)))
             for name in ("/navigate_to_pose/_action/cancel_goal",
                          "/follow_path/_action/cancel_goal"):
-                try:
-                    node.cancel(name)
-                except Exception as exc:
-                    print(f"Cancel {name}: {exc}", flush=True)
-            node.stop()
-            node.destroy_node()
+                cleanup_step(name, lambda service=name: node.cancel(service))
+            cleanup_step("stop", node.stop)
+            cleanup_step("node", node.destroy_node)
             if rclpy.ok():
-                rclpy.shutdown()
-        for proc in processes:
-            if proc.poll() is None:
-                os.killpg(proc.pid, signal.SIGTERM)
-        for proc in processes:
+                cleanup_step("rclpy", rclpy.shutdown)
+        cleanup_step("owned Gazebo GUI close", lambda: close_gazebo_gui(env["GZ_PARTITION"]))
+        for child in processes:
+            if child.poll() is None:
+                cleanup_step(f"interrupt {child.pid}", lambda process=child:
+                        process.send_signal(signal.SIGINT))
+        for child in processes:
             try:
-                proc.wait(timeout=20)
+                child.wait(timeout=25)
             except subprocess.TimeoutExpired:
-                print(f"Child {proc.pid} did not exit; inspect manually", flush=True)
+                cleanup_errors.append(f"forced cleanup required for {child.pid}")
+                cleanup_step(f"terminate owned {child.pid}", lambda process=child:
+                        os.killpg(process.pid, signal.SIGTERM))
+                try:
+                    child.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    cleanup_step(f"kill owned {child.pid}", lambda process=child:
+                            os.killpg(process.pid, signal.SIGKILL))
+                    cleanup_step(f"reap {child.pid}", lambda process=child: process.wait(timeout=5))
+            if child.returncode not in (0, -signal.SIGINT, -signal.SIGTERM, 130, 143):
+                cleanup_errors.append(f"abnormal process exit {child.pid}: {child.returncode}")
+        cleanup_step("process exits", lambda: (out / "process_exits.json").write_text(
+            json.dumps([dict(command=command, returncode=child.returncode)
+                        for command, child in zip(commands, processes)], indent=2)))
         log.close()
+        if cleanup_errors and not primary_failure:
+            raise RuntimeError("Cleanup/report incomplete: " + "; ".join(cleanup_errors))
+    if acceptance_success:
+        print("PASS mapping -> localization -> navigation -> graph reload -> "
+              "navigation -> resumed mapping and snapshot", flush=True)
 
 
 if __name__ == "__main__":

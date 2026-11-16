@@ -12,6 +12,8 @@
 #define NAV2_CONTROLLER_LAB_RVIZ__CONTROLLER_LAB_PANEL_HPP_
 
 #include <atomic>
+#include <chrono>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -24,6 +26,10 @@
 #include "rviz_common/panel.hpp"
 
 #include "geometry_msgs/msg/twist.hpp"
+#include "diagnostic_msgs/msg/diagnostic_array.hpp"
+#include "action_msgs/msg/goal_status_array.hpp"
+#include "nav_msgs/msg/odometry.hpp"
+#include "std_srvs/srv/trigger.hpp"
 #include "std_msgs/msg/bool.hpp"
 #include "std_msgs/msg/string.hpp"
 
@@ -76,6 +82,26 @@ private:
   std::atomic<double> linear_velocity_{0.0};
   std::atomic<double> angular_velocity_{0.0};
 
+  struct VelocitySample {
+    double v{0.0}, w{0.0};
+    std::chrono::steady_clock::time_point received{};
+  };
+  std::vector<rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr> chain_subs_;
+  rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
+  rclcpp::Subscription<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr diagnostics_sub_;
+  rclcpp::Subscription<action_msgs::msg::GoalStatusArray>::SharedPtr action_sub_;
+  rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr stats_client_;
+  rclcpp::TimerBase::SharedPtr stats_timer_;
+  std::atomic<bool> stats_pending_{false};
+  int64_t stats_request_id_{0};
+  std::chrono::steady_clock::time_point stats_requested_{};
+  std::map<std::string, VelocitySample> chain_;
+  std::map<std::string, std::string> diagnostic_values_;
+  std::string diagnostic_detail_, mode_info_, action_info_{"未观测到导航目标"};
+  std::chrono::steady_clock::time_point diagnostic_received_{}, mode_received_{}, action_received_{};
+  QLabel * diagnostic_label_{nullptr};
+  QLabel * chain_label_{nullptr};
+  QLabel * mode_label_{nullptr};
   QLabel * status_label_{nullptr};
   QLabel * command_label_{nullptr};
   QLabel * hint_label_{nullptr};

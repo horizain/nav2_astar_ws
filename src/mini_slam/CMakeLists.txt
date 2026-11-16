@@ -33,6 +33,15 @@ target_link_libraries(mini_slam_core PUBLIC Ceres::ceres Eigen3::Eigen)
 
 # ---------------- 测试与特性探针 ----------------
 enable_testing()
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../../docs/tools/tests")
+  add_test(NAME test_teaching_tools
+    COMMAND python3 -m unittest discover
+      -s "${CMAKE_CURRENT_SOURCE_DIR}/../../docs/tools/tests")
+  set_tests_properties(test_teaching_tools PROPERTIES TIMEOUT 30)
+  add_test(NAME test_tutorial_links
+    COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/../../docs/tools/check_tutorial_links.py")
+  set_tests_properties(test_tutorial_links PROPERTIES TIMEOUT 30)
+endif()
 foreach(t IN ITEMS feature_probe test_field test_matcher test_spa
                 test_mapper_synthetic test_localization test_serialization
                 test_covariance test_connected_chain test_sparsify

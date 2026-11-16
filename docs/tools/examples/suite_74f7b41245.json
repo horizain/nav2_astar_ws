@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "note": "All attempts retained; no automatic target substitution",
+  "attempts": [
+    {
+      "scenario": "arc",
+      "controller": "FollowPath",
+      "repetition": 1,
+      "exit_code": 0,
+      "functional_expectation_met": true,
+      "artifacts": [
+        "arc_FollowPath_14a627e96b"
+      ],
+      "log": "arc_FollowPath_repeat1.log"
+    },
+    {
+      "scenario": "arc",
+      "controller": "PID",
+      "repetition": 1,
+      "exit_code": 0,
+      "functional_expectation_met": true,
+      "artifacts": [
+        "arc_PID_65bc8fedbd"
+      ],
+      "log": "arc_PID_repeat1.log"
+    },
+    {
+      "scenario": "arc",
+      "controller": "Stanley",
+      "repetition": 1,
+      "exit_code": 1,
+      "functional_expectation_met": false,
+      "artifacts": [
+        "arc_Stanley_c9f9e7a720"
+      ],
+      "log": "arc_Stanley_repeat1.log"
+    },
+    {
+      "scenario": "arc",
+      "controller": "DWB",
+      "repetition": 1,
+      "exit_code": 0,
+      "functional_expectation_met": true,
+      "artifacts": [
+        "arc_DWB_7b07243c98"
+      ],
+      "log": "arc_DWB_repeat1.log"
+    },
+    {
+      "scenario": "arc",
+      "controller": "MPPI",
+      "repetition": 1,
+      "exit_code": 0,
+      "functional_expectation_met": true,
+      "artifacts": [
+        "arc_MPPI_b5548fa599"
+      ],
+      "log": "arc_MPPI_repeat1.log"
+    },
+    {
+      "scenario": "arc",
+      "controller": "MPC",
+      "repetition": 1,
+      "exit_code": 0,
+      "functional_expectation_met": true,
+      "artifacts": [
+        "arc_MPC_aef2086a88"
+      ],
+      "log": "arc_MPC_repeat1.log"
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+[
+  {
+    "command": [
+      "ros2",
+      "launch",
+      "/home/ruijianding/ros2_ws/src/nav2_astar_ws/src/mini_slam/ros/launch/mini_slam_simulation.launch.py",
+      "headless:=False",
+      "use_rviz:=False",
+      "use_visualizer:=False",
+      "use_composition:=False",
+      "params_file:=/home/ruijianding/ros2_ws/src/nav2_astar_ws/src/mini_slam/ros/mini_slam_nav2_params.yaml",
+      "robot_sdf:=/tmp/mini_slam_accept_a335edfbe5/robot_truth.sdf.xacro"
+    ],
+    "returncode": 0
+  },
+  {
+    "command": [
+      "/home/ruijianding/ros2_ws/src/nav2_astar_ws/install/mini_slam/lib/mini_slam/mini_slam_node",
+      "--ros-args",
+      "-p",
+      "use_sim_time:=true",
+      "-r",
+      "/map:=/mini/map"
+    ],
+    "returncode": 0
+  },
+  {
+    "command": [
+      "/opt/ros/jazzy/lib/ros_gz_bridge/parameter_bridge",
+      "/teaching/ground_truth@nav_msgs/msg/Odometry[gz.msgs.Odometry",
+      "--ros-args",
+      "-p",
+      "use_sim_time:=true"
+    ],
+    "returncode": 0
+  }
+]

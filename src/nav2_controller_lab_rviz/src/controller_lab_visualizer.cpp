@@ -107,6 +107,13 @@ public:
         angular_velocity_ = msg->angular.z;
       });
 
+    prediction_sub_ = create_subscription<nav_msgs::msg::Path>(
+      "controller_lab/predicted_trajectory", 10,
+      [this](nav_msgs::msg::Path::SharedPtr message) {
+        solver_prediction_ = *message;
+        prediction_received_ = std::chrono::steady_clock::now();
+      });
+
     selector_sub_ = create_subscription<std_msgs::msg::String>(
       "controller_selector", selector_qos,
       [this](const std_msgs::msg::String::SharedPtr msg) {
@@ -309,6 +316,42 @@ private:
       array.markers.push_back(marker);
     }
 
+    // 5. Actual selected MPC sequence. Blue remains constant-command extrapolation.
+    visualization_msgs::msg::Marker prediction;
+    prediction.ns = "selected_solver_prediction";
+    prediction.id = 5;
+    prediction.type = visualization_msgs::msg::Marker::LINE_STRIP;
+    prediction.pose.orientation.w = 1.0;
+    prediction.scale.x = 0.045;
+    prediction.color.g = prediction.color.b = prediction.color.a = 1.0F;
+
+    const bool current = prediction_received_.time_since_epoch().count() != 0 &&
+      std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - prediction_received_).count() < 1.0;
+    prediction.header.frame_id = frame;
+    prediction.header.stamp = stamp;
+    prediction.action = visualization_msgs::msg::Marker::DELETE;
+    if (current && solver_prediction_.poses.size() > 1) {
+      try {
+        const auto transform = tf_buffer_.lookupTransform(
+          frame, solver_prediction_.header.frame_id, tf2::TimePointZero);
+        const auto & origin = transform.transform.translation;
+        const double yaw = yawFromQuaternion(transform.transform.rotation);
+        prediction.action = visualization_msgs::msg::Marker::ADD;
+        for (const auto & pose : solver_prediction_.poses) {
+          geometry_msgs::msg::Point point;
+          point.x = origin.x + std::cos(yaw) * pose.pose.position.x -
+            std::sin(yaw) * pose.pose.position.y;
+          point.y = origin.y + std::sin(yaw) * pose.pose.position.x +
+            std::cos(yaw) * pose.pose.position.y;
+          point.z = 0.12;
+          prediction.points.push_back(point);
+        }
+      } catch (const tf2::TransformException &) {
+        // Unknown transform is represented by deletion, never a mislabeled path.
+      }
+    }
+    array.markers.push_back(prediction);
     marker_pub_->publish(array);
     published_markers_ = true;
   }
@@ -323,6 +366,9 @@ private:
   bool published_markers_{false};
 
   nav_msgs::msg::Path path_;
+  nav_msgs::msg::Path solver_prediction_;
+  std::chrono::steady_clock::time_point prediction_received_{};
+  rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr prediction_sub_;
   std::string path_frame_;
   std::string selected_controller_{"FollowPath"};
   double linear_velocity_{0.0};

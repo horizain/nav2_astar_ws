@@ -1,7 +1,10 @@
-# nav2_astar_planner + nav2_controller_lab
+# 自己建图、定位与导航：ROS 2 教学项目
 
-一个用于学习 **A\* 算法、Nav2 插件开发、控制器算法** 的教学项目：
+当前完整课程从 [23 mini_slam完整导航实践](docs/23_mini_slam完整导航实践.md) 开始：mini_slam建图与定位 → 自研A* → 自研控制器 → 保持启用的安全链路。旧的AMCL/slam_toolbox实验作为对照课程阅读。建设状态见[教学建设计划](docs/教学建设计划.md)。
 
+一个用于学习 **SLAM、A*、路径跟踪及Nav2插件工程** 的教学项目：
+
+- `mini_slam`：自己的扫描匹配、位姿图建图和定位，支持成套存图与重载；
 - `nav2_astar_planner`：把纯 C++ A* 栅格规划器封装成 `nav2_core::GlobalPlanner` 插件；
 - `nav2_controller_lab`：在同一套仿真里实现并比较 PID / Pure Pursuit / Stanley /
   DWB-lite / MPPI-lite / MPC-lite 六种 `nav2_core::Controller` 插件。
@@ -15,26 +18,26 @@
 ## 快速开始
 
 ```bash
-cd ~/ros2_jazzy/nav2_astar_ws
+cd ~/ros2_ws/src/nav2_astar_ws
 
 # 1. 编译
 source /opt/ros/jazzy/setup.bash
-source ~/ros2_jazzy/install/setup.bash
+source ~/ros2_ws/install/setup.bash
 colcon build --packages-select \
-  nav2_astar_planner nav2_controller_lab nav2_controller_lab_rviz \
+  mini_slam nav2_astar_planner nav2_controller_lab nav2_controller_lab_rviz \
   --cmake-args -DCMAKE_BUILD_TYPE=Release
+source install/setup.bash
 
 # 2. 跑纯算法单元测试（不需要 Gazebo）
 colcon test --packages-select \
   nav2_astar_planner nav2_controller_lab nav2_controller_lab_rviz
 colcon test-result --verbose
 
-# 3. 启动 Gazebo + Nav2 + RViz（A* 全局规划器 + Pure Pursuit 控制器）
-./run_controller_lab.sh
+# 3. 启动Gazebo、mini_slam、Nav2、RViz和键盘终端
+./run_mini_slam_mapping.sh
 
-# 4. 在 RViz 里设置初始位姿、点 Nav2 Goal
-#    如果 bringup 超时，另开终端执行：
-./activate_nav.sh
+# 4. 在操作终端低速建图，按3保存，按2切换定位/导航
+# 需要时设置2D Pose Estimate，再用Nav2 Goal发目标
 ```
 
 > 如果 `ros2 launch` 报 `package not found`，但 `install/<pkg>/` 明明存在，
@@ -77,7 +80,7 @@ nav2_astar_ws/
 │   │   ├── *_core.hpp            # 纯算法：PID/PP/Stanley/DWB/MPPI/MPC
 │   │   └── *_controller.hpp      # 6 个 Controller 插件
 │   ├── src/
-│   ├── test/                     # 24 个算法测试 + 插件加载测试
+│   ├── test/                     # 纯算法与插件加载回归
 │   ├── params/nav2_params_controller_lab.yaml
 │   ├── launch/controller_lab_launch.py
 │   ├── controller_plugins.xml
@@ -112,6 +115,21 @@ nav2_astar_ws/
 ├── run_rviz.sh
 └── activate_nav.sh
 ```
+
+---
+
+## 当前完整课程
+
+23～28构成同一条可复现主线：完整运行 → 状态诊断 → 定量评价 → MPC故障复盘 → 独立真值精度 → 固定实验与作业。入口见[教学总目录](docs/README.md)。
+
+```bash
+# 固定场景（先完成三级source）
+python3 docs/tools/run_navigation_lesson.py --scenario straight --controller MPC
+# 离线工具单测，无需ROS
+python3 -m unittest discover -s docs/tools/tests -v
+```
+
+run_controller_lab.sh保留为AMCL/官方地图对照课程入口，与mini_slam主线区分。
 
 ---
 

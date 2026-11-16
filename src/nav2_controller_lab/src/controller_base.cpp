@@ -6,6 +6,7 @@
 #include "nav2_controller_lab/controller_base.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <limits>
 #include <memory>
@@ -74,6 +75,8 @@ void ControllerBase::configure(
   node->get_parameter("controller_frequency", control_frequency_);
   control_frequency_ = std::max(1.0, control_frequency_);
 
+  diagnostics_pub_ = node->create_publisher<diagnostic_msgs::msg::DiagnosticArray>(
+    "/controller_lab/controller_diagnostics", rclcpp::QoS(10));
   configureParams(node);
 
   RCLCPP_INFO(
@@ -89,6 +92,7 @@ void ControllerBase::cleanup()
   resetController();
   global_plan_.poses.clear();
   has_plan_ = false;
+  diagnostics_pub_.reset();
   costmap_ = nullptr;
   costmap_ros_.reset();
   tf_.reset();
@@ -96,11 +100,13 @@ void ControllerBase::cleanup()
 
 void ControllerBase::activate()
 {
+  if (diagnostics_pub_) {diagnostics_pub_->on_activate();}
   RCLCPP_INFO(logger_, "ControllerLab(%s) 已激活", plugin_name_.c_str());
 }
 
 void ControllerBase::deactivate()
 {
+  if (diagnostics_pub_) {diagnostics_pub_->on_deactivate();}
   RCLCPP_INFO(logger_, "ControllerLab(%s) 已去激活", plugin_name_.c_str());
 }
 
@@ -195,7 +201,60 @@ geometry_msgs::msg::TwistStamped ControllerBase::zeroTwist() const
   return command;
 }
 
+void ControllerBase::publishDiagnostics(
+  const std::string & stage, const std::string & detail, double compute_ms,
+  const geometry_msgs::msg::TwistStamped * command)
+{
+  if (!diagnostics_pub_ || !diagnostics_pub_->is_activated()) {return;}
+  diagnostic_msgs::msg::DiagnosticArray array;
+  array.header.stamp = clock_->now();
+  diagnostic_msgs::msg::DiagnosticStatus status;
+  status.name = "controller_lab/" + plugin_name_;
+  status.hardware_id = plugin_name_;
+  status.level = command ? diagnostic_msgs::msg::DiagnosticStatus::OK :
+    diagnostic_msgs::msg::DiagnosticStatus::ERROR;
+  status.message = detail.empty() ? stage : detail;
+  auto add = [&](const std::string & key, const std::string & value) {
+      diagnostic_msgs::msg::KeyValue item;
+      item.key = key; item.value = value; status.values.push_back(item);
+    };
+  add("controller", plugin_name_);
+  add("stage", stage);
+  add("compute_ms", std::to_string(compute_ms));
+  add("goal_error_m", std::to_string(goal_error_m_));
+  add("goal_yaw_error_rad", std::to_string(goal_yaw_error_rad_));
+  add("frame_id", global_frame_);
+  if (command) {
+    add("linear_velocity", std::to_string(command->twist.linear.x));
+    add("angular_velocity", std::to_string(command->twist.angular.z));
+  }
+  array.status.push_back(status);
+  diagnostics_pub_->publish(array);
+}
+
 geometry_msgs::msg::TwistStamped ControllerBase::computeVelocityCommands(
+  const geometry_msgs::msg::PoseStamped & pose,
+  const geometry_msgs::msg::Twist & velocity,
+  nav2_core::GoalChecker * goal_checker)
+{
+  const auto begin = std::chrono::steady_clock::now();
+  auto elapsed = [&]() {
+      return std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - begin).count();
+    };
+  goal_error_m_ = goal_yaw_error_rad_ = -1.0;
+  control_stage_ = "tracking";
+  try {
+    auto output = computeVelocityCommandsImpl(pose, velocity, goal_checker);
+    publishDiagnostics(control_stage_, "", elapsed(), &output);
+    return output;
+  } catch (const std::exception & ex) {
+    publishDiagnostics("control_error", ex.what(), elapsed(), nullptr);
+    throw;
+  }
+}
+
+geometry_msgs::msg::TwistStamped ControllerBase::computeVelocityCommandsImpl(
   const geometry_msgs::msg::PoseStamped & pose,
   const geometry_msgs::msg::Twist & velocity,
   nav2_core::GoalChecker * /*goal_checker*/)
@@ -213,6 +272,10 @@ geometry_msgs::msg::TwistStamped ControllerBase::computeVelocityCommands(
   robot.x = pose.pose.position.x;
   robot.y = pose.pose.position.y;
   robot.yaw = quaternionToYaw(pose.pose.orientation);
+  if (!path.empty()) {
+    goal_error_m_ = distance(robot, path.back());
+    goal_yaw_error_rad_ = std::abs(normalizeAngle(path_terminal_yaw_ - robot.yaw));
+  }
 
   const double dt = 1.0 / std::max(control_frequency_, 1.0);
 
@@ -235,6 +298,7 @@ geometry_msgs::msg::TwistStamped ControllerBase::computeVelocityCommands(
   // 旋转可能碰到障碍， footprint 检查是 TODO（见 doc 14 后续可做）。
   // ============================================================
   if (!path.empty() && remainingDistance(robot, path) <= goal_tolerance_) {
+    control_stage_ = "terminal_rotation";
     command = rotateInPlace(robot, path_terminal_yaw_, terminal_angular_velocity_);
   } else if (needsCostmap()) {
     std::unique_lock<nav2_costmap_2d::Costmap2D::mutex_t> lock(

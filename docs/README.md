@@ -1,11 +1,30 @@
 # 教学文档总目录
 
+当前完整课程从 [23 mini_slam完整导航实践](23_mini_slam完整导航实践.md) 开始：mini_slam建图与定位 → 自研A* → 自研控制器 → 保持启用的安全链路。旧的AMCL/slam_toolbox实验作为对照课程阅读。建设状态见[教学建设计划](教学建设计划.md)。
+
 > **这套文档写给谁？**
 > 会一点 C++、能用 Linux 终端，但**没有算法基础**，也**没写过 ROS 2 / Nav2 插件**，想往机器人规划方向发展的读者。
 >
 > **最终目标不是“把这个项目跑起来”**，而是让你掌握一条可复用的路径：
 >
 > **一个纯算法 → 一个能翻译 ROS 数据的适配层 → 一个能被 Nav2 加载的工程插件。**
+
+---
+
+## 当前完整主线：从第一次运行到独立实验
+
+| 课程 | 主要问题 | 动手与验收 |
+|---|---|---|
+| [23 完整导航实践](23_mini_slam完整导航实践.md) | 如何自己建图、保存、定位和导航？ | 一键启动，存图重载，取消与恢复 |
+| [24 状态与速度链路](24_看懂导航状态与速度链路.md) | 机器人不走时到底停在哪一层？ | 实际控制器、耗时、误差、新鲜度、四段速度 |
+| [25 评价工具与公平实验](25_导航评价工具与公平实验.md) | 怎样从数据比较，而非凭观感？ | 原始JSONL、JSON/CSV、离线重算与真值缺失处理 |
+| [26 MPC停走复盘](26_MPC停走故障复盘.md) | 如何从日志定位跨模块故障？ | 栅格平台、坏热启动、253冲突、末端阶段、终端竞态 |
+| [27 独立真值与精度](27_独立真值与精度进阶实验.md) | 定位误差和到点误差分别多少？ | 固定坐标对齐、重复测量、容差递进、量化偏差 |
+| [28 标准实验与作业](28_标准实验课程与作业.md) | 如何组织一套可以验收的课程？ | 七个固定场景、六控制器矩阵、作业答案和评分标准 |
+
+先按23跑一次，再带着问题学习04/05/10/21的原理，然后按24～28建立实验和评价能力。旧的AMCL/slam_toolbox章节作为对照课保留，不能与mini_slam主线混用定位、地图或历史性能数字。
+
+本地数据与图表见[实验样本说明](tools/examples/README.md)；数据缺失标成未知，失败和取消均保留。教程链接和纯工具测试已经纳入mini_slam的统一测试。
 
 ---
 
@@ -48,7 +67,7 @@
 | **[14 控制器开发进度记录](14_控制器开发进度记录.md)** | 开发过程中踩过哪些坑？ | 避免重复犯错 |
 | **[15 端到端链路实战](15_端到端链路实战.md)** | 插件都写好了，为什么机器人还是到不了目标？无头端到端怎么跑通？ | 用 `e2e_nav_test.py` 一条命令跑完整导航，理解初始位姿/进度检查/终点旋转这些"链路级"问题 |
 | **[16 局部轨迹评分函数设计](16_局部轨迹评分函数设计.md)** | DWB 为什么会冻结在原地？"好轨迹"是谁定义的？ | 手算 77 格评分表、掌握"碰撞否决+前进主导"的评分器设计铁律，用 `dwb_scoring_demo.py` 离线调参 |
-| **[17 CBF 安全过滤器](17_CBF安全过滤器.md)** | 怎么数学上保证机器人永不碰撞？安全层怎么落地？ | 从 Nagumo 条件手推 CBF、完成"裸奔撞墙 vs 平滑停住"h(t) 对比实验，掌握外参校准与层间交互 |
+| **[17 CBF 安全过滤器](17_CBF安全过滤器.md)** | 安全约束在什么假设下成立、怎样实现独立过滤层？安全层怎么落地？ | 从 Nagumo 条件手推 CBF、完成"裸奔撞墙 vs 平滑停住"h(t) 对比实验，掌握外参校准与层间交互 |
 | **[18 工程优化与实战技巧](18_工程优化与实战技巧.md)** | 控制环为什么只有 5Hz？改参数为什么"没生效"？工程上有哪些实测技巧？ | MPPI 控制环 5.5→19.6Hz 的实测调优、symlink-install 免编译、十条排障技巧索引 |
 | **[19 端到端策略与 VLA 路线图](19_端到端策略与VLA路线图.md)**（规划篇⏳） | 学习方法怎么做规划与控制？VLA 是什么？本实验室怎么落地？ | 三档谱系（A/B/C）、BC/DAgger/VLA 微调管线、四阶段施工图与验收标准 |
 | **[20 定位与建图 SLAM](20_定位与建图SLAM.md)** | 机器人怎么知道"我在哪"和"世界长什么样"？SLAM 二十年演进到哪了？ | slam_toolbox 实测建图→存图→自建图导航闭环、地图文件格式解剖、探索状态机设计 |
@@ -110,8 +129,8 @@ ros2 pkg prefix nav2_astar_planner
 
 ```bash
 source /opt/ros/jazzy/setup.bash
-source ~/ros2_jazzy/install/setup.bash
-source ~/ros2_jazzy/nav2_astar_ws/install/setup.bash
+source ~/ros2_ws/install/setup.bash
+source ~/ros2_ws/src/nav2_astar_ws/install/setup.bash
 ```
 
 > 顺序不能反：`/opt` → 外层 Nav2 源码工作空间 → 本项目工作空间。
@@ -119,7 +138,7 @@ source ~/ros2_jazzy/nav2_astar_ws/install/setup.bash
 日常自检（尤其是删过 `build/` 或换过构建方式之后）：
 
 ```bash
-cd ~/ros2_jazzy/nav2_astar_ws
+cd ~/ros2_ws/src/nav2_astar_ws
 ./check_workspace.sh          # 只检查，不改文件
 ./check_workspace.sh --fix    # 备份并重建损坏的 install/<pkg>
 ```
@@ -165,7 +184,7 @@ cd ~/ros2_jazzy/nav2_astar_ws
 ### 4.2 运行算法练习工具（不需要 ROS）
 
 ```bash
-cd ~/ros2_jazzy/nav2_astar_ws
+cd ~/ros2_ws/src/nav2_astar_ws
 
 # 默认 5x5 小地图，4 邻域，打印每次扩展
 python3 docs/tools/astar_playground.py --no-diagonal --trace
@@ -189,9 +208,9 @@ python3 docs/tools/astar_playground.py --map docs/tools/maps/terrain_demo.txt \
 项目里有 10 个纯算法单元测试，不需要启动 ROS 节点，也不需要 Gazebo：
 
 ```bash
-cd ~/ros2_jazzy/nav2_astar_ws
+cd ~/ros2_ws/src/nav2_astar_ws
 source /opt/ros/jazzy/setup.bash
-source ~/ros2_jazzy/install/setup.bash
+source ~/ros2_ws/install/setup.bash
 colcon build --packages-select nav2_astar_planner
 colcon test --packages-select nav2_astar_planner
 colcon test-result --verbose
@@ -256,7 +275,7 @@ colcon test-result --verbose
 ## 7. 文档维护约定
 
 - 代码行号会随修改变化；**以函数名和代码片段为准**，行号只作定位参考。
-- 命令默认在 `~/ros2_jazzy/nav2_astar_ws` 下执行。
+- 命令默认在 `~/ros2_ws/src/nav2_astar_ws` 下执行。
 - 标注 **【必做】** 的是理解所必需；**【选做】** 的是进阶。
 - 发现文档与代码不一致时，以代码为准，并回头修正文档。
 
@@ -273,3 +292,5 @@ colcon test-result --verbose
   [11 接口实战](11_Controller接口与插件实战.md)。
 - 想读控制器源码：[12 源码逐行导读](12_控制器源码逐行导读.md)。
 - 想调参排错：[13 实验、调参与排错](13_控制器实验调参与排错.md)。
+
+本轮交付与实际通过/失败记录见[教学建设计划与验收](教学建设计划.md)。原始课堂数据与离线重算见[实验样本](tools/examples/README.md)。

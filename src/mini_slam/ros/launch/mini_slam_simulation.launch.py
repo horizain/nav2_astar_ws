@@ -64,6 +64,12 @@ def generate_launch_description():
     ld.add_action(DeclareLaunchArgument(
         'rviz_config_file', default_value=default_rviz,
         description='RViz 配置文件（已移除会段错误的 Docking 面板）'))
+    # Explicit simulation injection points for fixed teaching worlds and independent truth.
+    for argument, default in (
+        ("robot_sdf", os.path.join(sim_dir, "urdf", "gz_waffle.sdf.xacro")),
+        ("x_pose", "-2.00"), ("y_pose", "-0.50"), ("yaw", "0.00")):
+        ld.add_action(DeclareLaunchArgument(argument, default_value=default))
+
     # SLAM 模式（docs/20）：slam:=True 时 bringup 用 slam_toolbox 替代
     # map_server+AMCL —— 机器人边跑边建图（map_server/amcl 不启动）
     slam = LaunchConfiguration('slam')
@@ -87,6 +93,10 @@ def generate_launch_description():
             'use_rviz': use_rviz,
             'use_composition': use_composition,
             'world': world,
+            'robot_sdf': LaunchConfiguration('robot_sdf'),
+            'x_pose': LaunchConfiguration('x_pose'),
+            'y_pose': LaunchConfiguration('y_pose'),
+            'yaw': LaunchConfiguration('yaw'),
             'rviz_config_file': rviz_config_file,
             'slam': slam,
             'map': map_yaml,

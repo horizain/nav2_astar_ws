@@ -79,6 +79,7 @@ public:
     double current_speed, double control_dt = 0.05, double current_angular = 0.0);
 
   void reset();
+  const std::vector<Pose2D> & predictedTrajectory() const {return prediction_;}
 
   const MpcParams & params() const {return params_;}
   MpcParams & params() {return params_;}
@@ -94,6 +95,7 @@ private:
 
   MpcParams params_;
   std::vector<Control> nominal_;
+  std::vector<Pose2D> prediction_;
   bool initialized_{false};
 };
 

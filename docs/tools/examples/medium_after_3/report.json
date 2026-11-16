@@ -1,0 +1,183 @@
+{
+  "schema_version": 1,
+  "definitions": {
+    "time": "one simulation clock; command timestamps are receive times",
+    "endpoint": "last pose at/before terminal result within endpoint_max_gap",
+    "cross_track": "nearest segment of latest plan observed during the goal",
+    "compute_ms": "TF/adapter/solver computation; excludes diagnostic publication and server waits",
+    "truth_matching": "nearest timestamp within max_truth_gap; no interpolation",
+    "precision_warning": "estimated errors and success tolerances are not ground-truth accuracy"
+  },
+  "configuration": {
+    "max_truth_gap_s": 0.1,
+    "endpoint_max_gap_s": 0.5,
+    "truth_alignment": [
+      0,
+      0,
+      0
+    ],
+    "truth_sources": [
+      "gazebo_model_world_pose"
+    ]
+  },
+  "outcome_counts": {
+    "succeeded": 1,
+    "canceled": 0,
+    "aborted": 0,
+    "rejected": 0,
+    "unknown": 0
+  },
+  "reach_goal_attempts": 1,
+  "reach_goal_success_rate": 1.0,
+  "expected_cancels_completed": 0,
+  "attempted_goals": 1,
+  "succeeded_goals": 1,
+  "success_rate": 1.0,
+  "unknown_results": 0,
+  "localization_vs_truth": {
+    "position_m": {
+      "count": 123,
+      "mean": 0.006909159724752764,
+      "rmse": 0.008140899017304618,
+      "p95": 0.013643533938735634,
+      "max": 0.013780285776834683
+    },
+    "yaw_rad": {
+      "count": 123,
+      "mean": 0.004585228791474036,
+      "rmse": 0.006153390431663433,
+      "p95": 0.012021257398268669,
+      "max": 0.016477350263371715
+    },
+    "unmatched_pose_samples": 1,
+    "matched_samples": 123,
+    "time_offset_s": {
+      "count": 123,
+      "mean": 0.012926829268292682,
+      "rmse": 0.014909482986570298,
+      "p95": 0.02400000000000002,
+      "max": 0.02400000000000091
+    }
+  },
+  "runs": [
+    {
+      "goal_id": "1",
+      "controller_requested": "MPC",
+      "controllers_observed": [
+        "MPC"
+      ],
+      "purpose": "reach_goal",
+      "status": "succeeded",
+      "success": true,
+      "endpoint_true_position_m": 0.17671201091620306,
+      "endpoint_true_yaw_rad": 0.01229602050690725,
+      "elapsed_sim_s": 3.894000000000002,
+      "pose_samples": 20,
+      "estimated_travel_m": 1.394665111395238,
+      "endpoint_estimated_position_m": 0.2054221105873638,
+      "endpoint_estimated_yaw_rad": 0.01123658861322987,
+      "endpoint_sample_age_s": 0.08100000000000307,
+      "last_plan_goal_offset_m": 0.0,
+      "cross_track_to_latest_plan_m": {
+        "count": 20,
+        "mean": 0.0015497489324446056,
+        "rmse": 0.0022172532592152753,
+        "p95": 0.00467890178992646,
+        "max": 0.004809613258612354
+      },
+      "command_total_variation_v": 1.4522175758105416,
+      "command_total_variation_w": 0.47855436133855567,
+      "command_acceleration_m_s2": {
+        "count": 76,
+        "mean": 1.0831217507859026,
+        "rmse": 6.976702536122091,
+        "p95": 1.4078947368778643,
+        "max": 60.66666666743698
+      },
+      "command_angular_acceleration_rad_s2": {
+        "count": 76,
+        "mean": 0.22480740234940125,
+        "rmse": 1.0058995228694885,
+        "p95": 0.6485774995572858,
+        "max": 8.465835938120298
+      },
+      "controller_compute_ms": {
+        "count": 76,
+        "mean": 5.532760197368421,
+        "rmse": 5.882716524350276,
+        "p95": 8.4487785,
+        "max": 17.495312
+      },
+      "control_error_samples": 0,
+      "localization_vs_truth": {
+        "position_m": {
+          "count": 20,
+          "mean": 0.005028892030252613,
+          "rmse": 0.006059535573737977,
+          "p95": 0.011196351678250265,
+          "max": 0.012503219429791787
+        },
+        "yaw_rad": {
+          "count": 20,
+          "mean": 0.0018319590836057124,
+          "rmse": 0.0025270934496317418,
+          "p95": 0.005496274188399582,
+          "max": 0.005585754515070688
+        },
+        "unmatched_pose_samples": 0,
+        "matched_samples": 20,
+        "time_offset_s": {
+          "count": 20,
+          "mean": 0.011399999999999721,
+          "rmse": 0.013649175799292371,
+          "p95": 0.023999999999997357,
+          "max": 0.023999999999997357
+        }
+      }
+    }
+  ],
+  "metadata": {
+    "scenario": "straight",
+    "repetition": 3,
+    "fixed_targets": [
+      [
+        1.6,
+        0.0,
+        0.0
+      ]
+    ],
+    "expected": "succeeded",
+    "controller_requested": "MPC",
+    "revision": "1f3f70ca20cfb4bfcb270e8ae3180a9ea0884069",
+    "worktree_dirty": true,
+    "binary_sha256": {
+      "nav2_astar_planner": "82be61a1b7854080070994f5e6d9b42f7dc7838b2d21b205949b3be96553af6e",
+      "nav2_controller_lab": "56769f70a25986a92e2c96609203160d5b7f502c13c24947eda188f0c58e528d"
+    },
+    "workload_note": "development desktop; external CPU/GPU workloads not controlled",
+    "world_sha256": "cac37774776414ade10fdd4f127f905adef786e325fa2100838290f34f8bcc86",
+    "params_sha256": "6e805c97dc8ee6d3ac5f27ec638a86dd4552d57e7b3cb43787020c1e6e1e5dff",
+    "source_runner_sha256": "821d6a4cad6e2b8a3d5d585466791fb18124993e902b39f839047acff47145fb",
+    "spawn_world": [
+      0,
+      0,
+      0
+    ],
+    "map_world_alignment": [
+      0,
+      0,
+      0
+    ],
+    "alignment_source": "known_spawn_at_world_origin_and_mini_slam_initial_map_origin",
+    "truth_source": "gazebo_model_world_pose",
+    "independent_truth_required": true,
+    "safety_layers": "CBF and collision_monitor enabled",
+    "noise_seed": null,
+    "hold_seconds": 0,
+    "note": "fixed geometry and targets; sensor/physics variation remains",
+    "functional_expectation_passed": true,
+    "error": "",
+    "xy_tolerance": 0.2,
+    "yaw_tolerance": 0.0873
+  }
+}

@@ -18,3 +18,7 @@
 `colcon test-result --verbose` **76 tests, 0 errors, 0 failures, 0 skipped**；
 `./scripts/closed_loop_test.sh --skip-mapping` 端到端通过（需已有
 `out_nav/mini_map.yaml`，缺失时脚本会直接报错退出）。
+
+## 当前课程入口
+
+[完整导航实践](../../../docs/23_mini_slam完整导航实践.md)串联本目录的算法与服务知识；[09手动建图](09_手动遥控建图.md)是实际操作入口。上表测试数和closed_loop_test结果为历史阶段记录，当前回归应运行本项目根目录的colcon test和automated_session_test.py，不以历史条目数作成功判据。

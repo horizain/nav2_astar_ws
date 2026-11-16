@@ -16,6 +16,7 @@
 
 import os
 import tempfile
+from pathlib import Path
 
 from ament_index_python.packages import get_package_share_directory
 
@@ -224,18 +225,16 @@ def generate_launch_description():
 
     remove_temp_sdf_file = RegisterEventHandler(event_handler=OnShutdown(
         on_shutdown=[
-            OpaqueFunction(function=lambda _: os.remove(world_sdf))
+            OpaqueFunction(function=lambda _: Path(world_sdf).unlink(missing_ok=True))
         ]))
 
-    gazebo_client = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(get_package_share_directory('ros_gz_sim'),
-                         'launch',
-                         'gz_sim.launch.py')
-        ),
+    # Run the GUI directly, like the server, so launch owns the real process
+    # rather than a shell wrapper that can leave an orphaned renderer on shutdown.
+    gazebo_client = ExecuteProcess(
+        cmd=['gz', 'sim', '-v4', '-g', '--force-version', '8'],
+        output='screen',
         condition=IfCondition(PythonExpression(
             [use_simulator, ' and not ', headless])),
-        launch_arguments={'gz_args': ['-v4 -g ']}.items(),
     )
 
     gz_robot = IncludeLaunchDescription(

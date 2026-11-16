@@ -1,0 +1,30 @@
+[
+  {
+    "description": "六控制器直线及圆弧",
+    "source_directory": "/tmp/navigation_suites/suite_6a52478cad",
+    "manifest": "suite_6a52478cad.json",
+    "passed": 12,
+    "attempts": 12
+  },
+  {
+    "description": "MPC狭窄/封路/不可达/取消重发",
+    "source_directory": "/tmp/navigation_suites/suite_8c90327937",
+    "manifest": "suite_8c90327937.json",
+    "passed": 4,
+    "attempts": 4
+  },
+  {
+    "description": "修复终端握手之前的圆弧",
+    "source_directory": "/tmp/navigation_suites/suite_74f7b41245",
+    "manifest": "suite_74f7b41245.json",
+    "passed": 5,
+    "attempts": 6
+  },
+  {
+    "description": "入口语法错误，未启动仿真",
+    "source_directory": "/tmp/navigation_suites/suite_46933222d3",
+    "manifest": "suite_46933222d3.json",
+    "passed": 0,
+    "attempts": 6
+  }
+]

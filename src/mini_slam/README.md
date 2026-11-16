@@ -44,7 +44,7 @@
 cd src/mini_slam
 cmake -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DMINI_SLAM_WITH_ROS=OFF
 cmake --build build -j
-ctest --test-dir build          # 纯算法核 17 个测试（含 ROS 时共 21 个）
+ctest --test-dir build          # 测试数以本次输出为准
 ```
 
 含 ROS 包装（colcon，需在 ROS 环境中）：
@@ -52,7 +52,7 @@ ctest --test-dir build          # 纯算法核 17 个测试（含 ROS 时共 21 
 ```bash
 colcon build --packages-select mini_slam
 colcon test --packages-select mini_slam
-colcon test-result --verbose    # 当前 76 个测试断言，0 failure
+colcon test-result --verbose    # 以本次实际输出为准
 ```
 
 > 跨进程参数测试（`test_param_cli`）在本机需要
@@ -94,25 +94,29 @@ ros2 launch mini_slam mini_slam_online.launch.py enable_interactive_markers:=tru
 标准 `interactive_markers`（不写自定义 RViz 插件），默认关闭；参数与抽样规则
 见 `docs/08_交互式建图.md`。
 
-## 一键闭环测试（建图 → 存图 → 定位 → A* 导航 → 到达验证）
+## 当前完整实践：mini_slam建图、定位与自研导航
+
+从项目根目录启动：
 
 ```bash
-cd ~/ros2_jazzy/nav2_astar_ws/src/mini_slam
-./scripts/closed_loop_test.sh                   # 完整闭环：建图 + AMCL 定位 + A* 导航
-./scripts/closed_loop_test.sh --skip-mapping    # 跳过建图，直接用上次的 mini_map.yaml
-./scripts/closed_loop_test.sh --rviz            # 同时开 RViz 观看
+cd ~/ros2_ws/src/nav2_astar_ws
+./run_mini_slam_mapping.sh
 ```
 
-脚本内置本机环境全部踩坑的自动化处理（详见脚本头注释 P1–P6）：
-启动前清场防僵尸进程（P1）、数据流健康门禁后才激活 nav2（P2）、
-初始位姿用仿真时间戳（P3）、激活与定位上线后各清一次代价地图防幽灵障碍（P4）、
-从实时代价图选代价 ≤60 的开阔目标点（P5）、新目标自动抢占旧目标（P6）。
+按3成套保存，按2切换定位导航，按4加载已有地图，按1取消导航并等待停车后返回建图。完整解释、环境和验收见[23完整导航实践](../../docs/23_mini_slam完整导航实践.md)与[操作说明](docs/09_手动遥控建图.md)。
 
-已验证结果（TurtleBot3 沙盒）：mini_slam 在线建图（3 圈方形、12 次闭环）→
-AMCL 在 mini_slam 地图上定位收敛 → nav2_astar_planner A* 全局规划
-（45 格路径 / 0.06ms）→ PurePursuit 控制到达，误差 0.22m（容差 0.25m 内，SUCCEEDED）。
-注意：CBF 安全过滤器在窄柱道会与 PurePursuit 速度死锁，测试时用
-`ros2 param set /cbf_safety_filter enabled false` 旁路（collision_monitor 仍兜底）。
+自动化验收（先完成三级source）：
+
+```bash
+python3 src/mini_slam/scripts/automated_session_test.py --domain 191
+python3 src/mini_slam/scripts/automated_session_test.py --domain 192 --controller MPC --stationary-seconds 5 --extended-navigation
+```
+
+当前定位由mini_slam发布map→odom，CBF及collision_monitor保持启用。脚本使用独立ROS域和Gazebo分区，退出时只结束自己启动的进程；地图和日志保留在输出目录。功能验收不是精度或控制器排名实验。
+
+### 历史对照入口
+
+scripts/closed_loop_test.sh属于mini_slam建图+AMCL定位的旧实验，其中包含清场和安全层相关历史处理，不作为当前课程默认入口。此前记录的到点数值只适用于那次旧实验，不能用于承诺当前mini_slam定位精度。
 
 ## 与 slam_toolbox 对拍
 

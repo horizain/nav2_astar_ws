@@ -1,0 +1,138 @@
+{
+  "schema_version": 1,
+  "note": "All attempts retained; no automatic target substitution",
+  "attempts": [
+    {
+      "scenario": "straight",
+      "controller": "FollowPath",
+      "repetition": 1,
+      "exit_code": 0,
+      "functional_expectation_met": true,
+      "artifacts": [
+        "straight_FollowPath_3627241aca"
+      ],
+      "log": "straight_FollowPath_repeat1.log"
+    },
+    {
+      "scenario": "straight",
+      "controller": "PID",
+      "repetition": 1,
+      "exit_code": 0,
+      "functional_expectation_met": true,
+      "artifacts": [
+        "straight_PID_cd32e37389"
+      ],
+      "log": "straight_PID_repeat1.log"
+    },
+    {
+      "scenario": "straight",
+      "controller": "Stanley",
+      "repetition": 1,
+      "exit_code": 0,
+      "functional_expectation_met": true,
+      "artifacts": [
+        "straight_Stanley_0f96c73f34"
+      ],
+      "log": "straight_Stanley_repeat1.log"
+    },
+    {
+      "scenario": "straight",
+      "controller": "DWB",
+      "repetition": 1,
+      "exit_code": 0,
+      "functional_expectation_met": true,
+      "artifacts": [
+        "straight_DWB_bf2a5bc52d"
+      ],
+      "log": "straight_DWB_repeat1.log"
+    },
+    {
+      "scenario": "straight",
+      "controller": "MPPI",
+      "repetition": 1,
+      "exit_code": 0,
+      "functional_expectation_met": true,
+      "artifacts": [
+        "straight_MPPI_9aae5ecfba"
+      ],
+      "log": "straight_MPPI_repeat1.log"
+    },
+    {
+      "scenario": "straight",
+      "controller": "MPC",
+      "repetition": 1,
+      "exit_code": 0,
+      "functional_expectation_met": true,
+      "artifacts": [
+        "straight_MPC_51c9132107"
+      ],
+      "log": "straight_MPC_repeat1.log"
+    },
+    {
+      "scenario": "arc",
+      "controller": "FollowPath",
+      "repetition": 1,
+      "exit_code": 0,
+      "functional_expectation_met": true,
+      "artifacts": [
+        "arc_FollowPath_2f82c2eba0"
+      ],
+      "log": "arc_FollowPath_repeat1.log"
+    },
+    {
+      "scenario": "arc",
+      "controller": "PID",
+      "repetition": 1,
+      "exit_code": 0,
+      "functional_expectation_met": true,
+      "artifacts": [
+        "arc_PID_2f29cd6469"
+      ],
+      "log": "arc_PID_repeat1.log"
+    },
+    {
+      "scenario": "arc",
+      "controller": "Stanley",
+      "repetition": 1,
+      "exit_code": 0,
+      "functional_expectation_met": true,
+      "artifacts": [
+        "arc_Stanley_0118275943"
+      ],
+      "log": "arc_Stanley_repeat1.log"
+    },
+    {
+      "scenario": "arc",
+      "controller": "DWB",
+      "repetition": 1,
+      "exit_code": 0,
+      "functional_expectation_met": true,
+      "artifacts": [
+        "arc_DWB_7ceaa490f7"
+      ],
+      "log": "arc_DWB_repeat1.log"
+    },
+    {
+      "scenario": "arc",
+      "controller": "MPPI",
+      "repetition": 1,
+      "exit_code": 0,
+      "functional_expectation_met": true,
+      "artifacts": [
+        "arc_MPPI_1f06c13656"
+      ],
+      "log": "arc_MPPI_repeat1.log"
+    },
+    {
+      "scenario": "arc",
+      "controller": "MPC",
+      "repetition": 1,
+      "exit_code": 0,
+      "functional_expectation_met": true,
+      "artifacts": [
+        "arc_MPC_70a971fc87"
+      ],
+      "log": "arc_MPC_repeat1.log"
+    }
+  ]
+}

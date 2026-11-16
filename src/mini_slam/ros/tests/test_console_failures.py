@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
 """Safety regressions for uncertain and explicitly rejected map loads."""
 import contextlib
+import os
+import pty
+import select
+import signal
+import subprocess
+import termios
+import time
 import io
 from pathlib import Path
 import sys
@@ -140,6 +147,44 @@ class ConsoleFailureTests(unittest.TestCase):
         self.assertFalse(console.manual)
         self.assertTrue(console.state_uncertain)
         self.assertNotIn(("parameter", "mode", "mapping"), console.calls)
+
+
+class ConsoleTerminalTest(unittest.TestCase):
+    def test_ready_banner_means_single_keys_are_already_enabled(self):
+        master, slave = pty.openpty()
+        environment = os.environ.copy()
+        environment.update(ROS_DOMAIN_ID="94", RMW_IMPLEMENTATION="rmw_cyclonedds_cpp")
+        script = Path(__file__).resolve().parents[2] / "scripts/mapping_console.py"
+        process = subprocess.Popen(
+            [sys.executable, str(script)], stdin=slave, stdout=slave, stderr=slave,
+            env=environment, start_new_session=True)
+        os.close(slave)
+        output = ""
+        def wait_for(text):
+            nonlocal output
+            end = time.monotonic() + 15
+            while time.monotonic() < end:
+                if select.select([master], [], [], 0.1)[0]:
+                    output += os.read(master, 8192).decode(errors="replace")
+                    if text in output:
+                        return
+                if process.poll() is not None:
+                    break
+            self.fail(f"Missing {text}: {output}")
+        try:
+            wait_for("Console ready")
+            self.assertFalse(termios.tcgetattr(master)[3] & termios.ICANON)
+            os.write(master, b"3")  # No newline: must work immediately after readiness.
+            wait_for("Map name")
+            os.write(master, b"\n")  # Empty name rejects before any map service or write.
+            wait_for("No map name entered")
+            os.write(master, b"q")
+            self.assertEqual(process.wait(timeout=10), 0)
+        finally:
+            if process.poll() is None:
+                os.killpg(process.pid, signal.SIGTERM)
+                process.wait(timeout=5)
+            os.close(master)
 
 
 if __name__ == "__main__":

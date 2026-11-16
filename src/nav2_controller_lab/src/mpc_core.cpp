@@ -25,6 +25,7 @@ MpcCore::MpcCore(const MpcParams & params)
 void MpcCore::reset()
 {
   nominal_.clear();
+  prediction_.clear();
   initialized_ = false;
 }
 
@@ -134,6 +135,7 @@ ControlResult MpcCore::compute(
     const double cost = trajectoryCost(robot, path, cost_at, align);
     if (std::isfinite(cost) && cost < params_.cost.collision_cost) {
       reset();
+      prediction_ = rolloutControlSequence(robot, align, params_.dt);
       result.control = align.front();
       result.cost = cost;
       return result;
@@ -214,6 +216,7 @@ ControlResult MpcCore::compute(
   result.valid = true;
   result.cost = best_cost;
   result.control = best.front();
+  prediction_ = rolloutControlSequence(robot, best, params_.dt);
   nominal_ = best;
   nominal_.erase(nominal_.begin());
   nominal_.push_back(best.back());

@@ -146,9 +146,18 @@ nav_msgs::msg::Path AStarPlanner::createPlan(
   if (mx_start == mx_goal && my_start == my_goal) {
     geometry_msgs::msg::PoseStamped pose;
     pose.header = global_path.header;
-    pose.pose = start.pose;
-    if (!use_final_approach_orientation_) {
-      pose.pose.orientation = goal.pose.orientation;
+    pose.pose = goal.pose;
+    if (use_final_approach_orientation_) {
+      const double dx = goal.pose.position.x - start.pose.position.x;
+      const double dy = goal.pose.position.y - start.pose.position.y;
+      if (std::hypot(dx, dy) > 1e-9) {
+        const double theta = std::atan2(dy, dx);
+        pose.pose.orientation.x = pose.pose.orientation.y = 0.0;
+        pose.pose.orientation.z = std::sin(theta / 2.0);
+        pose.pose.orientation.w = std::cos(theta / 2.0);
+      } else {
+        pose.pose.orientation = start.pose.orientation;
+      }
     }
     global_path.poses.push_back(pose);
     return global_path;
@@ -228,8 +237,25 @@ nav_msgs::msg::Path AStarPlanner::createPlan(
   // -------- 插值为世界坐标路径 --------
   global_path = interpolatePath(grid_path, costmap_, interpolation_resolution_);
 
-  // 终点朝向设为目标朝向
+  // Grid centers are search representatives, not the user's continuous endpoints.
+  // Keep endpoints in their already-validated cells and recompute segment headings.
   if (!global_path.poses.empty()) {
+    global_path.poses.front().pose.position.x = start.pose.position.x;
+    global_path.poses.front().pose.position.y = start.pose.position.y;
+    global_path.poses.back().pose.position.x = goal.pose.position.x;
+    global_path.poses.back().pose.position.y = goal.pose.position.y;
+    for (size_t i = 0; i + 1 < global_path.poses.size(); ++i) {
+      const auto & next = global_path.poses[i + 1].pose.position;
+      auto & current = global_path.poses[i].pose;
+      const double dx = next.x - current.position.x;
+      const double dy = next.y - current.position.y;
+      if (std::hypot(dx, dy) > 1e-9) {
+        const double theta = std::atan2(dy, dx);
+        current.orientation.x = current.orientation.y = 0.0;
+        current.orientation.z = std::sin(theta / 2.0);
+        current.orientation.w = std::cos(theta / 2.0);
+      }
+    }
     global_path.poses.back().pose.orientation = goal.pose.orientation;
   }
 

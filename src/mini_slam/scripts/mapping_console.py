@@ -273,11 +273,13 @@ class Console(Node):
             print("ERROR:", exc, flush=True)
 
     def run(self):
-        print("W/S forward/back, A/D turn, SPACE stop; R/F linear speed; T/G turn speed")
-        print("1 mapping/manual | 2 localization/navigation | 3 save | 4 load | Q quit")
-        print("In navigation mode choose Nav2 Goal in RViz; key 1 cancels navigation first.")
         tty.setcbreak(sys.stdin.fileno())
         try:
+            print("W/S forward/back, A/D turn, SPACE stop; R/F linear speed; T/G turn speed")
+            print("1 mapping/manual | 2 localization/navigation | 3 save | 4 load | Q quit")
+            print("In navigation mode choose Nav2 Goal in RViz; key 1 cancels navigation first.")
+            # Printed only after cbreak is active: no observer may send input on an earlier banner.
+            print("Console ready", flush=True)
             while rclpy.ok():
                 if select.select([sys.stdin], [], [], 0.05)[0]:
                     key = sys.stdin.read(1).lower()

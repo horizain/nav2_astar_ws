@@ -70,6 +70,8 @@ void MpcController::configureParams(
 
   declareAndGet(node, "max_linear_acceleration", 1.0, params_.max_linear_acceleration);
   declareAndGet(node, "max_angular_acceleration", 3.2, params_.max_angular_acceleration);
+  prediction_pub_ = node->create_publisher<nav_msgs::msg::Path>(
+    "/controller_lab/predicted_trajectory", 10);
   params_.goal_tolerance = goal_tolerance_;
   params_.dt = std::max(1e-3, params_.dt);
   params_.horizon_steps = std::max(1, params_.horizon_steps);
@@ -83,6 +85,38 @@ void MpcController::configureParams(
     "MpcController(%s): steps=%d iter=%d dt=%.2f vmax=%.2f wmax=%.2f",
     plugin_name_.c_str(), params_.horizon_steps, params_.iterations,
     params_.dt, params_.max_linear_velocity, params_.max_angular_velocity);
+}
+
+void MpcController::activate()
+{
+  ControllerBase::activate();
+  if (prediction_pub_) {prediction_pub_->on_activate();}
+}
+
+void MpcController::deactivate()
+{
+  core_.reset();
+  publishPrediction();
+  if (prediction_pub_) {prediction_pub_->on_deactivate();}
+  ControllerBase::deactivate();
+}
+
+void MpcController::publishPrediction()
+{
+  if (!prediction_pub_ || !prediction_pub_->is_activated()) {return;}
+  nav_msgs::msg::Path path;
+  path.header.frame_id = global_frame_;
+  path.header.stamp = clock_->now();
+  for (const auto & predicted : core_.predictedTrajectory()) {
+    geometry_msgs::msg::PoseStamped pose;
+    pose.header = path.header;
+    pose.pose.position.x = predicted.x;
+    pose.pose.position.y = predicted.y;
+    pose.pose.orientation.z = std::sin(predicted.yaw / 2);
+    pose.pose.orientation.w = std::cos(predicted.yaw / 2);
+    path.poses.push_back(pose);
+  }
+  prediction_pub_->publish(path);
 }
 
 Control MpcController::computeCommand(
@@ -101,6 +135,7 @@ Control MpcController::computeCommand(
     };
 
   const auto result = core_.compute(robot, path, cost_at, current_speed, dt, current_angular_);
+  publishPrediction();
   if (!result.valid) {
     throw nav2_core::NoValidControl("MPC-lite 没有找到可行控制序列");
   }

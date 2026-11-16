@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "note": "All attempts retained; no automatic target substitution",
+  "attempts": [
+    {
+      "scenario": "narrow_passage",
+      "controller": "MPC",
+      "repetition": 1,
+      "exit_code": 0,
+      "functional_expectation_met": true,
+      "artifacts": [
+        "narrow_passage_MPC_7e8d006f6e"
+      ],
+      "log": "narrow_passage_MPC_repeat1.log"
+    },
+    {
+      "scenario": "blocked",
+      "controller": "MPC",
+      "repetition": 1,
+      "exit_code": 0,
+      "functional_expectation_met": true,
+      "artifacts": [
+        "blocked_MPC_f17b4b797e"
+      ],
+      "log": "blocked_MPC_repeat1.log"
+    },
+    {
+      "scenario": "unreachable",
+      "controller": "MPC",
+      "repetition": 1,
+      "exit_code": 0,
+      "functional_expectation_met": true,
+      "artifacts": [
+        "unreachable_MPC_73d247680c"
+      ],
+      "log": "unreachable_MPC_repeat1.log"
+    },
+    {
+      "scenario": "cancel_replan",
+      "controller": "MPC",
+      "repetition": 1,
+      "exit_code": 0,
+      "functional_expectation_met": true,
+      "artifacts": [
+        "cancel_replan_MPC_fd438e51cb"
+      ],
+      "log": "cancel_replan_MPC_repeat1.log"
+    }
+  ]
+}
