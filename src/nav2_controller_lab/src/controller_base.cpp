@@ -11,6 +11,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -133,6 +134,7 @@ std::vector<Pose2D> ControllerBase::transformPlanToLocalFrame()
 
   std::vector<Pose2D> path;
   path.reserve(global_plan_.poses.size());
+  std::unordered_map<std::string, geometry_msgs::msg::TransformStamped> transforms;
 
   for (const auto & input : global_plan_.poses) {
     geometry_msgs::msg::PoseStamped transformed = input;
@@ -145,15 +147,19 @@ std::vector<Pose2D> ControllerBase::transformPlanToLocalFrame()
       if (!tf_) {
         throw nav2_core::ControllerTFError("没有 TF buffer，无法变换全局路径");
       }
-      // 用当前时间变换，避免使用规划时刻的旧 TF 把路径“拉偏”
-      if (clock_) {
-        transformed.header.stamp = clock_->now();
-      }
+      // 一次控制周期内，每个源坐标系使用同一份最新可用变换。
+      // 按当前时间查询会因 SLAM TF 略有延迟而触发向未来外推。
       try {
+        auto transform = transforms.find(transformed.header.frame_id);
+        if (transform == transforms.end()) {
+          transform = transforms.emplace(
+            transformed.header.frame_id,
+            tf_->lookupTransform(
+              global_frame_, transformed.header.frame_id, tf2::TimePointZero,
+              tf2::durationFromSec(transform_tolerance_))).first;
+        }
         geometry_msgs::msg::PoseStamped output;
-        tf_->transform(
-          transformed, output, global_frame_,
-          tf2::durationFromSec(transform_tolerance_));
+        tf2::doTransform(transformed, output, transform->second);
         transformed = output;
       } catch (const tf2::TransformException & ex) {
         throw nav2_core::ControllerTFError(

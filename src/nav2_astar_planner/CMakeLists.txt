@@ -62,7 +62,7 @@ install(FILES global_planner_plugin.xml
   DESTINATION share/${PROJECT_NAME}
 )
 
-install(DIRECTORY params launch maps rviz
+install(DIRECTORY params launch rviz
   DESTINATION share/${PROJECT_NAME}
 )
 
