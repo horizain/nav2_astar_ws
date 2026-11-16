@@ -1,0 +1,29 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>mini_slam</name>
+  <version>0.1.0</version>
+  <description>从零手写的 2D 图优化 SLAM（correlative scan matching + 位姿图 + Ceres SPA），slam_toolbox 的教学复现。</description>
+  <maintainer email="horizain@example.com">horizain</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <!-- 算法核的第三方依赖（CMake 里 find_package(Eigen3)/find_package(Ceres)） -->
+  <depend>eigen</depend>
+  <depend>libceres-dev</depend>
+
+  <!-- ROS 包装层依赖；纯算法核（core/ + app/）不使用它们 -->
+  <depend>rclcpp</depend>
+  <depend>sensor_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>std_srvs</depend>
+  <depend>tf2_ros</depend>
+  <!-- Phase 4C：RViz 拖拽位姿图节点（标准 InteractiveMarkers，不自造 panel） -->
+  <depend>interactive_markers</depend>
+  <depend>visualization_msgs</depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
