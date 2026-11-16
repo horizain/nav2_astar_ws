@@ -45,7 +45,8 @@ class Mapper {
 
   explicit Mapper(Params params = {}) : params_(params) {}
 
-  // 切换模式：实际变化时清空定位跟踪状态（避免 mapping↔localization 残留）。
+  // 建图→定位延续最近位姿；定位→建图保留锚点以重新连接轨迹。
+  // 加载其他图会清除建图先验。
   void set_mode(Mode m);
   Mode mode() const { return mode_; }
 
@@ -108,7 +109,17 @@ class Mapper {
   Stats stats_;
   Mode mode_{Mode::Mapping};
 
-  // 定位模式跟踪状态：最近一次修正位姿与其对应里程计位姿
+  // 最近一帧建图扫描对应的里程计；加载其他图时清除。
+  std::optional<Pose2> last_mapping_odom_;
+
+  struct MappingAnchor {
+    Pose2 map_pose;
+    Pose2 odom_pose;
+  };
+  // 定位→建图的第一帧必须使用当前会话的定位结果重新接入旧图。
+  std::optional<MappingAnchor> mapping_anchor_;
+
+  // 定位模式跟踪状态：最近一次修正位姿与其对应里程计位姿。
   Pose2 last_loc_pose_{0.0, 0.0, 0.0};
   Pose2 last_loc_odom_{0.0, 0.0, 0.0};
   bool loc_initialized_{false};

@@ -11,7 +11,25 @@
 namespace mini_slam {
 
 void Mapper::set_mode(Mode m) {
-  if (mode_ != m) loc_initialized_ = false;
+  if (mode_ != m) {
+    // 记录定位的 map/odom 对，供继续建图首帧重新连接旧图。
+    if (mode_ == Mode::Localization && m == Mode::Mapping &&
+        loc_initialized_ && graph_.size() > 0) {
+      mapping_anchor_ = MappingAnchor{last_loc_pose_, last_loc_odom_};
+    } else if (mode_ == Mode::Mapping && m == Mode::Localization) {
+      loc_initialized_ = false;
+      // 还没处理建图扫描就切回定位时，仍沿用先前定位锚点。
+      if (mapping_anchor_) {
+        initialize_localization(mapping_anchor_->map_pose, mapping_anchor_->odom_pose);
+        mapping_anchor_.reset();
+      } else if (last_mapping_odom_ && graph_.size() > 0) {
+        initialize_localization(compose(map_odom_tf(), *last_mapping_odom_),
+                                *last_mapping_odom_);
+      }
+    } else {
+      loc_initialized_ = false;
+    }
+  }
   mode_ = m;
 }
 
@@ -156,6 +174,7 @@ Mapper::NodeAdded Mapper::process_scan(const LaserScan& scan,
                                        const Pose2& odom_pose) {
   NodeAdded out;
   ++stats_.scans;
+  last_mapping_odom_ = odom_pose;
 
   // 裁剪超远点（glass/穿墙误读、超量程回波），匹配与建图都更稳
   LaserScan trimmed = scan;
@@ -172,6 +191,29 @@ Mapper::NodeAdded Mapper::process_scan(const LaserScan& scan,
     });
   }
   auto scan_ptr = std::make_shared<const LaserScan>(trimmed);
+
+  if (mapping_anchor_ && graph_.size() > 0) {
+    // 不同会话的原始 odom 不可直接相减。用定位结果及当前会话增量
+    // 建立新轨迹的首帧，并以低权重连接地图中最近的已有节点。
+    const Pose2 prior = compose(
+        mapping_anchor_->map_pose, delta_pose(mapping_anchor_->odom_pose, odom_pose));
+    const auto& vertices = graph_.vertices();
+    const auto nearest = std::min_element(
+        vertices.begin(), vertices.end(), [&](const Vertex& a, const Vertex& b) {
+          return distance_xy(a.pose, prior) < distance_xy(b.pose, prior);
+        });
+    const int anchor_id = nearest->id;
+    const Pose2 relative = delta_pose(nearest->pose, prior);
+    const double sigma = std::max(params_.match_sigma_max, params_.odom_sigma_xy);
+    const double information = 1.0 / (sigma * sigma);
+    out.added = true;
+    out.id = graph_.add_vertex(odom_pose, prior, scan_ptr);
+    graph_.add_edge(anchor_id, out.id, relative, information, information,
+                    information, /*loop=*/false);
+    ++stats_.nodes;
+    mapping_anchor_.reset();
+    return out;
+  }
 
   // 首帧：无条件入图
   if (graph_.size() == 0) {
@@ -404,12 +446,19 @@ bool Mapper::load_graph(const std::string& path, std::string* err) {
   graph_.bump_pose_revision();
   graph_.rebuild_index();
   stats_ = {};              // 新会话从零计数
+  last_mapping_odom_.reset(); // 新图不能沿用原图的建图先验
+  mapping_anchor_.reset();    // 不能把旧图定位锚点接到新图
   loc_initialized_ = false; // 定位跟踪状态随之失效
   return true;
 }
 
 Pose2 Mapper::map_odom_tf() const {
   if (graph_.size() == 0) return {};
+  if (mode_ == Mode::Mapping && mapping_anchor_) {
+    Pose2 t = compose(mapping_anchor_->map_pose, inverse(mapping_anchor_->odom_pose));
+    t.theta = wrap_angle(t.theta);
+    return t;
+  }
   const Vertex& last = graph_.vertices().back();
   Pose2 t = compose(last.pose, inverse(last.odom_pose));
   t.theta = wrap_angle(t.theta);  // TF 输出统一表示

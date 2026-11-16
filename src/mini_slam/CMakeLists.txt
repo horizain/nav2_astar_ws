@@ -38,7 +38,7 @@ foreach(t IN ITEMS feature_probe test_field test_matcher test_spa
                 test_covariance test_connected_chain test_sparsify
                 test_angle_wrap test_grid_boundary test_odom_at
                 test_validation test_map_output test_map_incremental
-                test_interactive_move)
+                test_interactive_move test_snapshot)
   add_executable(${t} app/tests/${t}.cpp)
   target_link_libraries(${t} PRIVATE mini_slam_core)
   add_test(NAME ${t} COMMAND ${t})
@@ -86,6 +86,11 @@ if(ament_cmake_FOUND)
       visualization_msgs::visualization_msgs)
     install(TARGETS mini_slam_node DESTINATION lib/${PROJECT_NAME})
     install(DIRECTORY ros/launch DESTINATION share/${PROJECT_NAME})
+
+    # 控制终端：载图结果未知时禁止手动接管，明确失败时恢复原状态。
+    add_test(NAME test_console_failures
+             COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/ros/tests/test_console_failures.py)
+    set_tests_properties(test_console_failures PROPERTIES TIMEOUT 30)
 
     # ROS 级并发回归：worker 灌帧与 save/load/stats/timer 同时运行。
     add_executable(test_node_concurrency ros/tests/test_node_concurrency.cpp)

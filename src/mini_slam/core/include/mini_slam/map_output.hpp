@@ -36,4 +36,10 @@ inline bool ensure_parent_directory(const std::filesystem::path& file,
 bool write_map_files(const std::string& prefix, const OccupancyMap& map,
                      std::string* err);
 
+// 用同一份不可变位姿图快照生成 .mmpg 和对应栅格文件。
+// 若任一目标或临时文件已存在则拒绝，失败时保留已经完成的文件供检查。
+bool write_snapshot(const std::string& prefix, const PoseGraph& graph,
+                    double resolution, double range_max, double margin,
+                    std::string* err);
+
 }  // namespace mini_slam::map_output

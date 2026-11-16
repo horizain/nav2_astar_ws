@@ -380,6 +380,35 @@ class MiniSlamNode : public rclcpp::Node {
             res->message = res->success ? ("已保存 " + path) : err;
           }
         });
+    snapshot_srv_ = create_service<std_srvs::srv::Trigger>(
+        "save_snapshot",
+        [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+               std::shared_ptr<std_srvs::srv::Trigger::Response> res) {
+          std::unique_ptr<mini_slam::PoseGraph> snapshot;
+          std::string prefix;
+          double resolution = 0.0, range_max = 0.0, margin = 0.0;
+          {
+            std::lock_guard<std::mutex> lock(mapper_mutex_);
+            const std::filesystem::path graph_path(
+                graph_path_.empty() ? "mini_slam_graph.mmpg" : graph_path_);
+            if (graph_path.extension() != ".mmpg") {
+              res->success = false;
+              res->message = "graph_path 必须以 .mmpg 结尾";
+              return;
+            }
+            auto output = graph_path;
+            output.replace_extension();
+            prefix = output.string();
+            snapshot = std::make_unique<mini_slam::PoseGraph>(mapper_->graph());
+            resolution = resolution_;
+            range_max = mapper_->params().map_range_max;
+            margin = mapper_->params().map_margin;
+          }
+          std::string err;
+          res->success = mini_slam::map_output::write_snapshot(
+              prefix, *snapshot, resolution, range_max, margin, &err);
+          res->message = res->success ? ("已保存同一快照: " + prefix) : err;
+        });
     load_srv_ = create_service<std_srvs::srv::Trigger>(
         "load_graph",
         [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
@@ -1197,6 +1226,7 @@ class MiniSlamNode : public rclcpp::Node {
   std::uint64_t map_builder_generation_{0};
 
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr save_srv_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr snapshot_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr load_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr stats_srv_;
   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr

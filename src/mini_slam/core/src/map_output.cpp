@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "mini_slam/png_writer.hpp"
+#include "mini_slam/serialization.hpp"
 
 namespace mini_slam::map_output {
 
@@ -121,6 +122,50 @@ bool write_map_files(const std::string& prefix, const OccupancyMap& map,
            {meta_tmp, meta_path},
            {yaml_tmp, yaml_path}}) {
     if (const auto r = commit(tmp, dst); !r) return fail(r.error());
+  }
+  return true;
+}
+
+bool write_snapshot(const std::string& prefix, const PoseGraph& graph,
+                    double resolution, double range_max, double margin,
+                    std::string* err) {
+  if (prefix.empty()) {
+    if (err) *err = "地图前缀不能为空";
+    return false;
+  }
+
+  // 预检成套目标和临时文件，避免覆盖已有地图或未完成的上次输出。
+  for (const char* ext : {".mmpg", ".mmpg.tmp", ".png", ".png.tmp",
+                          ".meta", ".meta.tmp", ".pgm", ".pgm.tmp",
+                          ".yaml", ".yaml.tmp"}) {
+    const std::filesystem::path path = prefix + ext;
+    std::error_code ec;
+    const auto status = std::filesystem::symlink_status(path, ec);
+    // 不存在的路径可用；失效软链接仍是已有目录项，必须拒绝覆盖。
+    if (ec && ec != std::errc::no_such_file_or_directory) {
+      if (err) *err = "检查输出文件失败: " + path.string() + ": " + ec.message();
+      return false;
+    }
+    if (status.type() != std::filesystem::file_type::not_found) {
+      if (err) *err = "输出文件已存在: " + path.string();
+      return false;
+    }
+  }
+
+  const auto map = MapBuilder::render(graph, resolution, range_max, margin);
+  if (map.width <= 0 || map.height <= 0) {
+    if (err) *err = "位姿图没有可渲染的地图";
+    return false;
+  }
+
+  const auto graph_result = serialization::save_graph(graph, prefix + ".mmpg");
+  if (!graph_result) {
+    if (err) *err = "保存位姿图失败: " + graph_result.error();
+    return false;
+  }
+  if (!write_map_files(prefix, map, err)) {
+    if (err) *err = "位姿图已保存，栅格地图保存失败: " + *err;
+    return false;
   }
   return true;
 }
