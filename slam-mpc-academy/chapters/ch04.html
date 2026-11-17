@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 4 章 · 里程计与航迹推算 | SLAM·MPC 导航课堂</title>
+<link rel="stylesheet" href="../assets/vendor/hljs/atom-one-dark.min.css">
+<link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="../css/style.css">
+<script>window.SITE_ROOT = "..";</script>
+</head>
+<body>
+<div id="site-header"></div>
+
+<header class="page-head"><div class="container">
+  <div class="crumb"><a href="../index.html">首页</a> / 第二部分 · mini-SLAM</div>
+  <h1>第 4 章 · 里程计与航迹推算</h1>
+  <p class="sub">里程计是机器人最便宜的"自我感知"：数轮子转了多少圈。它每一步都相当准，
+     但每一步也都带着微小误差——而微小误差会滚雪球。这一章我们亲手制造一场"漂移惨案"，
+     并用数学解释它为什么必然发生。理解了这一章，你就理解了 SLAM 存在的全部理由。</p>
+  <div class="meta-row">
+    <span class="chip blue">预计 30 分钟</span>
+    <span class="chip">前置：第 3 章</span>
+    <span class="chip">配套代码：robot.py · run_slam.py（数据采集段）</span>
+  </div>
+</div></header>
+
+<div class="chapter-wrap">
+  <aside class="toc" id="toc"></aside>
+  <article class="content">
+
+    <h2 id="dead-reckoning"><span class="anchor-num">4.1</span>航迹推算：用轮子猜位置</h2>
+    <p><strong>里程计（odometry）</strong>来自电机编码器：轮子每转一圈输出固定数量的脉冲，
+    除以轮径和轮距就能换算出"底盘前进了多少、转了多少"。把每一步的运动累加起来推算当前位姿，
+    叫<strong>航迹推算（dead reckoning）</strong>——这个名字来自航海时代："dead" 是 "deduced" 的缩写讹传，
+    即"从已知推未知"。</p>
+    <p>在第 3 章的模型里，里程计每步收到的测量是：</p>
+    <div class="math-block">$$
+      \tilde v_k = v_k + \epsilon_v,\ \epsilon_v\sim\mathcal N(0,\sigma_v^2)
+      \qquad
+      \tilde\omega_k = \omega_k + \epsilon_\omega,\ \epsilon_\omega\sim\mathcal N(0,\sigma_\omega^2)
+    $$</div>
+    <p>然后像真值一样积分。关键区别在于：<strong>真值的运动每一步是独立的</strong>（打滑不会累积），
+    而<strong>里程计的位姿是"从起点累积到现在"的积分</strong>——每一步的误差都永远留在历史里。</p>
+
+    <div class="sim">
+      <div class="sim-head"><span class="sim-dot"></span>
+        <span class="sim-title">交互 · 航迹推算漂移实验</span>
+        <span class="sim-hint">拖动"噪声倍率"滑杆，看里程计（橙）如何逐渐背离真值（绿）</span></div>
+      <canvas id="sim-drift" style="height: 460px"></canvas>
+      <div class="sim-bar">
+        <button class="sbtn primary" id="sim-drift-play">暂停 / 继续</button>
+        <button class="sbtn" id="sim-drift-reset">重置</button>
+        <span class="sctl">里程计噪声
+          <input type="range" id="sim-drift-noise" min="0.5" max="3" step="0.25" value="1">
+          <span class="val" id="sim-drift-noise-val">1×</span></span>
+        <span class="sctl">倍速
+          <input type="range" id="sim-drift-speed" min="1" max="5" step="0.5" value="1">
+          <span class="val" id="sim-drift-speed-val">1×</span></span>
+      </div>
+      <div class="legend">
+        <span><i style="background:#10b981"></i>真值轨迹</span>
+        <span><i style="background:#f59e0b"></i>里程计轨迹</span>
+        <span><i style="background:#ef4444"></i>当前漂移量</span>
+      </div>
+    </div>
+
+    <h2 id="why-drift"><span class="anchor-num">4.2</span>漂移为什么会滚雪球：一个 3 行的推导</h2>
+    <p>最要命的是<strong>角速度误差</strong>。它不直接让位置出错，而是让"朝向"出错；
+    朝向错了，之后每一步前进都会往错误的方向走——误差被"路径长度"放大。</p>
+    <p>定量算一下。角速度噪声每步独立，积分 $t$ 步后朝向误差：</p>
+    <div class="math-block">$$
+      \sigma_\theta(t) = \sigma_\omega\,\Delta t\,\sqrt{t}
+      \quad\text{（随机游走：方差线性增长，标准差按 }\sqrt{t}\text{ 增长）}
+    $$</div>
+    <p>位置误差近似为"累计路径长 × 朝向误差"：</p>
+    <div class="math-block">$$
+      \sigma_p(t) \;\approx\; L(t)\,\sigma_\theta(t)
+      \;=\; \underbrace{v\,t}_{\text{走过的路}} \cdot\; \sigma_\omega \Delta t\, \sqrt{t}
+      \;\propto\; t^{1.5}
+    $$</div>
+    <p>这就是航迹推算的死刑判决：<strong>位置误差按 $t^{1.5}$ 增长，永无上界。</strong>
+    课程参数下（$v=0.55$ m/s，$\sigma_\omega = 0.055$ rad/s，$\Delta t = 0.05$ s），
+    跑 161 秒、87 米后的终点误差约 1.6 m——上方仿真里你刚刚亲眼看到。</p>
+
+    <figure class="fig">
+      <img src="../assets/img/fig_odom_drift.png" alt="里程计漂移图">
+      <figcaption><b>Python 全速版漂移惨案（run_slam.py 实跑生成）。</b>机器人跑两圈共 161 s，
+      里程计终点偏出真值 <b>2.32 m</b>——注意橙色轨迹的"圆"已经变形：早期积累的朝向误差让整圈都歪了。
+      这正是 SLAM 要修复的东西。</figcaption>
+    </figure>
+
+    <div class="box box-theory">
+      <div class="box-title">误差的三个来源（真实机器人）</div>
+      <ul>
+        <li><strong>轮径误差</strong>：标称 100 mm 的轮子实际 99.2 mm → 系统性走短 0.8%（可标定）</li>
+        <li><strong>轮距误差</strong>：轮距不准 → 任何直线行驶都悄悄转偏（可标定）</li>
+        <li><strong>打滑与地面</strong>：地毯、水渍、急转 —— 随机、不可标定（只能靠 SLAM 兜底）</li>
+      </ul>
+      前两个是<strong>系统误差</strong>（均值非零，可用 UMBmark 等标定流程消掉）；
+      第三个是<strong>随机误差</strong>——数学上就是本章的高斯噪声。SLAM 主要为第三者而生。
+    </div>
+
+    <h2 id="wrap-angle"><span class="anchor-num">4.3</span>第一个经典 bug：角度回绕</h2>
+    <p>朝向 $\theta$ 存在天然的"周期歧义"：+179° 与 −179° 其实只差 2°。直接相减会得到 358°，
+    让任何基于"角度误差"的控制器瞬间发疯。所有涉及角度差的地方都必须经过归一化：</p>
+    <div class="codeblock"><div class="cb-head"><span class="cb-file">任何地方的通用写法</span><button class="copy">复制</button></div>
+<pre><code class="language-python">def wrap(a):
+    """把任意角度归一化到 (-π, π]"""
+    return (a + np.pi) % (2 * np.pi) - np.pi
+
+heading_err = wrap(np.arctan2(dy, dx) - theta)   # ✔ 永远取最短转角</code></pre></div>
+    <p>这句话在课程代码里出现了 6 次（控制器、ICP、位姿图残差、回环检测……）。
+    <strong>当你发现机器人"莫名原地打转"时，第一反应就该是搜代码里缺了哪一处 wrap。</strong></p>
+
+    <h2 id="odometry-good"><span class="anchor-num">4.4</span>里程计虽然漂，但并不没用</h2>
+    <p>看到这里你可能想：既然必然漂移，还要里程计干嘛？——因为<strong>漂移是"慢性病"，短期很准</strong>。</p>
+    <ul>
+      <li><strong>短时相对运动可信</strong>：0.1 s 内的位移误差微乎其微。所以里程计给 ICP 提供"初值"（第 5 章）、
+          给关键帧筛选提供依据（第 8 章）——都是只用它的"短期准确性"。</li>
+      <li><strong>测量的是"运动"而非"位置"</strong>：漂移来自积分；两帧之间的增量 $\Delta$ 误差很小。
+          位姿图优化（第 7 章）用的正是这些可靠的相对增量，配合偶尔的回环来"钉死"长期漂移。</li>
+    </ul>
+    <div class="box box-tip">
+      <div class="box-title">记住这个分工</div>
+      <p><strong>里程计：快、糙、无遗漏（每步都有）。激光：准、慢、只看到局部。</strong>
+      后续所有章节都是在设计"如何让这两者各出所长"——里程计当骨架，激光当矫正器。</p>
+    </div>
+
+    <h2 id="lab"><span class="anchor-num">4.5</span>动手实验</h2>
+    <ol>
+      <li>在上方仿真里把噪声调到 3×，观察 2 圈后的漂移是否约等于 1× 时的 3 倍？（提示：$\sigma_p \propto \sigma_\omega$，是线性关系。）</li>
+      <li>用 Python 验证 $t^{1.5}$ 律：<code>run_slam.py</code> 里的 <code>err_odom_full</code> 曲线（生成的 fig_ate.png 中橙色线）。
+         在对数坐标下画 log(err)–log(t)，斜率应接近 1.5（中段；两端受路径几何影响会偏离）。</li>
+      <li>思考题：如果里程计的误差是<strong>系统性的</strong>（比如轮子实际比标称小 1%），漂移会是什么形状？
+         （答案在下面练习 2。）</li>
+    </ol>
+
+    <div class="box box-check">
+      <div class="box-title">检查点 · 离开本章前</div>
+      <ul>
+        <li>能推导/复述漂移 ∝ $t^{1.5}$ 的来源（随机游走 × 路径放大）</li>
+        <li>玩过漂移仿真并观察到"误差滚雪球"现象</li>
+        <li>知道 wrap() 解决什么问题，会在代码里检查它</li>
+        <li>能说出里程计"短期准、长期漂"的分工，以及它在后续章节的两个用途</li>
+      </ul>
+    </div>
+
+    <details class="ex"><summary>练习 1 · 数值验证随机游走</summary>
+      <div class="ans"><code>errs = []</code> 循环 20 个种子跑 60 s，记录 <code>std</code>。
+      理论值 $\sigma_\theta(60) = 0.055 \times 0.05 \times \sqrt{1200} \approx 0.095$ rad。
+      多种子实验均值应落在 0.09–0.10 rad——单次实验天然有涨落（样本量 1200 步）。</div>
+    </details>
+    <details class="ex"><summary>练习 2 · 系统性误差的漂移形状</summary>
+      <div class="ans">轮子偏小 1% → 每步都多"以为"走了 1% 的路。跑正方形路线 4 圈，估计终点相对真值
+      沿径向<strong>向外均匀膨胀</strong>约 4%（路程越长偏得越多），且几乎无随机抖动——形状固定、可预测。
+      这种误差靠"标定"消灭（测真实轮径、真实轮距），随机误差才需要 SLAM。真实项目两件事都要做。</div>
+    </details>
+
+    <nav class="pager" id="pager"></nav>
+  </article>
+</div>
+
+<div id="site-footer"></div>
+<script src="../assets/vendor/katex/katex.min.js"></script>
+<script src="../assets/vendor/katex/contrib/auto-render.min.js"></script>
+<script src="../assets/vendor/hljs/highlight.min.js"></script>
+<script src="../js/main.js"></script>
+<script src="../js/sim/core.js"></script>
+<script src="../js/sim/sim-drift.js"></script>
+</body>
+</html>

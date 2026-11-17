@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 1 章 · 课程总览与环境准备 | SLAM·MPC 导航课堂</title>
+<link rel="stylesheet" href="../assets/vendor/hljs/atom-one-dark.min.css">
+<link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="../css/style.css">
+<script>window.SITE_ROOT = "..";</script>
+</head>
+<body>
+<div id="site-header"></div>
+
+<header class="page-head"><div class="container">
+  <div class="crumb"><a href="../index.html">首页</a> / 第一部分 · 准备</div>
+  <h1>第 1 章 · 课程总览与环境准备</h1>
+  <p class="sub">这一章不写公式。我们先把"要造的东西"看清楚、把路线图拆成 11 个台阶、
+     再花 10 分钟把环境搭好。离开这一章时，你的电脑上应该已经跑出了第一张 SLAM 地图。</p>
+  <div class="meta-row">
+    <span class="chip blue">预计 20 分钟</span>
+    <span class="chip">配套代码：整个 code/mini_slam 仓库</span>
+  </div>
+</div></header>
+
+<div class="chapter-wrap">
+  <aside class="toc" id="toc"></aside>
+  <article class="content">
+
+    <h2 id="what-is-slam"><span class="anchor-num">1.1</span>SLAM 到底在解决什么问题？</h2>
+    <p>想象你被蒙上眼睛推进一个陌生的房间，然后摘下眼罩——但只给你一个<strong>会转的激光测距仪</strong>
+    和一个<strong>计步器</strong>。现在要求你回答两个问题：</p>
+    <ul>
+      <li><strong>我在哪？</strong>—— 每一时刻的位置和朝向（定位）</li>
+      <li><strong>这个房间长什么样？</strong>—— 一张完整的地图（建图）</li>
+    </ul>
+    <p>难就难在：<strong>定位需要地图，建图又需要定位。</strong>知道"墙在正前方 3 米"是相对你此刻的位置和朝向说的；
+    而要知道"此刻的位置"，你又得知道已经走过了哪些墙。这是一个先有鸡还是先有蛋的问题——
+    <strong>SLAM（Simultaneous Localization And Mapping，同步定位与建图）就是把这个"死循环"打破的系统</strong>。</p>
+
+    <div class="box box-theory">
+      <div class="box-title">本章出现的三个关键词</div>
+      <ul>
+        <li><strong>里程计（Odometry）</strong>：机器人靠轮子转数"感觉"到的运动 —— 便宜、即时，但误差会滚雪球。</li>
+        <li><strong>激光雷达（LiDAR）</strong>：旋转测量一圈"我在哪、四面墙各有多远"—— 精确，但只告诉你相对形状。</li>
+        <li><strong>SLAM</strong>：把两者 clever 地融合起来，同时恢复轨迹和地图。</li>
+      </ul>
+    </div>
+
+    <h2 id="showcase"><span class="anchor-num">1.2</span>课程结束时，你将拥有什么</h2>
+    <p>两个真实跑通的成果（下图均由本课程代码生成，不是示意图）：</p>
+    <figure class="fig">
+      <img src="../assets/img/fig_slam_result.png" alt="mini-SLAM 结果">
+      <figcaption><b>成果 1 · mini-SLAM。</b>机器人（蓝线）在 20m×12m 的房间里跑两圈，仅凭带噪声的
+      里程计和激光，同时恢复出轨迹与占据栅格地图。注意橙色"纯里程计"轨迹已经漂出了房间；
+      SLAM 轨迹则紧贴绿色真值（ATE 误差 0.22 m ≈ 路径长度的 0.25%）。</figcaption>
+    </figure>
+    <figure class="fig">
+      <img src="../assets/img/fig_mpc_track.png" alt="MPC 跟踪结果">
+      <figcaption><b>成果 2 · MPC 轨迹跟踪。</b>给定任意参考路径，机器人在速度 / 角速度约束下
+      以 0.012 m 的横向误差 RMSE 稳稳跟踪；急弯处表现显著优于经典纯追踪算法（第 9 章有对比实验）。</figcaption>
+    </figure>
+    <p>把两者拼起来，就得到一个<strong>最小但完整的移动机器人导航系统</strong>：
+    在未知环境里，自己建图 → 自己规划路径 → 自己控制执行。</p>
+
+    <h2 id="roadmap"><span class="anchor-num">1.3</span>技术路线：11 个台阶</h2>
+    <p>整个项目拆成下面的流水线，每一块对应课程的一章。看完这张图，你已经"知道全局"了——
+    后面 10 章只是逐块弄懂它。</p>
+
+    <figure class="fig">
+      <svg viewBox="0 0 1060 330" style="width:100%; height:auto; font-family:inherit">
+        <defs>
+          <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0 0L10 5L0 10z" fill="#94a3b8"/>
+          </marker>
+        </defs>
+        <g font-size="14" text-anchor="middle">
+          <!-- row 1 -->
+          <g>
+            <rect x="20"  y="30" width="180" height="72" rx="12" fill="#eff4ff" stroke="#93c5fd"/>
+            <text x="110" y="58" font-weight="700" fill="#1e40af">第 3 章 · 仿真器</text>
+            <text x="110" y="80" font-size="12" fill="#475569">世界 / 雷达 / 运动学</text>
+            <rect x="230" y="30" width="180" height="72" rx="12" fill="#eff4ff" stroke="#93c5fd"/>
+            <text x="320" y="58" font-weight="700" fill="#1e40af">第 4 章 · 里程计</text>
+            <text x="320" y="80" font-size="12" fill="#475569">航迹推算 → 漂移</text>
+            <rect x="440" y="30" width="180" height="72" rx="12" fill="#eff4ff" stroke="#93c5fd"/>
+            <text x="530" y="58" font-weight="700" fill="#1e40af">第 5 章 · ICP</text>
+            <text x="530" y="80" font-size="12" fill="#475569">扫描匹配定相对位姿</text>
+            <rect x="650" y="30" width="180" height="72" rx="12" fill="#eff4ff" stroke="#93c5fd"/>
+            <text x="740" y="58" font-weight="700" fill="#1e40af">第 6 章 · 占据栅格</text>
+            <text x="740" y="80" font-size="12" fill="#475569">log-odds 逐帧建图</text>
+            <rect x="860" y="30" width="180" height="72" rx="12" fill="#eff4ff" stroke="#93c5fd"/>
+            <text x="950" y="58" font-weight="700" fill="#1e40af">第 7 章 · 位姿图</text>
+            <text x="950" y="80" font-size="12" fill="#475569">回环检测 + GN 优化</text>
+          </g>
+          <g stroke="#94a3b8" stroke-width="1.6">
+            <line x1="200" y1="66" x2="228" y2="66" marker-end="url(#ar)"/>
+            <line x1="410" y1="66" x2="438" y2="66" marker-end="url(#ar)"/>
+            <line x1="620" y1="66" x2="648" y2="66" marker-end="url(#ar)"/>
+            <line x1="830" y1="66" x2="858" y2="66" marker-end="url(#ar)"/>
+            <path d="M950 104 v34 H110 v30" fill="none" marker-end="url(#ar)"/>
+          </g>
+          <!-- row 2 -->
+          <g>
+            <rect x="20" y="170" width="240" height="72" rx="12" fill="#fff7e6" stroke="#fbbf24"/>
+            <text x="140" y="198" font-weight="700" fill="#92400e">第 8 章 · 组装 mini-SLAM</text>
+            <text x="140" y="220" font-size="12" fill="#475569">关键帧 + 前端 + 后端 + ATE 评估</text>
+            <rect x="290" y="170" width="240" height="72" rx="12" fill="#ecfdf5" stroke="#6ee7b7"/>
+            <text x="410" y="198" font-weight="700" fill="#065f46">第 9 章 · MPC 控制器</text>
+            <text x="410" y="220" font-size="12" fill="#475569">误差模型 + QP（OSQP）</text>
+            <rect x="560" y="170" width="240" height="72" rx="12" fill="#ecfdf5" stroke="#6ee7b7"/>
+            <text x="680" y="198" font-weight="700" fill="#065f46">第 10 章 · 导航全栈</text>
+            <text x="680" y="220" font-size="12" fill="#475569">A* 规划 + 拉直 + MPC 跟踪</text>
+            <rect x="830" y="170" width="210" height="72" rx="12" fill="#f2f4f7" stroke="#cbd5e1"/>
+            <text x="935" y="198" font-weight="700" fill="#1e293b">第 11 章 · 进阶</text>
+            <text x="935" y="220" font-size="12" fill="#475569">真车 · ROS 2 · 3D SLAM</text>
+          </g>
+          <g stroke="#94a3b8" stroke-width="1.6">
+            <line x1="260" y1="206" x2="288" y2="206" marker-end="url(#ar)"/>
+            <line x1="530" y1="206" x2="558" y2="206" marker-end="url(#ar)"/>
+            <line x1="800" y1="206" x2="828" y2="206" marker-end="url(#ar)"/>
+          </g>
+          <!-- base -->
+          <rect x="20" y="272" width="1020" height="40" rx="10" fill="#f2f4f7" stroke="#cbd5e1"/>
+          <text x="530" y="298" font-size="13" fill="#475569">第 2 章 · 数学最小集（概率 · log-odds · 最小二乘 · SE(2)）—— 随用随查的工具箱</text>
+        </g>
+      </svg>
+      <figcaption><b>课程技术路线。</b>上半行是 SLAM 前端到后端，下半行是控制与导航；
+      第 2 章的数学工具箱垫底，需要时回头翻。</figcaption>
+    </figure>
+
+    <h2 id="env"><span class="anchor-num">1.4</span>环境准备（10 分钟）</h2>
+    <p>只需要 Python ≥ 3.10 和四个常用库。<strong>不需要 ROS、不需要 GPU、不需要真实机器人。</strong></p>
+
+    <div class="codeblock"><div class="cb-head"><span class="cb-file">terminal —— 安装依赖</span><button class="copy">复制</button></div>
+<pre><code class="language-bash"># 1) 获取课程代码（如果还没有）
+git clone &lt;课程仓库&gt;  # 或者直接把 code/mini_slam 目录拷走
+
+# 2) 创建独立虚拟环境（推荐，不污染系统）
+cd mini_slam
+python3 -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+
+# 3) 安装四个依赖
+pip install -r requirements.txt  # numpy scipy matplotlib osqp</code></pre></div>
+
+    <div class="box box-warn">
+      <div class="box-title">踩坑提醒 · Ubuntu 24.04+ 的 PEP 668</div>
+      <p>在新版 Ubuntu / Debian 上直接 <code>pip install</code> 会报错
+      <code>externally-managed-environment</code>。这是系统保护机制：不让你往系统 Python 里乱装包。
+      用上面的虚拟环境（venv）方式即可绕开；也可加 <code>--user</code> 安装到用户目录。</p>
+    </div>
+
+    <p>装好后，跑第一个程序——<strong>完整的 mini-SLAM</strong>（约 10 秒）：它会仿真机器人跑两圈、
+    建图、做回环优化，并把所有结果图输出到 <code>assets/img/</code>：</p>
+
+    <div class="codeblock"><div class="cb-head"><span class="cb-file">terminal —— 第一次实跑</span><button class="copy">复制</button></div>
+<pre><code class="language-bash">python run_slam.py</code></pre></div>
+
+    <div class="codeblock"><div class="cb-head"><span class="cb-file">预期的输出（数字可能略有差异）</span><button class="copy">复制</button></div>
+<pre><code class="language-text">=== 第 1 步：采集数据（机器人跑两圈） ===
+  轨迹 3220 帧（161.0 s，路径长 87.3 m）
+=== 第 2 步：ICP 前端 + 回环检测 ===
+[前端] 总帧数 3220，关键帧 110（退化帧 0）
+[前端] 回环边 10 条
+=== 第 3 步：位姿图优化（Gauss-Newton） ===
+  [PGO] iter  1: cost =     624.7163
+  [PGO] iter  2: cost =      60.7015
+...
+[评估] 关键帧 ATE RMSE  优化前: 0.224 m → 优化后: 0.223 m</code></pre></div>
+
+    <p>看到 <code>ATE RMSE</code> 这行，你的环境就完全就绪了。这三个数字后面会反复出现：</p>
+    <table class="tbl">
+      <tr><th>输出</th><th>含义</th><th>典型值</th></tr>
+      <tr><td><code>路径长 87.3 m</code></td><td>机器人两圈走过的总里程</td><td>—</td></tr>
+      <tr><td><code>回环边 10 条</code></td><td>后端检测到 10 次"重游旧地"</td><td>&gt; 0（没有回环 = 漂移无法修正）</td></tr>
+      <tr><td><code>ATE RMSE</code></td><td>估计轨迹与真值的平均误差（第 8 章细讲）</td><td>里程计 0.78 m → SLAM 0.22 m</td></tr>
+    </table>
+
+    <h2 id="repo"><span class="anchor-num">1.5</span>代码仓库导览</h2>
+    <table class="tbl">
+      <tr><th>文件</th><th>内容</th><th>行数</th><th>对应章节</th></tr>
+      <tr><td><code>world.py</code></td><td>2D 世界（线段墙体）+ 光线投射</td><td>~90</td><td>第 3 章</td></tr>
+      <tr><td><code>robot.py</code></td><td>运动学 · 里程计噪声 · 雷达 · 航点跟踪</td><td>~130</td><td>第 3、4 章</td></tr>
+      <tr><td><code>icp.py</code></td><td>点到点 ICP（SVD 闭式解）</td><td>~90</td><td>第 5 章</td></tr>
+      <tr><td><code>grid_map.py</code></td><td>占据栅格 + log-odds 更新</td><td>~90</td><td>第 6 章</td></tr>
+      <tr><td><code>pose_graph.py</code></td><td>SE(2) 位姿图 + Gauss-Newton</td><td>~110</td><td>第 7 章</td></tr>
+      <tr><td><code>run_slam.py</code></td><td>完整 SLAM 流水线 + 评估 + 出图</td><td>~300</td><td>第 8 章</td></tr>
+      <tr><td><code>run_mpc.py</code></td><td>MPC 控制器（OSQP）+ 纯追踪对照</td><td>~330</td><td>第 9 章</td></tr>
+      <tr><td><code>run_astar.py</code></td><td>A* 规划 + 膨胀 + 视线拉直</td><td>~180</td><td>第 10 章</td></tr>
+    </table>
+    <p>建议阅读顺序就是章节顺序。每个文件都是自包含的，注释密度按"新手第一遍就能读懂"来写。</p>
+
+    <h2 id="how-to-learn"><span class="anchor-num">1.6</span>怎么学效果最好</h2>
+    <ul>
+      <li><strong>手敲代码，不要复制粘贴。</strong>SLAM 的每个公式都"住在"某一行代码里，手敲一遍等于把公式在脑子里过一遍。</li>
+      <li><strong>每个交互仿真至少玩 3 分钟。</strong>调坏它：把噪声拉满、把初值拖歪——<em>知道系统怎么坏掉，比知道它怎么工作更有用</em>。</li>
+      <li><strong>卡住就回头看检查点。</strong>每章末尾有一个"离开本章前你应该能做到"清单，全部打勾再前进。</li>
+      <li><strong>改坏东西是好事。</strong>课程代码没有"不能动"的部分；第 8 章还有专门的"破坏性实验"清单。</li>
+    </ul>
+
+    <div class="box box-check">
+      <div class="box-title">检查点 · 离开本章前</div>
+      <ul>
+        <li>能用自己的话解释"定位与建图互为前提"的鸡生蛋问题</li>
+        <li>虚拟环境建好，<code>pip install -r requirements.txt</code> 成功</li>
+        <li><code>python run_slam.py</code> 跑通，看到 ATE RMSE 数字，并在 <code>assets/img/</code> 找到生成的 PNG</li>
+        <li>知道仓库里 8 个文件分别负责什么</li>
+      </ul>
+    </div>
+
+    <details class="ex"><summary>练习 1 · 换一个世界尺寸跑 run_slam.py</summary>
+      <div class="ans">打开 <code>world.py</code>，把 <code>World(size=(20.0, 12.0))</code> 改成
+      <code>(14.0, 10.0)</code> 再跑。注意 <code>run_slam.py</code> 里的航线（17.5, 9.8 等航点）
+      会跑出房间——你需要同步修改航线。这个练习的目的：让你意识到<strong>航线与世界几何是耦合的</strong>，
+      这正是真实机器人部署时要小心的地方。</div>
+    </details>
+    <details class="ex"><summary>练习 2 · 观察随机性的影响</summary>
+      <div class="ans">在 <code>run_slam.py</code> 的 <code>main()</code> 里把 <code>np.random.seed(7)</code>
+      改成别的数字再跑几次。你会发现 ATE 在 0.15 ~ 0.4 m 之间波动——SLAM 结果天然带随机性，
+      论文里报的是"多次运行的平均 ± 方差"，单一数字只是样本。</div>
+    </details>
+
+    <nav class="pager" id="pager"></nav>
+  </article>
+</div>
+
+<div id="site-footer"></div>
+<script src="../assets/vendor/katex/katex.min.js"></script>
+<script src="../assets/vendor/katex/contrib/auto-render.min.js"></script>
+<script src="../assets/vendor/hljs/highlight.min.js"></script>
+<script src="../js/main.js"></script>
+</body>
+</html>

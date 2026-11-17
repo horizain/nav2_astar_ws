@@ -1,0 +1,15 @@
+{
+  "n_frames": 3220,
+  "n_keyframes": 110,
+  "n_loop_edges": 10,
+  "path_len_m": 87.26306113077246,
+  "ate_odom_full_rmse": 0.7772895941755984,
+  "ate_odom_final": 1.6357276978722588,
+  "ate_odom_keyframe_rmse": 0.2235591260255052,
+  "ate_slam_keyframe_rmse": 0.22346089460777271,
+  "icp_demo_iters": 7,
+  "icp_demo_rmse": 0.06499006400258601,
+  "pgo_cost_first": 624.7162614808608,
+  "pgo_cost_last": 59.35864477851755,
+  "duration_s": 161.0
+}

@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 3 章 · 传感器与仿真器 | SLAM·MPC 导航课堂</title>
+<link rel="stylesheet" href="../assets/vendor/hljs/atom-one-dark.min.css">
+<link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="../css/style.css">
+<script>window.SITE_ROOT = "..";</script>
+</head>
+<body>
+<div id="site-header"></div>
+
+<header class="page-head"><div class="container">
+  <div class="crumb"><a href="../index.html">首页</a> / 第二部分 · mini-SLAM</div>
+  <h1>第 3 章 · 传感器与仿真器</h1>
+  <p class="sub">没有真实机器人也能做 SLAM——前提是有一台足够"真"的仿真器。这一章我们亲手造两样东西：
+     一个由线段组成的 2D 世界（附带解析光线投射），和一个带噪声的差速机器人。
+     写完后你会在下方看到它在实时扫描。</p>
+  <div class="meta-row">
+    <span class="chip blue">预计 45 分钟</span>
+    <span class="chip">前置：第 2 章</span>
+    <span class="chip">配套代码：world.py · robot.py</span>
+  </div>
+</div></header>
+
+<div class="chapter-wrap">
+  <aside class="toc" id="toc"></aside>
+  <article class="content">
+
+    <h2 id="lidar"><span class="anchor-num">3.1</span>激光雷达是怎么"看见"的？</h2>
+    <p>常见的 2D 激光雷达（如思岚 RPLIDAR 系列）核心是一个<strong>高速旋转的激光测距头</strong>：
+    每转一圈向四周发射上百束激光，每束光碰到障碍物反射回来，记录"发射→返回"的时间差
+    （ToF，Time of Flight），乘以光速的一半就得到距离。一圈扫完，你得到的是一组
+    <strong>极坐标点 $(r_i, \varphi_i)$</strong>——"在方向 $\varphi_i$ 上，距离 $r_i$ 处有个东西"。</p>
+    <table class="tbl">
+      <tr><th>参数</th><th>典型值（课程仿真）</th><th>真实器件（RPLIDAR S2）</th></tr>
+      <tr><td>视场角 FOV</td><td>360°</td><td>360°</td></tr>
+      <tr><td>每圈光束数</td><td>120</td><td>~3200</td></tr>
+      <tr><td>最大量程</td><td>9 m</td><td>30 m</td></tr>
+      <tr><td>测距噪声 σ</td><td>2 cm</td><td>~2 cm</td></tr>
+      <tr><td>扫描频率</td><td>20 Hz（仿真控制周期）</td><td>10 Hz</td></tr>
+    </table>
+    <p>两个对 SLAM 至关重要的物理事实：<strong>(1) 每束光只返回"最近的"那个障碍的距离</strong>——
+    光不会穿透第一面墙再测到第二面墙；<strong>(2) 超出量程就"没有回波"</strong>——
+    代码里用 <code>inf</code> 表示，处理不当会污染地图（第 6 章踩坑）。</p>
+
+    <div class="sim">
+      <div class="sim-head"><span class="sim-dot"></span>
+        <span class="sim-title">交互 · 激光雷达实时扫描</span>
+        <span class="sim-hint">调低光束数 / 量程，观察"机器人眼中的世界"如何退化</span></div>
+      <canvas id="sim-lidar" style="height: 430px"></canvas>
+      <div class="sim-bar">
+        <button class="sbtn primary" id="sim-lidar-play">暂停 / 继续</button>
+        <span class="sctl">光束数
+          <input type="range" id="sim-lidar-beams" min="20" max="240" step="10" value="180">
+          <span class="val" id="sim-lidar-beams-val">180</span></span>
+        <span class="sctl">量程
+          <input type="range" id="sim-lidar-range" min="2" max="9" step="0.5" value="6">
+          <span class="val" id="sim-lidar-range-val">6 m</span></span>
+      </div>
+    </div>
+
+    <h2 id="raycast"><span class="anchor-num">3.2</span>光线投射：一束光的数学</h2>
+    <p>仿真器的核心问题：给定位姿和方向，求光束撞上哪条线段、距离多少。
+    我们的"世界"用一组线段表示（外墙 + 障碍物轮廓），每束光是一条射线：</p>
+    <div class="math-block">$$
+      \text{光束：}\;\mathbf{p}(t) = \mathbf{o} + t\,\mathbf{d},\ t \ge 0
+      \qquad
+      \text{线段：}\;\mathbf{q}(u) = \mathbf{a} + u\,(\mathbf{b}-\mathbf{a}),\ 0\le u\le 1
+    $$</div>
+    <p>令 $\mathbf{p}(t)=\mathbf{q}(u)$，用二维叉积解这个 2×2 线性方程组（叉积
+    $\mathbf{u}\times\mathbf{v} = u_x v_y - u_y v_x$ 就是行列式），得到经典闭式解：</p>
+    <div class="math-block">$$
+      t = \frac{(\mathbf{a}-\mathbf{o})\times(\mathbf{b}-\mathbf{a})}{\mathbf{d}\times(\mathbf{b}-\mathbf{a})},
+      \qquad
+      u = \frac{(\mathbf{a}-\mathbf{o})\times\mathbf{d}}{\mathbf{d}\times(\mathbf{b}-\mathbf{a})}
+    $$</div>
+    <p>合法命中需要四个条件：$t&gt;0$（向前）、$t\le$ 量程、$0\le u\le 1$（落在线段上）、
+    分母非零（不平行）。对所有线段取最小 $t$ 即该方向的真实距离。<strong>这就是"解析求交"——
+    没有近似、没有像素化，一束光的误差只剩测量噪声。</strong></p>
+
+    <div class="codeblock"><div class="cb-head"><span class="cb-file">world.py —— 光线投射（核心约 20 行）</span><button class="copy">复制</button></div>
+<pre><code class="language-python">def raycast(self, poses, angles, max_range):
+    """从位姿 poses 沿机体系角度 angles 发射激光，返回距离数组。
+    公式：t = (a-o)×(b-a) / (d×(b-a))，u = (a-o)×d / (d×(b-a))"""
+    seg = self.segments
+    a = seg[:, 0:2]                      # 每条线段起点 (M,2)
+    e = seg[:, 2:4] - a                  # 每条线段方向 (M,2)
+    g = angles[None, :] + yaw[:, None]   # 全局光束角度 (N,B)
+    d = np.stack([np.cos(g), np.sin(g)], axis=-1)
+    dist = np.full((N, B), np.inf)
+    for i in range(0, N, chunk):         # 分块防内存爆炸
+        oc = o[i:i+n][:, None, :]        # 光束原点
+        ao = (a - oc)[:, None, :, :]     # a - o
+        denom = cross2(dc, ee)           # d × e        (n,B,M)
+        t = cross2(ao, ee) / denom       # 沿光束的参数
+        u = cross2(ao, dc) / denom       # 沿线段的参数
+        valid = (np.abs(denom) > 1e-12) & (t > 0.02) & \
+                (t <= max_range) & (u >= 0) & (u <= 1)
+        dist[i:i+n] = np.where(valid, t, np.inf).min(axis=2)
+    return dist</code></pre></div>
+
+    <div class="box box-theory">
+      <div class="box-title">为什么用线段而不是像素地图？</div>
+      <p>常见的替代方案是把世界渲染成图片再"沿着光线走格子"（DDA）。解析求交有三个优势：
+      <strong>零近似误差</strong>（决定 SLAM 评估指标是否可信）、<strong>速度快</strong>（NumPy 批量算 26 条线段 × 120 束只要几十微秒）、
+      <strong>可微可改</strong>（以后想给世界加圆弧、加门缝都容易）。真实激光雷达的物理模型同样是"光束打到几何表面"，一一对应。</p>
+    </div>
+
+    <h2 id="kinematics"><span class="anchor-num">3.3</span>差速机器人：一阶运动学模型</h2>
+    <p>课程机器人是经典的<strong>差速底盘</strong>（两个驱动轮 + 万向轮）。它的瞬时运动只有两个自由度：
+    前进速度 $v$ 和原地自转角速度 $\omega$。这构成著名的<strong>独轮车（unicycle）模型</strong>：</p>
+    <div class="math-block">$$
+      \dot{x} = v\cos\theta,\qquad \dot{y} = v\sin\theta,\qquad \dot{\theta} = \omega
+    $$</div>
+    <p>它是非线性的（$\theta$ 藏在 $\cos/\sin$ 里），且当 $v=0$ 时机器人无法横移——
+    这就是"非完整约束"（不能像坦克一样原地平移）。仿真中用一阶欧拉积分离散化：
+    控制周期 50 ms 内速度视为常量，</p>
+    <div class="math-block">$$
+      x_{k+1} = x_k + v_k\cos\theta_k\,\Delta t,\quad
+      y_{k+1} = y_k + v_k\sin\theta_k\,\Delta t,\quad
+      \theta_{k+1} = \theta_k + \omega_k\,\Delta t
+    $$</div>
+    <p>50 ms / 0.55 m·s⁻¹ 时每步只挪 2.75 cm，欧拉积分误差完全淹没在传感器噪声之下——
+    <strong>够用的模型就是好模型</strong>。（第 9 章 MPC 会直接沿用这个模型做线性化。）</p>
+
+    <div class="codeblock"><div class="cb-head"><span class="cb-file">robot.py —— 运动学与里程计噪声（节选）</span><button class="copy">复制</button></div>
+<pre><code class="language-python">class Robot:
+    def __init__(self, world, pose0=(2.0, 2.0, 0.0), dt=0.05):
+        self.true_pose = np.array(pose0, float)   # 真值（上帝视角）
+        self.odom_pose = np.array(pose0, float)   # 里程计"自以为"的位姿
+        # 里程计噪声：每步独立的测量误差，误差随时间累积
+        self.odom_std_v = 0.045                   # 线速度测量噪声 (m/s)
+        self.odom_std_w = 0.055                   # 角速度测量噪声 (rad/s)
+
+    def command(self, v, w):
+        # 真值：加微小的"打滑"噪声后积分
+        self.true_pose = self._integrate(
+            self.true_pose, v + N(0, 0.008), w + N(0, 0.010), self.dt)
+        # 里程计：加*更大*的测量噪声后积分 —— 漂移之源
+        self.odom_pose = self._integrate(
+            self.odom_pose, v + N(0, self.odom_std_v),
+            w + N(0, self.odom_std_w), self.dt)
+
+    def scan(self):
+        """以真值位姿打一帧带噪激光（真实机器人只能拿到这份数据）"""
+        raw = self.lidar.scan(self.world, self.true_pose)  # raycast + N(0, 0.02)
+        return raw</code></pre></div>
+
+    <div class="box box-warn">
+      <div class="box-title">踩坑提醒 · 仿真器的"作弊"陷阱</div>
+      <p>SLAM 算法只允许访问 <code>robot.scan()</code>（带噪激光）和里程计。
+      <strong>任何用到 <code>robot.true_pose</code> 的算法都是作弊。</strong>真值只在两处合法出现：
+      机器人物理运动（<code>command</code> 内部）和最后的评估打分（ATE）。
+      全课程都会用这个纪律要求代码。</p>
+    </div>
+
+    <h2 id="follower"><span class="anchor-num">3.4</span>让机器人自己动起来：航点跟踪</h2>
+    <p>SLAM 需要机器人"动起来"才有数据。我们先用一个极简控制器——<strong>纯追踪（P 控制版）</strong>
+    ——让机器人依次驶向一组航点（它的"巡逻路线"）：</p>
+    <div class="math-block">$$
+      e_\theta = \mathrm{wrap}\big(\mathrm{atan2}(y^*-y,\ x^*-x) - \theta\big),\qquad
+      \omega = \mathrm{clip}(k_w\, e_\theta,\ \pm 1.5),\qquad
+      v = \begin{cases} v_0, & |e_\theta| < 0.7 \\ 0.35\,v_0, & \text{否则} \end{cases}
+    $$</div>
+    <p>$\mathrm{wrap}$ 把角度差归一化到 $(-\pi, \pi)$——不归一化的话，机器人会为了"把角度误差从 350° 修到 0°"而疯转一整圈。
+    这个 30 行的控制器在第 9 章还会以"对照组"身份出场：你会发现 MPC 在同样的场景下完胜它。</p>
+
+    <h2 id="lab"><span class="anchor-num">3.5</span>动手实验</h2>
+    <ol>
+      <li>把光束数从 180 降到 20（上方仿真滑杆），观察角分辨率变粗后，柱子边缘出现"锯齿"；
+        预习一下：这正是 ICP 匹配误差的下限来源之一。</li>
+      <li>把量程压到 2 m，机器人在房间中央时大半光束无回波（返回 inf）。想想第 6 章建图时要怎么处理它们。</li>
+      <li>在 <code>robot.py</code> 里把 <code>odom_std_w</code> 改成 0.3，跑 <code>python -c "from robot import *; ..."</code>
+        ——下一章我们就正式量化这种"漂移"。</li>
+    </ol>
+
+    <div class="box box-check">
+      <div class="box-title">检查点 · 离开本章前</div>
+      <ul>
+        <li>能手推光束-线段求交公式，说明 4 个合法性条件各自的物理意义</li>
+        <li>理解 unicycle 模型为什么非线性、为什么不能横移</li>
+        <li>知道里程计噪声 std_v / std_w 的单位与量级，知道 true_pose 只能用于"作弊检查"</li>
+        <li>跑通：<code>python -c "from world import World; import numpy as np; w=World(); print(w.raycast(np.array([[10.,6.,0.]]), np.linspace(0,6.28,120,False), 9.0).min())"</code>，输出 ≈ 2.0 左右（房间中心到最近障碍）</li>
+      </ul>
+    </div>
+
+    <details class="ex"><summary>练习 1 · 给世界加一个圆形柱子</summary>
+      <div class="ans">圆没法用有限条线段完美表示，用 N=32 段折线逼近即可：
+      在 <code>_build_default_map</code> 里加一段循环生成圆心 (12, 8)、半径 0.9 的 32 边形。
+      重新跑 raycast 检查：从 (10,6) 向 45° 方向的光束距离应变成 ≈ 3.4 m。逼近精度 σ ≈ R(1−cos(π/N)) ≈ 4 mm，
+      远小于传感器噪声，说明"折线表示圆"对 SLAM 完全够用。</div>
+    </details>
+    <details class="ex"><summary>练习 2 · 光束数与角分辨率的定量关系</summary>
+      <div class="ans">量程 r 处两相邻光束打在同一面墙上的间距 ≈ 2πr/B。B=120、r=9 m 时 ≈ 47 cm ——
+      看似很大，但相邻扫描帧（0.8 m 间隔）间"墙点重合"远不止靠相邻光束，
+      ICP 用的是整体轮廓约束。把 B 降到 60 再玩第 5 章的 ICP 仿真，对比 RMSE 的上升幅度即可亲证。</div>
+    </details>
+
+    <nav class="pager" id="pager"></nav>
+  </article>
+</div>
+
+<div id="site-footer"></div>
+<script src="../assets/vendor/katex/katex.min.js"></script>
+<script src="../assets/vendor/katex/contrib/auto-render.min.js"></script>
+<script src="../assets/vendor/hljs/highlight.min.js"></script>
+<script src="../js/main.js"></script>
+<script src="../js/sim/core.js"></script>
+<script src="../js/sim/sim-lidar.js"></script>
+</body>
+</html>

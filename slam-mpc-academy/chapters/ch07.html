@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第 7 章 · 位姿图优化与回环 | SLAM·MPC 导航课堂</title>
+<link rel="stylesheet" href="../assets/vendor/hljs/atom-one-dark.min.css">
+<link rel="stylesheet" href="../assets/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="../css/style.css">
+<script>window.SITE_ROOT = "..";</script>
+</head>
+<body>
+<div id="site-header"></div>
+
+<header class="page-head"><div class="container">
+  <div class="crumb"><a href="../index.html">首页</a> / 第二部分 · mini-SLAM</div>
+  <h1>第 7 章 · 位姿图优化与回环</h1>
+  <p class="sub">前端（ICP）给出的相对位姿再准，链条也是一条"越接越歪"的链——除非有办法
+     把链条首尾连成环、一把拉直。位姿图优化（Pose Graph Optimization）就是那把扳手：
+     把 SLAM 变成一张弹簧网，用第 2 章的 Gauss-Newton 一次性松弛掉所有漂移。
+     本章是整个课程的数学高潮，也是 Cartographer / Gmapping 等工业系统的后端原型。</p>
+  <div class="meta-row">
+    <span class="chip blue">预计 55 分钟</span>
+    <span class="chip">前置：第 2 章（GN、SE(2)）、第 5 章（ICP）</span>
+    <span class="chip">配套代码：pose_graph.py</span>
+  </div>
+</div></header>
+
+<div class="chapter-wrap">
+  <aside class="toc" id="toc"></aside>
+  <article class="content">
+
+    <h2 id="chain-to-graph"><span class="anchor-num">7.1</span>从"链"到"图"：为什么链条必然歪</h2>
+    <p>第 5 章结束时的状态是：相邻关键帧之间有了高精度的相对位姿测量 $z_{k,k+1}$。
+    把它们首尾相乘得到"链式估计"：$T_k = T_0\,z_{0,1}\,z_{1,2}\cdots z_{k-1,k}$。
+    但每节链条都有 ±1 cm 级别的独立误差，$N$ 节之后误差按 $\sqrt{N}$ 累积——
+    和第 4 章里程计漂移是同一个故事，只是慢了 3~5 倍。<strong>只要还是"链"，误差就没有消失的出口。</strong></p>
+    <p>出口在哪里？——<strong>回环（loop closure）</strong>。机器人跑第二圈重游旧地时，
+    "此刻的扫描"和"几分钟前的老扫描"做 ICP 能对上（第 5 章的方法），
+    这相当于获得了一条<strong>跨越时空的约束</strong>："你现在站的位置"和"很久以前的位置"必须重合。
+    把它塞进链条，链就成了环；优化这个环，所有累积误差被"平均地"摊回每一节。</p>
+
+    <figure class="fig">
+      <svg viewBox="0 0 940 330" style="width:100%;height:auto;font-family:inherit">
+        <defs><marker id="pg-ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#94a3b8"/></marker></defs>
+        <g font-size="13">
+          <!-- 左：漂移的链 -->
+          <rect x="30" y="40" width="400" height="240" rx="14" fill="#f8fafc" stroke="#cbd5e1"/>
+          <text x="230" y="70" text-anchor="middle" font-weight="700" fill="#1e293b">优化前：链 + 一条回环边</text>
+          <g stroke="#2563eb" stroke-width="2" fill="#eff4ff">
+            <path d="M 90 210 L 160 130 L 260 100 L 360 120 L 400 200 L 320 250 L 200 245 L 120 240" fill="none"/>
+          </g>
+          <g fill="#2563eb">
+            <circle cx="90" cy="210" r="6"/><circle cx="160" cy="130" r="6"/>
+            <circle cx="260" cy="100" r="6"/><circle cx="360" cy="120" r="6"/>
+            <circle cx="400" cy="200" r="6"/><circle cx="320" cy="250" r="6"/>
+            <circle cx="200" cy="245" r="6"/><circle cx="120" cy="240" r="6"/>
+          </g>
+          <line x1="90" y1="210" x2="120" y2="240" stroke="#ef4444" stroke-width="2.2" stroke-dasharray="5 4"/>
+          <text x="150" y="270" font-size="12" fill="#64748b">蓝色 = 运动边（相邻帧 ICP）</text>
+          <text x="150" y="288" font-size="12" fill="#ef4444">红色 = 回环边（重游旧地的 ICP）</text>
+          <text x="230" y="95" text-anchor="middle" font-size="12" fill="#64748b">起点和终点没对齐 → 弹簧网绷紧时会被拉正</text>
+          <!-- 右：优化后 -->
+          <rect x="510" y="40" width="400" height="240" rx="14" fill="#f8fafc" stroke="#cbd5e1"/>
+          <text x="710" y="70" text-anchor="middle" font-weight="700" fill="#1e293b">优化后：所有约束都被满足</text>
+          <g stroke="#2563eb" stroke-width="2" fill="#ecfdf5">
+            <path d="M 580 180 L 640 110 L 740 95 L 840 110 L 875 185 L 800 245 L 680 250 L 595 240" fill="none"/>
+          </g>
+          <g fill="#10b981">
+            <circle cx="580" cy="180" r="6"/><circle cx="640" cy="110" r="6"/>
+            <circle cx="740" cy="95" r="6"/><circle cx="840" cy="110" r="6"/>
+            <circle cx="875" cy="185" r="6"/><circle cx="800" cy="245" r="6"/>
+            <circle cx="680" cy="250" r="6"/><circle cx="595" cy="240" r="6"/>
+          </g>
+          <line x1="580" y1="180" x2="595" y2="240" stroke="#10b981" stroke-width="2" stroke-dasharray="5 4"/>
+          <text x="710" y="290" text-anchor="middle" font-size="12" fill="#64748b">节点被移动，但每条边的"相对位姿"几乎不变</text>
+        </g>
+      </svg>
+      <figcaption><b>位姿图直觉：一张弹簧网。</b>节点 = 机器人位姿；边 = 相对位姿约束（弹簧），
+      回环边是一根"拉直漂移"的关键弹簧。优化 = 松弛弹簧网到能量最小的形状。</figcaption>
+    </figure>
+
+    <h2 id="formulation"><span class="anchor-num">7.2</span>数学表述：一个最小二乘问题</h2>
+    <p>节点：位姿 $T_i \in SE(2)$（初值用链式估计）。边：三元组 $(i, j, z_{ij}, \Omega_{ij})$，
+    含义是"ICP 测得从 $i$ 看 $j$ 的相对位姿是 $z_{ij}$，信任程度是信息矩阵 $\Omega_{ij}$（对角阵，数字越大越信任）"。
+    优化目标是让每条边都能被尽量满足：</p>
+    <div class="math-block">$$
+      \min_{T_0,\dots,T_N}\; \sum_{(i,j)\in\mathcal{E}}
+        e_{ij}^\top\,\Omega_{ij}\,e_{ij}
+      \qquad\text{其中残差}\quad
+      e_{ij} = \mathrm{Log}\!\left(Z_{ij}^{-1}\,T_i^{-1}\,T_j\right)
+    $$</div>
+    <p>残差公式值得逐块读一遍：$T_i^{-1}T_j$ 是"当前估计下 i→j 的相对位姿"（第 2 章的组合律）；
+    $Z_{ij}^{-1}$ 把 ICP 的测量"除"进去——如果估计完美，$Z^{-1}T_i^{-1}T_j = I$，Log 变回零向量。
+    <strong>残差是 3 维向量（x, y, θ 的差），单位分别是米、米、弧度</strong>——
+    所以信息矩阵的对角元不能乱给：角度 1° 的误差 ≈ 平移 1 cm×(π/180·L) 的量级换算，
+    课程用 $\mathrm{diag}(400, 400, 10^4)$（σ ≈ 5 cm / 5 cm / 0.6°）。</p>
+
+    <div class="box box-theory">
+      <div class="box-title">为什么残差用 Log 而不是直接相减？</div>
+      <p>位姿 $(x,y,\theta)$ 直接相减在角度上会出问题（±π 回绕 + 不满足群结构）。
+      $\mathrm{Log}(Z^{-1}T_i^{-1}T_j)$ 输出的 3 个数是"指数坐标"下的差——
+      在 SE(2) 的弯曲空间里取的"测地距离"，小误差时它就是普通的差，
+      大误差时也不会给出荒谬的角度（始终 wrap 到 ±π）。这是第 2 章 Exp/Log 工具的正确用法。</p>
+    </div>
+
+    <h2 id="gn"><span class="anchor-num">7.3</span>Gauss-Newton：每一步都在"局部拉直"</h2>
+    <p>目标函数对位姿是非线性的（乘法结构 + Log），所以用第 2 章的 GN 迭代。
+    每一轮：</p>
+    <ol>
+      <li>算出每条边的残差 $e_{ij}$ 和雅可比 $J_{ij} = \partial e_{ij}/\partial T$；</li>
+      <li>按"边-节点"对应关系把 $J^\top\Omega J$ 累加进大矩阵 $H$（只填 3×3 的对角块和耦合块）——
+        <strong>这就是 H 的稀疏结构：节点 a 和 b 只在与它们相连的边里相遇</strong>；</li>
+      <li>解 $H\Delta = -b$；</li>
+      <li>每个节点右侧更新 $T_k \leftarrow T_k\,\mathrm{Exp}(\Delta_k)$（第 2 章的指数映射）。</li>
+    </ol>
+    <p>两个工程要点：<strong>(1) 必须固定一个节点</strong>（通常 $T_0$）——否则整张图可以整体平移旋转而不改变任何残差
+    （解空间的"规范自由度"，gauge freedom），$H$ 奇异。课程在 $H$ 的节点 0 对角块上加 $10^6$ 的惩罚，
+    等价于"把第一帧钉在世界原点"。<strong>(2) 雅可比可以用数值差分</strong>——
+    每个位姿只有 3 个分量，扰动一次重算残差即可，教学期不推导解析雅可比完全可行
+    （课程代码就是这么做的，性能足够；工业实现用解析雅可比 + 稀疏 Cholesky）。</p>
+
+    <div class="codeblock"><div class="cb-head"><span class="cb-file">pose_graph.py —— GN 主循环（完整版见仓库）</span><button class="copy">复制</button></div>
+<pre><code class="language-python">class PoseGraph:
+    def residual(self, i, j, z):
+        """e = Log( Z⁻¹ · T_i⁻¹ · T_j )"""
+        T = inv(se2_mat(z)) @ inv(self.nodes[i]) @ self.nodes[j]
+        e = se2_log(T)
+        e[2] = wrap_angle(e[2])
+        return e
+
+    def optimize(self, max_iter=20, tol=1e-5):
+        n = len(self.nodes)
+        for it in range(max_iter):
+            H = np.zeros((3*n, 3*n)); b = np.zeros(3*n); cost = 0
+            for (i, j, z, info) in self.edges:
+                e0 = self.residual(i, j, z)
+                cost += e0 @ info @ e0
+                Ji = self._jac_numeric(i, j, z)     # 数值雅可比 3×3
+                Jj = self._jac_numeric(j, j, z)
+                # H 的块结构：每条边只连接 i 和 j —— 稀疏性的来源
+                H[3*i:3*i+3, 3*i:3*i+3] += Ji.T @ info @ Ji
+                H[3*j:3*j+3, 3*j:3*j+3] += Jj.T @ info @ Jj
+                H[3*i:3*i+3, 3*j:3*j+3] += Ji.T @ info @ Jj
+                H[3*j:3*j+3, 3*i:3*i+3] += Jj.T @ info @ Ji
+                b[3*i:3*i+3] += Ji.T @ info @ e0
+                b[3*j:3*j+3] += Jj.T @ info @ e0
+            H[0:3, 0:3] += 1e6 * np.eye(3)          # 固定节点 0（锚）
+            delta = np.linalg.solve(H, -b)
+            for k in range(n):
+                self.nodes[k] = self.nodes[k] @ se2_exp(delta[3*k:3*k+3])
+            if np.max(np.abs(delta)) < tol:
+                break
+        return cost_history</code></pre></div>
+
+    <h2 id="loop-detect"><span class="anchor-num">7.4</span>回环检测：怎么知道"我回到了老地方"？</h2>
+    <p>位姿图优化只是求解器；它吃的"回环边"得有人喂。课程采用<strong>几何 + 几何</strong>的两步验证
+    （工业界还有外观法：扫描描述子/词袋，见第 11 章）：</p>
+    <ol>
+      <li><strong>候选筛选（便宜）</strong>：当前关键帧与所有"时间上隔得远（≥20 帧）、
+        估计位置接近（≤1.5 m）"的老关键帧配对。用当前链式估计（比原始里程计准）做距离判断。</li>
+      <li><strong>几何验证（较贵）</strong>：对每个候选做一次 ICP（老扫描 vs 新扫描），
+        RMSE &lt; 0.12 m 才承认回环成立，把配准结果作为回环边加入图。
+        RMSE 门槛挡住了"两个长得像的墙角"——真回环的对齐残差天然低（同一面墙！）。</li>
+    </ol>
+    <div class="box box-warn">
+      <div class="box-title">踩坑提醒 · 错误回环比没有回环可怕 10 倍</div>
+      <p>一条错误的回环边（比如把两个相似的墙角配成一对）会把地图"对折"——所有节点被强行扭到错误位置，
+      且因为回环边信息量大，优化器无法拒绝它。防御手段：收紧 RMSE 门槛、要求重叠点数充足、
+      每次只取"最强"的一个候选（课程做法）、工业级再叠加外观验证 + 一致性检查（多假设树）。</p>
+    </div>
+
+    <figure class="fig">
+      <img src="../assets/img/fig_pose_graph.png" alt="位姿图优化前后对比">
+      <figcaption><b>优化前 vs 优化后（run_slam.py 真实运行）。</b>左：里程计链节点——
+      第二圈明显"错位"，红点线是回环边，起点终点脱节约 1.6 m；右：GN 优化 5 轮后
+      （代价 625 → 59），两圈轨迹严丝合缝，ATE RMSE 从 1.12 m 降到 0.21 m。</figcaption>
+    </figure>
+
+    <h2 id="sparse"><span class="anchor-num">7.5</span>为什么工业实现用"稀疏"求解器？</h2>
+    <p>课程用稠密 <code>np.linalg.solve</code>——110 个节点才 330×330，毫秒级，完全够。
+    但真实机器人一次建图几万节点，稠密求逆 $O(N^3)$ 就吃不消了。看 H 的结构：</p>
+    <div class="math-block">$$
+      H = \begin{bmatrix}
+        \Box & \Box & & & \Box \\
+        \Box & \Box & \Box & & \\
+             & \Box & \Box & \Box & \\
+             &     & \Box & \Box & \Box \\
+        \Box &     &     & \Box & \Box
+      \end{bmatrix}
+      \quad\text{每行只有少数几个非零块}
+    $$</div>
+    <p>非零块的位置 = 边的分布。<strong>稀疏 Cholesky / 分解-消元（如 g2o、GTSAM、Ceres）
+    利用这个结构把单次求解降到近似线性复杂度</strong>；再加上增量式平滑（iSAM2：只重算受新边影响的子块），
+    才有了实时的工业后端。当你把课程代码跑到"1 万关键帧卡顿"时，就知道该读哪本书了（第 11 章书单）。</p>
+
+    <h2 id="lab"><span class="anchor-num">7.6</span>动手实验</h2>
+    <ol>
+      <li>在 <code>run_slam.py</code> 里注释掉回环边（把 <code>pg.add_edge(b, a, ...)</code> 那行删掉）：
+        优化将无事可做（cost 一开始就是 0），地图退化成"ICP 链"版本——鬼影立刻回来。</li>
+      <li>把回环边的信息矩阵放大 100 倍（<code>info_loop = diag([3e4, 3e4, 5e5])</code>）：
+        优化结果会向回环边倾斜——过强的回环信任会"掰弯"原本正确的链式估计。
+        <strong>权重是优化的方向盘</strong>。</li>
+      <li>把 <code>se2_exp</code> 换成"直接加 delta"（$T += \Delta$ 的错误实现），
+        观察大回环时优化发散——体感一次"李群为什么不能当向量用"。</li>
+    </ol>
+
+    <div class="box box-check">
+      <div class="box-title">检查点 · 离开本章前</div>
+      <ul>
+        <li>能画出位姿图的节点/边/回环边示意，说出弹簧网类比</li>
+        <li>能解释残差 $e=\mathrm{Log}(Z^{-1}T_i^{-1}T_j)$ 每一块的含义</li>
+        <li>知道 H 为什么稀疏、为什么必须固定节点 0</li>
+        <li>做过实验 1/2，亲眼见过"权重是方向盘"</li>
+      </ul>
+    </div>
+
+    <details class="ex"><summary>练习 1 · 解析雅可比（进阶）</summary>
+      <div class="ans">对 2D 位姿图，残差对节点扰动 $\Delta$ 的雅可比有闭式：
+      $\frac{\partial e}{\partial \Delta_j} = J_r(e)\,\mathrm{Ad}(Z^{-1}T_i^{-1})$ 型的组合
+      （右雅可比 × 伴随）。推导提示：对 $e=\mathrm{Log}(A)$ 使用 $\mathrm{Log}$ 的一阶摄动公式
+      $\delta\mathrm{Log}(A) = J_r(e)^{-1}\delta A A^{-1}$，再代入 $A = Z^{-1}T_i^{-1}T_j\mathrm{Exp}(\delta_j)$。
+      实现后用数值雅可比对拍（有限差分）——所有 SLAM 库的开发流程都是"解析推 + 数值验"。</div>
+    </details>
+    <details class="ex"><summary>练习 2 · 稀疏求解</summary>
+      <div class="ans">把 H 换成 scipy.sparse.lil_matrix 填块，用 spsolve 求解。
+      对 1000 个合成节点（链 + 每隔 50 个节点一条回环边）计时对比：稠密 ~2 s vs 稀疏 ~80 ms。
+      关键点：lil_matrix 只对"逐块填入"友好，填完转 csc 再解。</div>
+    </details>
+
+    <nav class="pager" id="pager"></nav>
+  </article>
+</div>
+
+<div id="site-footer"></div>
+<script src="../assets/vendor/katex/katex.min.js"></script>
+<script src="../assets/vendor/katex/contrib/auto-render.min.js"></script>
+<script src="../assets/vendor/hljs/highlight.min.js"></script>
+<script src="../js/main.js"></script>
+</body>
+</html>
