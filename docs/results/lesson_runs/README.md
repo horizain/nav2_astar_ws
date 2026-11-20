@@ -16,8 +16,8 @@ events.jsonl.gz是完整采样，不含凭空补出的真值。report.json是当
 在项目根目录执行，输出目录必须不存在：
 
 ```bash
-python3 docs/tools/navigation_metrics.py docs/tools/examples/fixed_straight_before_goal_anchor/events.jsonl.gz --configuration docs/tools/examples/fixed_straight_before_goal_anchor/report.json --output /tmp/teaching_recomputed_example
-python3 docs/tools/plot_navigation_report.py docs/tools/examples/fixed_straight_before_goal_anchor/events.jsonl.gz --report docs/tools/examples/fixed_straight_before_goal_anchor/report.json --output /tmp/teaching_example.png
+python3 docs/tools/navigation_metrics.py docs/results/lesson_runs/fixed_straight_before_goal_anchor/events.jsonl.gz --configuration docs/results/lesson_runs/fixed_straight_before_goal_anchor/report.json --output /tmp/teaching_recomputed_example
+python3 docs/tools/plot_navigation_report.py docs/results/lesson_runs/fixed_straight_before_goal_anchor/events.jsonl.gz --report docs/results/lesson_runs/fixed_straight_before_goal_anchor/report.json --output /tmp/teaching_example.png
 python3 -m unittest discover -s docs/tools/tests -v
 ```
 

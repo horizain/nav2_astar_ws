@@ -26,3 +26,7 @@ src/mini_slam/out_*/
 *.bag
 *.db3
 *.mcap
+
+# 实验运行增量产物（历史证据已在 docs/results/ 中 curated，不入库）
+docs/results/**/*.log
+docs/results/lesson_runs/**/events.jsonl.gz

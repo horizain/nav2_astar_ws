@@ -321,7 +321,7 @@ CBF 拦截 16 次（外参补偿前同类场景要拦 413 次，几乎全是误�
 [controller_server]: Reached the goal!   [bt_navigator]: Goal succeeded
 ```
 
-证据：`docs/tools/logs/e2e_dwb_cbf_success.log`。
+证据：`docs/results/logs/e2e_dwb_cbf_success.log`。
 
 ### 5.3 核心实验：同一指令"裸奔 vs 过滤"的 h(t)
 
@@ -506,7 +506,7 @@ TB3 waffle 雷达外参：lidar_joint pose = (−0.064, 0, 0.121)
 | `launch/controller_lab_launch.py` | use_cbf 参数 + 过滤器节点（d_safe/α/外参） |
 | `test/test_controller_core.cpp` | +8 个 CBF 测试（含 2 个外参回归） |
 | `docs/tools/cbf_experiment.py` **（新增）** | h(t) 对比实验工具 |
-| `docs/tools/logs/` | +3 份证据（端到端 PASS、基线接触、平滑停住） |
+| `docs/results/logs/` | +3 份证据（端到端 PASS、基线接触、平滑停住） |
 
 回退方法：launch 里 `use_cbf:=False` 即旁路（链路完整性不变）；
 删除 cbf 节点并把 collision_monitor 输入改回 cmd_vel_smoothed 即完全移除。
@@ -515,7 +515,7 @@ TB3 waffle 雷达外参：lidar_joint pose = (−0.064, 0, 0.121)
 
 | 文件 | 内容 |
 |---|---|
-| `docs/tools/logs/e2e_dwb_cbf_success.log` | DWB+CBF 端到端 PASS 全程 |
-| `docs/tools/logs/cbf_exp_baseline_contact.log` | 裸奔基线：h 穿零、接触推挤 |
-| `docs/tools/logs/cbf_exp_smooth_stop.log` | CBF 平滑停住：h 单调降、cbf_out 阶梯 |
+| `docs/results/logs/e2e_dwb_cbf_success.log` | DWB+CBF 端到端 PASS 全程 |
+| `docs/results/logs/cbf_exp_baseline_contact.log` | 裸奔基线：h 穿零、接触推挤 |
+| `docs/results/logs/cbf_exp_smooth_stop.log` | CBF 平滑停住：h 单调降、cbf_out 阶梯 |
 | `docs/tools/cbf_experiment.py` | 实验复现工具 |

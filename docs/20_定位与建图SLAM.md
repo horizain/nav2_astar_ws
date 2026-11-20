@@ -154,7 +154,7 @@ lab_built.yaml  resolution: 0.05        # 一格 5cm
 
 **实测地图**：112×105 格 @ 0.05m，原点 (-0.96, -2.07)，自由格 7847、
 障碍格 742（官方图 870——探索器没走到每一面墙，属正常）。
-九个圆柱的环全部成形（预览：`docs/tools/logs/lab_built_map_preview.png`）。
+九个圆柱的环全部成形（预览：`docs/results/logs/lab_built_map_preview.png`）。
 
 > 顺带一提：`ros2 run nav2_map_server map_saver_cli` 是官方存图工具，
 > 但本机实测它对订阅时序敏感（2s 内等不到 /map 就退出）。`save_slam_map.py`
@@ -180,7 +180,7 @@ python3 docs/tools/e2e_nav_test.py --init 0 0 --goal 3.5 1.0 --controller DWB
 **实测结果**：map_server 收到 `112 X 105 map @ 0.050 m/pix`，AMCL
 在自建图上定位，DWB 导航 **11.4s SUCCEEDED**（轨迹与官方图运行一致：
 穿中线缝隙到目标）——**自建地图与官方地图在导航里完全等价**。
-证据：`docs/tools/logs/e2e_builtmap_success.log`。
+证据：`docs/results/logs/e2e_builtmap_success.log`。
 
 ---
 
@@ -250,8 +250,8 @@ RViz 的 Map 层随探索实时扩张；`live_monitor.py` 的左图还能同时�
 | 文件 | 内容 |
 |---|---|
 | `docs/tools/maps/lab_built.pgm/.yaml` | **slam_toolbox 自建地图**（112×105 @ 0.05m） |
-| `docs/tools/logs/lab_built_map_preview.png` | 自建地图预览（九圆柱环全部成形） |
-| `docs/tools/logs/e2e_builtmap_success.log` | 自建图导航 11.4s PASS |
+| `docs/results/logs/lab_built_map_preview.png` | 自建地图预览（九圆柱环全部成形） |
+| `docs/results/logs/e2e_builtmap_success.log` | 自建图导航 11.4s PASS |
 | `docs/tools/auto_explorer.py` | 自动探索状态机（DRIVE/TURN/SWEEP + 免疫设计） |
 | `docs/tools/save_slam_map.py` | /map → PGM+YAML（含格式推导） |
 | `src/nav2_controller_lab/launch/controller_lab_launch.py` | 新增 slam:/map: 透传 |
