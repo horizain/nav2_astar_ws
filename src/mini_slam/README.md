@@ -3,6 +3,10 @@
 一份可读、可跑、可对拍的 2D 图优化 SLAM 复现，对应 Steve Macenski 的
 [slam_toolbox](https://github.com/SteveMacenski/slam_toolbox)（血统：SRI KartoSLAM / libkarto）。
 
+> **同名澄清**：本包是 C++ 实现的 ROS 2 包；仓库根部的
+> `slam-mpc-academy/code/mini_slam/` 是配套网站的纯 Python 教学仿真，
+> 两者无代码关系。
+
 **算法三大件**：
 
 | 部件 | 论文/出处 | 本仓库实现 |
