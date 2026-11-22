@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>icp</name>
+  <version>0.2.0</version>
+  <description>Point-to-Line ICP（Censi PL-ICP 思路）的 C++23 实现：含 fork-join 线程池的 FastICP 吞吐优化版，以及与 mini_slam correlative matcher 的对比基准。纯 CMake，零第三方依赖。</description>
+  <maintainer email="horizain@example.com">horizain</maintainer>
+  <license>MIT</license>
+
+  <!-- 纯 CMake 包（非 ament）：colcon 用 cmake build type 构建，
+       不依赖 ROS 运行时。g++-14 由 CMakeLists 自动探测。 -->
+  <buildtool_depend>cmake</buildtool_depend>
+
+  <export>
+    <build_type>cmake</build_type>
+  </export>
+</package>

@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>laser_prep_lab</name>
+  <version>0.1.0</version>
+  <description>2D 激光雷达工程算法实验室：量程门控、椒盐剔除、混合像素（鬼点）、掠射阴影、运动畸变校正（deskew）、自适应聚类、线段提取、动态障碍判别（透视记忆）、多帧融合。配准后端复用 icp 包。纯 CMake，零第三方依赖。</description>
+  <maintainer email="horizain@example.com">horizain</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>cmake</buildtool_depend>
+
+  <export>
+    <build_type>cmake</build_type>
+  </export>
+</package>
