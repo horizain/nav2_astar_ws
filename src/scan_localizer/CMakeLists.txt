@@ -1,0 +1,94 @@
+cmake_minimum_required(VERSION 3.16)
+project(scan_localizer)
+
+if(NOT CMAKE_CXX_STANDARD)
+  set(CMAKE_CXX_STANDARD 20)
+endif()
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Release)
+endif()
+
+find_package(ament_cmake REQUIRED)
+find_package(Eigen3 REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(rclcpp_lifecycle REQUIRED)
+find_package(rclcpp_components REQUIRED)
+find_package(sensor_msgs REQUIRED)
+find_package(nav_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(diagnostic_msgs REQUIRED)
+find_package(std_srvs REQUIRED)
+find_package(tf2_ros REQUIRED)
+
+# ============================================================================
+# 算法核心库（无 ROS 依赖，可独立复用/单测/交叉编译）
+# ============================================================================
+add_library(scan_localizer_core STATIC
+  src/map_field.cpp
+  src/map_io.cpp
+  src/matchers.cpp
+  src/particle_filter.cpp
+  src/localizer_core.cpp
+  src/sim_world.cpp
+)
+target_include_directories(scan_localizer_core PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+target_link_libraries(scan_localizer_core PUBLIC Eigen3::Eigen)
+set_property(TARGET scan_localizer_core PROPERTY POSITION_INDEPENDENT_CODE ON)
+target_compile_options(scan_localizer_core PRIVATE -Wall -Wextra)
+
+# ============================================================================
+# 基准测试（组件级对比实验：E1-E9）
+# ============================================================================
+add_executable(scan_localizer_benchmark test/benchmark.cpp)
+target_link_libraries(scan_localizer_benchmark PRIVATE scan_localizer_core)
+target_compile_options(scan_localizer_benchmark PRIVATE -O2 -Wall)
+
+# ============================================================================
+# ROS 组件节点 + 仿真源
+# ============================================================================
+add_library(localizer_node_component SHARED
+  src/localizer_node.cpp
+)
+target_compile_definitions(localizer_node_component PRIVATE "SCAN_LOCALIZER_BUILDING_DLL")
+ament_target_dependencies(localizer_node_component
+  rclcpp rclcpp_lifecycle rclcpp_components sensor_msgs nav_msgs
+  geometry_msgs diagnostic_msgs std_srvs tf2_ros)
+target_link_libraries(localizer_node_component scan_localizer_core)
+rclcpp_components_register_node(localizer_node_component
+  PLUGIN "sloc::LocalizerNode"
+  EXECUTABLE scan_localizer_node)
+
+add_executable(scan_localizer_sim src/localizer_sim.cpp)
+target_link_libraries(scan_localizer_sim scan_localizer_core)
+ament_target_dependencies(scan_localizer_sim
+  rclcpp sensor_msgs nav_msgs)
+
+add_executable(sim_map_export src/sim_map_export.cpp)
+target_link_libraries(sim_map_export scan_localizer_core)
+
+# ============================================================================
+# 安装
+# ============================================================================
+install(TARGETS scan_localizer_core localizer_node_component
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION bin)
+install(TARGETS scan_localizer_benchmark scan_localizer_sim sim_map_export
+  DESTINATION lib/${PROJECT_NAME})
+install(DIRECTORY include/
+  DESTINATION include)
+install(DIRECTORY launch config
+  DESTINATION share/${PROJECT_NAME})
+
+if(BUILD_TESTING)
+  find_package(ament_lint_auto REQUIRED)
+  ament_lint_auto_find_test_dependencies()
+endif()
+
+ament_export_include_directories(include)
+ament_export_libraries(scan_localizer_core)
+ament_export_dependencies(Eigen3)
+ament_package()

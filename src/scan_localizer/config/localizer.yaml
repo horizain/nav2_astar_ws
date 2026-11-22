@@ -1,0 +1,41 @@
+# scan_localizer 生产参数（RK3399/3588 实测预算：~10% 单核 @10Hz）
+/**:
+  ros__parameters:
+    # --- 话题（即插即用：任何发布 LaserScan/Odometry/OccupancyGrid 的设备） ---
+    map_topic: "/map"
+    scan_topic: "/scan"
+    odom_topic: "/odom"
+    map_frame: "map"
+    odom_frame: "odom"
+    base_frame: "base_link"
+
+    # --- 匹配器选择（实验结论：跟踪用 composed；详见 README 决策表） ---
+    # 可选: composed / correlative / field_gn / icp_p2p / ndt
+    matcher: "composed"
+    likelihood_sigma: 0.20     # 似然场平滑尺度 (m)
+    ndt_voxel: 0.5             # 仅 matcher=ndt 时生效
+    scan_subsample: 2          # 每 N 束取 1（嵌入式降 CPU；精度损失 <1mm）
+
+    # --- 跟踪窗口（odom 一周期滑移预算；轮子打滑严重时放宽） ---
+    match_window_lin: 0.15      # ± m
+    match_window_ang: 0.10      # ± rad
+    match_step_lin: 0.03       # 粗搜步长 (m)
+    match_step_ang: 0.02        # 粗搜角步长 (rad)
+    huber_delta: 0.10          # 鲁棒核转折 (m)
+    trim_dist: 0.50            # 残差截断（动态物体抑制, 3σ 原则）
+
+    # --- 三门限（安全核心：拒绝永远比接受坏匹配便宜） ---
+    min_inlier_ratio: 0.60
+    min_score: 0.35
+    mahal_gate: 9.0             # χ²(3) 3σ
+    max_cov_eig: 1.0            # 匹配协方差最小特征值上限 (m²)
+
+    # --- 状态机 ---
+    degraded_after: 5           # 连续拒绝 N 帧 → DEGRADED
+    lost_after: 60              # DEGRADED 持续 N 帧 → LOST(触发全局)
+
+    # --- 全局重定位（冷启动 / 绑架恢复） ---
+    use_global_search: true
+
+    # --- TF ---
+    transform_tolerance: 0.1

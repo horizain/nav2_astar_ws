@@ -1,0 +1,79 @@
+scan_localizer benchmark (quick x1)
+warehouse map: 800x600 cells, MapField build: 0.0397393 s
+
+== E1 tracking accuracy (prior err ~2cm/0.5deg, clean scan) ==
+matcher                    pos_med     pos_p90ang_med(deg)      ms_med     succ%
+correlative                  0.038       0.080       0.141       4.584      64.0
+field_gn                     0.000       0.036       0.000       0.042     100.0
+icp_p2p                      0.076       0.164       0.297       0.207      35.0
+ndt                          0.035       0.040       0.007       0.105      94.0
+composed                     0.000       0.049       0.000       4.626      99.0
+
+== E2 capture range (success% by initial error) ==
+matcher               0.050000m 0.150000m 0.400000m 0.800000m 1.500000m ms@large    
+correlative           56.0      4.0       0.0       0.0       0.0       4.6         
+field_gn              100.0     100.0     78.0      46.0      10.0      0.2         
+icp_p2p               0.0       0.0       0.0       0.0       0.0       1.4         
+ndt                   94.0      66.0      8.0       0.0       0.0       0.1         
+composed              100.0     100.0     100.0     76.0      14.0      4.8         
+composed_wide         100.0     100.0     94.0      98.0      78.0      175.6       
+
+== E3 range noise (median pos err, prior 2cm) ==
+matcher               sigma=0.000000sigma=0.010000sigma=0.030000sigma=0.050000
+correlative           0.040       0.028       0.054       0.090       
+field_gn              0.000       0.001       0.009       0.017       
+icp_p2p               0.079       0.081       0.080       0.112       
+ndt                   0.035       0.035       0.027       0.028       
+composed              0.000       0.001       0.011       0.020       
+
+== E4 dynamic obstacles (2 boxes 0.6m near robot) ==
+
+== E4 dynamic obstacles ==
+matcher                    pos_med     pos_p90ang_med(deg)      ms_med     succ%
+correlative                  0.043       0.104       0.125       4.594      58.0
+field_gn                     0.000       0.000       0.000       0.042     100.0
+field_gn_tight               0.000       0.000       0.000       0.042     100.0
+ndt                          0.035       0.037       0.006       0.110      98.0
+composed                     0.000       0.050       0.000       4.642      96.0
+composed_tight               0.000       0.050       0.000       4.636      96.0
+
+== E5 corridor degeneracy (30x3m) ==
+matcher                 err_along(m) err_across(m) cov_along_med
+correlative                    0.041         0.022         1.000
+field_gn                       0.000         0.000         0.000
+icp_p2p                        0.447         0.002         0.000
+ndt                            0.022         0.025         1.000
+composed                       0.000         0.000         0.000
+
+== E6 scan density (720/360/180/90 beams) ==
+matcher                    beams       pos_med      ms_med
+correlative                  720        0.0424      4.6397
+correlative                  360        0.0424      2.3148
+correlative                  180        0.0424      1.1772
+correlative                   90        0.0424      0.6198
+field_gn                     720        0.0001      0.0226
+field_gn                     360        0.0000      0.0144
+field_gn                     180        0.0001      0.0085
+field_gn                      90        0.0000      0.0061
+composed                     720        0.0001      4.6432
+composed                     360        0.0002      2.3786
+composed                     180        0.0002      1.2135
+composed                      90        0.0002      0.6145
+
+== E8 global localization (cold start, 30 trials) ==
+global_correlative : succ 80.0000%  median 6.9898 ms (n=30)
+pf_global(20000,20步) : succ 3.3333%  median 542.3475 ms  err_med 16.4220 m
+
+== E9 trajectory tracking (100m loop, odom slip, crowd segment) ==
+A core+composed   : mean_err 0.0184 m, max_err 0.0596 m, accept_rate 98.0769%
+B particle_filter : mean_err 0.0787 m, max_err 0.2371 m (2000 particles)
+
+== E10 IMU yaw fusion (crowd 80 frames) ==
+  [wheel rot slip 3% (realistic)]
+    A wheel_only : mean_err 1.2734 m, max_err 5.9956 m, accept 35.6% (reject 67)
+    B imu_fused  : mean_err 0.0184 m, max_err 0.0864 m, accept 98.1% (reject 2)
+  [wheel rot slip 10% (carpet)]
+    A wheel_only : mean_err 5.0820 m, max_err 12.0139 m, accept 10.6% (reject 93)
+    B imu_fused  : mean_err 0.1110 m, max_err 0.3599 m, accept 64.4% (reject 37)
+
+benchmark done.

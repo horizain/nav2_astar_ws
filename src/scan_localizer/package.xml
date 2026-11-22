@@ -1,0 +1,35 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>scan_localizer</name>
+  <version>1.0.0</version>
+  <description>
+    生产级 2D 激光已知地图定位：SDF 似然场 + 两级扫描匹配（correlative 捕获
+    + field-GN 精修）+ 三门限状态机 + 分支定界全局重定位。算法核心与 ROS
+    解耦，可独立单测/基准；含仿真端到端集成测试与组件对比基准
+    （correlative / field-GN / ICP-P2P / NDT / PF）。
+  </description>
+  <maintainer email="horizain@example.com">horizain</maintainer>
+  <license>BSD-3-Clause</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>rclcpp_lifecycle</depend>
+  <depend>rclcpp_components</depend>
+  <depend>sensor_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>diagnostic_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>std_srvs</depend>
+  <depend>tf2_ros</depend>
+  <depend>eigen</depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
