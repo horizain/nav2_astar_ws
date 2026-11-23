@@ -114,6 +114,7 @@ void LocalizerCore::set_initial_pose(const Pose2 & p, const Cov3 & cov)
   }
   last_pose_ = Pose2(p.x, p.y, wrap_angle(p.theta));
   first_fix_ = true;
+  manual_global_ = false;
   reject_streak_ = 0;
   stable_tracking_streak_ = 0;
   gyro_bias_ = 0.0;
@@ -151,6 +152,7 @@ bool LocalizerCore::request_global()
     return false;
   }
   state_ = LocState::GLOBAL;
+  manual_global_ = true;
   reject_streak_ = 0;
   stable_tracking_streak_ = 0;
   anomaly_window_.clear();
@@ -448,6 +450,47 @@ CoreOutput LocalizerCore::on_scan(const Scan & scan)
       Pose2 g{};
       double sc = 0.0;
       if (global_fn_(*active_scan, g, sc) && is_finite_pose(g) && std::isfinite(sc)) {
+        // 自动触发的远距离全局跳变保护：若已有历史跟踪位姿且非显式手动重定位，
+        // 远距离候选必须显著优于当前局部匹配，否则拒绝瞬移并转入多假设验证队列。
+        if (first_fix_ && !manual_global_) {
+          const double th_prev = last_pose_.theta;
+          const double c_prev = std::cos(th_prev);
+          const double s_prev = std::sin(th_prev);
+          const Pose2 pred_local(
+            last_pose_.x + c_prev * delta.x - s_prev * delta.y,
+            last_pose_.y + s_prev * delta.x + c_prev * delta.y,
+            wrap_angle(th_prev + delta.theta));
+          const double jump_dist = std::hypot(g.x - pred_local.x, g.y - pred_local.y);
+          if (jump_dist > cfg_.global_jump_min_dist) {
+            const MatchResult local_mr = matcher_->match(
+              *field_, pred_local, *active_scan, cfg_.match_opt);
+            const bool local_healthy = local_mr.valid &&
+              is_finite_pose(local_mr.pose) &&
+              std::isfinite(local_mr.score) &&
+              std::isfinite(local_mr.inlier_ratio) &&
+              local_mr.score >= cfg_.min_score &&
+              local_mr.inlier_ratio >= cfg_.min_inlier_ratio;
+            if (local_healthy && sc < local_mr.score + cfg_.global_jump_score_margin) {
+              last_pose_ = Pose2(
+                local_mr.pose.x, local_mr.pose.y, wrap_angle(local_mr.pose.theta));
+              state_ = LocState::TRACKING;
+              reject_streak_ = 0;
+              stable_tracking_streak_ = 0;
+              anomaly_window_.clear();
+              add_hypotheses({g});
+
+              out.pose = last_pose_;
+              out.covariance = last_cov();
+              out.state = state_;
+              out.accepted = true;
+              out.score = local_mr.score;
+              out.inlier_ratio = local_mr.inlier_ratio;
+              out.reject_streak = 0;
+              return out;
+            }
+          }
+        }
+
         last_pose_ = Pose2(g.x, g.y, wrap_angle(g.theta));
         P4_ = Cov4::Zero();
         P4_.topLeftCorner<3, 3>() = Cov3::Identity() * 0.04;
@@ -462,6 +505,7 @@ CoreOutput LocalizerCore::on_scan(const Scan & scan)
         imu_dt_accum_ = 0.0;
         imu_consumed_ = true;
         state_ = LocState::TRACKING;
+        manual_global_ = false;
         reject_streak_ = 0;
         stable_tracking_streak_ = 0;
         first_fix_ = true;
@@ -601,9 +645,11 @@ CoreOutput LocalizerCore::on_scan(const Scan & scan)
   const bool accept = mr_finite && gate_inlier && gate_score &&
     gate_mahal && gate_cov;
 
-  // 滑动窗口异常监测（绑架主动触发）
+  // 滑动窗口异常监测（绑架主动触发）：仅将匹配失效、极低分或得分与内点率均不达标
+  // 视作绑架异常；高分高内点率但仅因马氏门控拒绝属于正常局部抖动/转弯，绝非绑架。
   const bool is_anomaly = !accept &&
-    (!mr_finite || mr.score < cfg_.anomaly_low_score || !gate_mahal);
+    (!mr_finite || mr.score < cfg_.anomaly_low_score ||
+    (!gate_inlier && !gate_score));
   record_anomaly(is_anomaly);
 
   if (accept) {
@@ -660,6 +706,14 @@ CoreOutput LocalizerCore::on_scan(const Scan & scan)
   // ---------- 拒绝分支：纯预测外推 + 状态降级 + 多假设/绑架检测 ----------
   last_pose_ = pred;
   P4_ = P4_pred;
+  // 若匹配本身高分高内点率且协方差有效，仅因马氏门控过紧被拒（典型场景：静止/原地旋转时
+  // dtrans≈0 导致 P4_pred 过小），适度松弛先验协方差以打破马氏锁死。
+  if (mr_finite && gate_inlier && gate_score && gate_cov && !gate_mahal) {
+    P4_.topLeftCorner<3, 3>() *= 1.5;
+    P4_(0, 0) = std::min(P4_(0, 0) + 2e-4, 0.25);
+    P4_(1, 1) = std::min(P4_(1, 1) + 2e-4, 0.25);
+    P4_(2, 2) = std::min(P4_(2, 2) + 2e-5, 0.10);
+  }
   stable_tracking_streak_ = 0;
   ++reject_streak_;
 
@@ -670,6 +724,7 @@ CoreOutput LocalizerCore::on_scan(const Scan & scan)
   }
   if (reject_streak_ >= lost_thr) {
     state_ = LocState::LOST;
+    manual_global_ = false;
     reject_streak_ = 0;
   }
 
@@ -683,11 +738,12 @@ CoreOutput LocalizerCore::on_scan(const Scan & scan)
     }
   }
 
-  // 主动绑架检测：滑动窗口内连续/高比例极低分或大马氏距离异常 → 加速触发 GLOBAL
+  // 主动绑架检测：滑动窗口内连续/高比例极低分或匹配失效异常 → 加速触发 GLOBAL
   if (cfg_.anomaly_window > 0 && cfg_.anomaly_bad_threshold > 0 &&
     anomaly_count() >= cfg_.anomaly_bad_threshold)
   {
     state_ = LocState::GLOBAL;
+    manual_global_ = false;
     reject_streak_ = 0;
     anomaly_window_.clear();
   }

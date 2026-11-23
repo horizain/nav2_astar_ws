@@ -695,6 +695,7 @@ void LocalizerNode::resetResources()
   last_scan_.points.clear();
   has_last_scan_ = false;
   pending_hypotheses_.clear();
+  global_alternates_.clear();
 }
 
 LocalizerNode::CallbackReturn LocalizerNode::on_configure(
@@ -727,6 +728,7 @@ LocalizerNode::CallbackReturn LocalizerNode::on_configure(
     last_scan_.points.clear();
     has_last_scan_ = false;
     pending_hypotheses_.clear();
+    global_alternates_.clear();
   }
 
   pose_pub_ = create_publisher<
@@ -939,6 +941,7 @@ bool LocalizerNode::applyMap(
     field_ = std::move(field);
     matcher_ = std::move(matcher);
     pending_hypotheses_.clear();
+    global_alternates_.clear();
     stable_tracking_count_ = 0;
     core_->set_map(field_);
     core_->set_matcher(matcher_);
@@ -1318,9 +1321,10 @@ void LocalizerNode::onScan(const sensor_msgs::msg::LaserScan::SharedPtr m)
     {
       ++stable_tracking_count_;
       if (stable_tracking_count_ >= kStableTrackingClearFrames &&
-        !pending_hypotheses_.empty())
+        (!pending_hypotheses_.empty() || !global_alternates_.empty()))
       {
         pending_hypotheses_.clear();
+        global_alternates_.clear();
       }
     } else {
       stable_tracking_count_ = 0;
@@ -1359,6 +1363,7 @@ void LocalizerNode::onInitialPose(
 
   core_->set_initial_pose(pose, cov);
   pending_hypotheses_.clear();
+  global_alternates_.clear();
   stable_tracking_count_ = 0;
   RCLCPP_INFO(
     get_logger(), "initial pose set: (%.2f, %.2f, %.1f deg)",
@@ -1408,17 +1413,18 @@ bool LocalizerNode::runGlobalSearchLocked(
   out = g.pose;
   score = g.score;
 
+  global_alternates_.clear();
   for (const auto & a : g.alternates) {
     const double d = std::hypot(a.x - g.pose.x, a.y - g.pose.y);
     if (d > kAlternateMinSepM) {
-      pending_hypotheses_.push_back(a);
+      global_alternates_.push_back(a);
     }
   }
   RCLCPP_INFO(
     get_logger(),
-    "global search: (%.2f, %.2f, %.1f deg) score=%.3f (%zu alternates queued)",
+    "global search: (%.2f, %.2f, %.1f deg) score=%.3f (%zu alternates recorded)",
     g.pose.x, g.pose.y, g.pose.theta * kDegPerRad, g.score,
-    pending_hypotheses_.size());
+    global_alternates_.size());
   return true;
 }
 
@@ -1533,6 +1539,9 @@ LocalizerNode::OutputSnapshot LocalizerNode::buildSnapshotLocked(
     snap.hypotheses.push_back(out.pose);
   }
   for (const auto & h : pending_hypotheses_) {
+    snap.hypotheses.push_back(h);
+  }
+  for (const auto & h : global_alternates_) {
     snap.hypotheses.push_back(h);
   }
   if (core_) {

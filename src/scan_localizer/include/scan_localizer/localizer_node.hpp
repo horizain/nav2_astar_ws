@@ -211,6 +211,7 @@ private:
   bool has_last_scan_{false};
 
   std::vector<Pose2> pending_hypotheses_;
+  std::vector<Pose2> global_alternates_;
 
   std::shared_ptr<MapField> field_;
   std::shared_ptr<OccupancyGrid> grid_;

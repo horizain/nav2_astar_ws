@@ -76,10 +76,13 @@ struct CoreConfig
   double hyp_min_score{0.70};      // 候选假设得分门槛
   double hyp_min_inlier{0.65};     // 候选假设内点率门槛
   std::size_t max_hypotheses{8};   // 候选假设数量上限
-  // 主动绑架检测（滑动窗口低分 / 高马氏距离监测）
+  // 主动绑架检测（滑动窗口低分 / 匹配失效监测）
   int anomaly_window{10};          // 滑动窗口长度（<=0 关闭）
   int anomaly_bad_threshold{8};    // 窗口内异常帧数达到阈值即主动触发 GLOBAL
   double anomaly_low_score{0.25};  // 极低分异常阈值
+  // 自动全局重定位远距离跳变安全保护（防对称走廊误跳）
+  double global_jump_min_dist{1.0};       // 远距离跳变判定阈值 (m)
+  double global_jump_score_margin{0.15};  // 远距离候选需显著优于当前局部匹配的得分裕度
   // 匹配器选项（跟踪窗口）
   MatchOptions match_opt{};
 };
@@ -175,6 +178,7 @@ private:
   int reject_streak_{0};
   int stable_tracking_streak_{0};
   bool first_fix_{false};
+  bool manual_global_{false};
 
   std::vector<Hypothesis> hypotheses_;
   std::deque<bool> anomaly_window_;

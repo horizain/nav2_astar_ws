@@ -638,6 +638,122 @@ TEST(LocalizerCoreTest, ActiveKidnappedDetectionTriggersGlobalEarly)
   EXPECT_EQ(core.state(), sloc::LocState::GLOBAL);
 }
 
+TEST(LocalizerCoreTest, HighScoreMahalRejectionDoesNotTriggerSpuriousGlobal)
+{
+  const auto & wf = shared_warehouse();
+  auto sm = std::make_shared<ScriptedMatcher>();
+
+  sloc::CoreConfig cfg;
+  cfg.degraded_after = 5;
+  cfg.lost_after = 60;
+  cfg.anomaly_window = 10;
+  cfg.anomaly_bad_threshold = 8;
+  cfg.anomaly_low_score = 0.25;
+  cfg.mahal_gate = 9.0;
+  sloc::LocalizerCore core(cfg);
+  core.set_map(wf.field);
+  core.set_matcher(sm);
+
+  const sloc::Pose2 p0(5.0, 5.0, 0.0);
+  core.on_odom(p0);
+  core.set_initial_pose(p0, sloc::Cov3::Identity() * 1e-4);
+
+  // Stationary / turning-in-place with high score & high inlier, but small 5cm offset
+  // exceeding tight 3-sigma Mahal gate on frame 1 -> must NOT trigger GLOBAL and must
+  // relax covariance to recover TRACKING smoothly.
+  sm->next_result.valid = true;
+  sm->next_result.pose = sloc::Pose2(5.05, 5.0, 0.01);
+  sm->next_result.score = 0.96;
+  sm->next_result.inlier_ratio = 0.98;
+  sm->next_result.covariance = sloc::Cov3::Identity() * 1e-4;
+
+  const sloc::Scan dummy = make_dummy_scan();
+  int global_count = 0;
+  int accepted_count = 0;
+  for (int i = 0; i < 15; ++i) {
+    const auto out = core.on_scan(dummy);
+    if (out.state == sloc::LocState::GLOBAL) {
+      ++global_count;
+    }
+    if (out.accepted) {
+      ++accepted_count;
+    }
+  }
+  EXPECT_EQ(global_count, 0);
+  EXPECT_GT(accepted_count, 5);
+  EXPECT_EQ(core.state(), sloc::LocState::TRACKING);
+}
+
+TEST(LocalizerCoreTest, AutomaticGlobalJumpGuardProtectsHealthyTracking)
+{
+  const auto & wf = shared_warehouse();
+  auto sm = std::make_shared<ScriptedMatcher>();
+
+  sloc::CoreConfig cfg;
+  cfg.anomaly_window = 5;
+  cfg.anomaly_bad_threshold = 4;
+  cfg.anomaly_low_score = 0.25;
+  cfg.global_jump_min_dist = 1.0;
+  cfg.global_jump_score_margin = 0.15;
+  sloc::LocalizerCore core(cfg);
+  core.set_map(wf.field);
+  core.set_matcher(sm);
+
+  const sloc::Pose2 p0(5.0, 5.0, 0.0);
+  core.on_odom(p0);
+  core.set_initial_pose(p0);
+
+  const sloc::Scan dummy = make_dummy_scan();
+
+  // 1) Drive into automatic GLOBAL via 4 bad frames
+  sm->next_result.valid = true;
+  sm->next_result.pose = p0;
+  sm->next_result.score = 0.10;
+  sm->next_result.inlier_ratio = 0.10;
+  sm->next_result.covariance = sloc::Cov3::Identity() * 0.1;
+  for (int i = 0; i < 4; ++i) {
+    core.on_scan(dummy);
+  }
+  ASSERT_EQ(core.state(), sloc::LocState::GLOBAL);
+
+  // Global proposes a 20m distant symmetric corridor (score=0.88),
+  // but local tracking has already recovered (score=0.92, inlier=0.95).
+  sm->next_result.pose = p0;
+  sm->next_result.score = 0.92;
+  sm->next_result.inlier_ratio = 0.95;
+  sm->next_result.covariance = sloc::Cov3::Identity() * 1e-3;
+  core.set_global_fn([](const sloc::Scan &, sloc::Pose2 & g, double & sc) {
+      g = sloc::Pose2(25.0, 5.0, 0.0);
+      sc = 0.88;
+      return true;
+    });
+  auto out = core.on_scan(dummy);
+  EXPECT_TRUE(out.accepted);
+  EXPECT_EQ(out.state, sloc::LocState::TRACKING);
+  EXPECT_LT(std::hypot(out.pose.x - p0.x, out.pose.y - p0.y), 0.2);
+  EXPECT_EQ(core.hypothesis_count(), 1u);
+
+  // 2) Real kidnapped robot: local match stays bad (score=0.12, inlier=0.15),
+  // global finds true room 20m away (score=0.90) -> MUST accept immediately!
+  sm->next_result.score = 0.12;
+  sm->next_result.inlier_ratio = 0.15;
+  for (int i = 0; i < 4; ++i) {
+    core.on_scan(dummy);
+  }
+  ASSERT_EQ(core.state(), sloc::LocState::GLOBAL);
+
+  core.set_global_fn([](const sloc::Scan &, sloc::Pose2 & g, double & sc) {
+      g = sloc::Pose2(25.0, 5.0, 0.0);
+      sc = 0.90;
+      return true;
+    });
+  out = core.on_scan(dummy);
+  EXPECT_TRUE(out.accepted);
+  EXPECT_EQ(out.state, sloc::LocState::TRACKING);
+  EXPECT_NEAR(out.pose.x, 25.0, 1e-6);
+  EXPECT_NEAR(out.pose.y, 5.0, 1e-6);
+}
+
 TEST(LocalizerCoreTest, SetOptionsHotSwapAndNonFiniteInputSafety)
 {
   const auto & wf = shared_warehouse();
