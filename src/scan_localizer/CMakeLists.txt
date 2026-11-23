@@ -175,6 +175,12 @@ if(BUILD_TESTING)
     target_link_libraries(test_localizer_core scan_localizer_core scan_localizer_sim_lib)
     target_compile_options(test_localizer_core PRIVATE ${SCAN_LOCALIZER_WARN_FLAGS})
   endif()
+
+  ament_add_gtest(test_localizer_node test/test_localizer_node.cpp)
+  if(TARGET test_localizer_node)
+    target_link_libraries(test_localizer_node localizer_node_component scan_localizer_sim_lib)
+    target_compile_options(test_localizer_node PRIVATE ${SCAN_LOCALIZER_WARN_FLAGS})
+  endif()
 endif()
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)

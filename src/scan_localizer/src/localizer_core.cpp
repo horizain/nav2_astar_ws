@@ -104,6 +104,11 @@ void LocalizerCore::set_options(const CoreConfig & cfg)
 
 void LocalizerCore::set_initial_pose(const Pose2 & p)
 {
+  set_initial_pose(p, Cov3::Identity() * 1e-4);
+}
+
+void LocalizerCore::set_initial_pose(const Pose2 & p, const Cov3 & cov)
+{
   if (!is_finite_pose(p)) {
     return;
   }
@@ -113,7 +118,11 @@ void LocalizerCore::set_initial_pose(const Pose2 & p)
   stable_tracking_streak_ = 0;
   gyro_bias_ = 0.0;
   P4_ = Cov4::Zero();
-  P4_.topLeftCorner<3, 3>() = Cov3::Identity() * 1e-4;
+  if (is_valid_spd_cov3(cov)) {
+    P4_.topLeftCorner<3, 3>() = 0.5 * (cov + cov.transpose());
+  } else {
+    P4_.topLeftCorner<3, 3>() = Cov3::Identity() * 1e-4;
+  }
   P4_(3, 3) = std::max(1e-9, cfg_.gyro_bias_init_var);
   clear_hypotheses();
   anomaly_window_.clear();

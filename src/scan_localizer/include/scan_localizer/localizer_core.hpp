@@ -101,6 +101,7 @@ public:
   void set_map(std::shared_ptr<const MapField> field);
   void set_matcher(std::shared_ptr<const Matcher> m);
   void set_initial_pose(const Pose2 & p);
+  void set_initial_pose(const Pose2 & p, const Cov3 & cov);
   void set_options(const CoreConfig & cfg);     // 热更新（fine mode 等）
 
   // 手动触发全局重定位：
