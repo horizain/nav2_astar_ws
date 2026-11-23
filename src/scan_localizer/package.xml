@@ -9,8 +9,8 @@
     解耦，可独立单测/基准；含仿真端到端集成测试与组件对比基准
     （correlative / field-GN / ICP-P2P / NDT / PF）。
   </description>
-  <maintainer email="horizain@example.com">horizain</maintainer>
-  <license>BSD-3-Clause</license>
+  <maintainer email="dingruijian2021@163.com">ruijianding</maintainer>
+  <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
@@ -21,11 +21,16 @@
   <depend>nav_msgs</depend>
   <depend>geometry_msgs</depend>
   <depend>diagnostic_msgs</depend>
+  <depend>lifecycle_msgs</depend>
   <depend>std_msgs</depend>
   <depend>std_srvs</depend>
   <depend>tf2_ros</depend>
   <depend>eigen</depend>
 
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+
+  <test_depend>ament_cmake_gtest</test_depend>
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
 
