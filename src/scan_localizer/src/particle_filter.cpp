@@ -118,7 +118,7 @@ double ParticleFilter::update(
   const MapField & field, const Scan & scan,
   std::mt19937 & rng)
 {
-  if (particles_.empty()) {return 0.0;}
+  if (!field.valid() || particles_.empty()) {return 0.0;}
     // 观测子采样
   Scan sub;
   for (std::size_t i = 0; i < scan.points.size();
@@ -137,7 +137,7 @@ double ParticleFilter::update(
     for (const auto & pt : sub.points) {
       const double wx = p.x + c * pt.x() - s * pt.y();
       const double wy = p.y + s * pt.x() + c * pt.y();
-      const auto g = field.grid_->worldToGridF(wx, wy);
+      const auto g = field.grid().worldToGridF(wx, wy);
       sc += field.likelihoodAtF(g.x(), g.y());
     }
     sc /= n;

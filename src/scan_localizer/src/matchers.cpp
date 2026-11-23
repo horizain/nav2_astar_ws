@@ -49,11 +49,16 @@ inline void eval_stats(
   double inlier_gate, double & score,
   double & inlier_ratio)
 {
+  if (!f.valid()) {
+    score = 0.0;
+    inlier_ratio = 0.0;
+    return;
+  }
   const auto w = to_world(p, scan);
   double s = 0.0, inl = 0.0;
   const int n = static_cast<int>(w.size());
   for (const auto & q : w) {
-    const auto g = f.grid_->worldToGridF(q.x(), q.y());
+    const auto g = f.grid().worldToGridF(q.x(), q.y());
     s += f.likelihoodAtF(g.x(), g.y());
     inl += (std::abs(f.sdf(g.x(), g.y())) < inlier_gate) ? 1.0 : 0.0;
   }
@@ -92,7 +97,8 @@ MatchResult CorrelativeMatcher::match(
   const MatchOptions & opt) const
 {
   MatchResult res;
-  const auto * grid = field.grid_;
+  if (!field.valid()) {return res;}
+  const auto * grid = &field.grid();
   const int n = static_cast<int>(scan.points.size());
   if (n == 0) {return res;}
 
@@ -131,8 +137,7 @@ MatchResult CorrelativeMatcher::match(
       for (const auto & p : scan.points) {
         const double wx = prior.x + c * p.x() - s * p.y();
         const double wy = prior.y + s * p.x() + c * p.y();
-        cells.emplace_back((wx - grid->origin_x) / grid->resolution,
-          (wy - grid->origin_y) / grid->resolution);
+        cells.push_back(grid->worldToGridF(wx, wy));
       }
       for (int yi = 0; yi < n_y; ++yi) {
         for (int xi = 0; xi < n_x; ++xi) {
@@ -210,7 +215,8 @@ MatchResult FieldGnMatcher::match(
   const MatchOptions & opt) const
 {
   MatchResult res;
-  const auto * grid = field.grid_;
+  if (!field.valid()) {return res;}
+  const auto * grid = &field.grid();
   const int n = static_cast<int>(scan.points.size());
   if (n < 5) {return res;}
 
@@ -292,7 +298,8 @@ MatchResult IcpP2pMatcher::match(
   const MatchOptions & opt) const
 {
   MatchResult res;
-  const auto * grid = field.grid_;
+  if (!field.valid()) {return res;}
+  const auto * grid = &field.grid();
   const int n = static_cast<int>(scan.points.size());
   if (n < 5) {return res;}
 
@@ -417,8 +424,8 @@ MatchResult NdtMatcher::match(
   const MatchOptions & opt) const
 {
   MatchResult res;
-  const auto * grid = field.grid_;
-  if (gauss_.empty()) {return res;}
+  if (!field.valid() || gauss_.empty()) {return res;}
+  const auto * grid = &field.grid();
   const double cell_r = 2.0 * voxel_m_;    // 对应搜索半径
 
   Pose2 p = prior;
@@ -545,8 +552,8 @@ GlobalResult global_correlative(
   int n_hypotheses)
 {
   GlobalResult out;
-  const auto * grid = field.grid_;
-  if (scan.points.empty()) {return out;}
+  if (!field.valid() || scan.points.empty()) {return out;}
+  const auto * grid = &field.grid();
   const int topk = std::max(1, n_hypotheses);
 
     // 降采样（B&B 用粗点集，末端重评分用全点集）

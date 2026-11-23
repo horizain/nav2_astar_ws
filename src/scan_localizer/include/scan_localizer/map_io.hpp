@@ -19,9 +19,10 @@
 // 加载：floor.yaml → image PGM → OccupancyGrid
 // 保存：OccupancyGrid → floor.pgm + floor.yaml（可直接给 map_server/RViz 用）
 //
-// 约定换算：本库栅格约定"cell i 中心 = origin + i·res"，
-// ROS map_server 约定"cell i 矩形 = [origin + i·res, origin+(i+1)·res)"，
-// 两者相差半个胞元 → 装载/保存时 origin 平移 ±res/2 补偿。
+// 统一采用 ROS 标准约定：
+//   · origin_x/y 为栅格 (0, 0) 的左下角世界坐标；
+//   · 格 (ix, iy) 中心 = origin + (i + 0.5)·res；
+//   · PGM 图像第 0 行（左上）对应 OccupancyGrid 的 iy = height - 1（垂直翻转）。
 // ============================================================================
 #include <string>
 
@@ -31,13 +32,13 @@ namespace sloc
 {
 
 // 加载 nav2 map_server 风格的地图（yaml + pgm）
-// err 为空表示成功。支持字段：image/resolution/origin/negate/
-// occupied_thresh/free_thresh（与 map_server 同名同义）
+// 成功返回 true 且 err 为空；失败返回 false 并写入 err（永不抛异常）。
+// 支持字段：image/resolution/origin/negate/occupied_thresh/free_thresh/mode
 bool load_map_yaml(
   const std::string & yaml_path, OccupancyGrid & out,
   std::string & err);
 
-// 保存为 map_server 兼容格式（base 不带扩展名，生成 base.pgm + base.yaml）
+// 保存为 map_server 兼容格式（base_path 不带扩展名，生成 base_path.pgm + base_path.yaml）
 bool save_map_yaml(
   const OccupancyGrid & grid, const std::string & base_path,
   std::string & err);

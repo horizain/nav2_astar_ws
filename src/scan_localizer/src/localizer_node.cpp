@@ -275,7 +275,10 @@ void LocalizerNode::onMap(const nav_msgs::msg::OccupancyGrid::SharedPtr m)
   grid_->cells = m->data;
 
   field_ = std::make_shared<MapField>();
-  field_->build(*grid_, likelihood_sigma_);
+  if (!field_->build(grid_, likelihood_sigma_)) {
+    RCLCPP_ERROR(get_logger(), "MapField::build failed for /map");
+    return;
+  }
   matcher_ = make_matcher(matcher_name_, grid_.get(), ndt_voxel_);
   if (!matcher_) {
     RCLCPP_ERROR(get_logger(), "unknown matcher '%s'",
@@ -325,7 +328,11 @@ bool LocalizerNode::loadMapFromYaml(const std::string & yaml_path)
   }
   grid_ = grid;
   field_ = std::make_shared<MapField>();
-  field_->build(*grid_, likelihood_sigma_);
+  if (!field_->build(grid_, likelihood_sigma_)) {
+    RCLCPP_ERROR(get_logger(), "MapField::build failed for yaml: %s",
+                     yaml_path.c_str());
+    return false;
+  }
   matcher_ = make_matcher(matcher_name_, grid_.get(), ndt_voxel_);
   if (!matcher_) {
     RCLCPP_ERROR(get_logger(), "unknown matcher '%s'",

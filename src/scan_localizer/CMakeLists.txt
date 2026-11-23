@@ -145,6 +145,18 @@ if(BUILD_TESTING)
     target_link_libraries(test_se2 scan_localizer_core)
     target_compile_options(test_se2 PRIVATE ${SCAN_LOCALIZER_WARN_FLAGS})
   endif()
+
+  ament_add_gtest(test_map_io test/test_map_io.cpp)
+  if(TARGET test_map_io)
+    target_link_libraries(test_map_io scan_localizer_core)
+    target_compile_options(test_map_io PRIVATE ${SCAN_LOCALIZER_WARN_FLAGS})
+  endif()
+
+  ament_add_gtest(test_map_field test/test_map_field.cpp)
+  if(TARGET test_map_field)
+    target_link_libraries(test_map_field scan_localizer_core)
+    target_compile_options(test_map_field PRIVATE ${SCAN_LOCALIZER_WARN_FLAGS})
+  endif()
 endif()
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
