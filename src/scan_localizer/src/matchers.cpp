@@ -18,8 +18,10 @@
 #include "scan_localizer/matchers.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <queue>
 #include <string>
 
@@ -30,17 +32,14 @@ namespace sloc
 namespace
 {
 
-// 位姿 → 世界点集
-inline std::vector<Vec2> to_world(const Pose2 & p, const Scan & scan)
+inline bool pose_is_finite(const Pose2 & p)
 {
-  const double c = std::cos(p.theta), s = std::sin(p.theta);
-  std::vector<Vec2> w;
-  w.reserve(scan.points.size());
-  for (const auto & pt : scan.points) {
-    w.emplace_back(p.x + c * pt.x() - s * pt.y(),
-                       p.y + s * pt.x() + c * pt.y());
-  }
-  return w;
+  return std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.theta);
+}
+
+inline bool pt_is_finite(const Vec2 & pt)
+{
+  return std::isfinite(pt.x()) && std::isfinite(pt.y());
 }
 
 // 平均似然 + 内点率
@@ -49,37 +48,49 @@ inline void eval_stats(
   double inlier_gate, double & score,
   double & inlier_ratio)
 {
-  if (!f.valid()) {
+  if (!f.valid() || !pose_is_finite(p)) {
     score = 0.0;
     inlier_ratio = 0.0;
     return;
   }
-  const auto w = to_world(p, scan);
+  const auto w = transform_scan(p, scan);
   double s = 0.0, inl = 0.0;
-  const int n = static_cast<int>(w.size());
+  int n = 0;
   for (const auto & q : w) {
+    if (!pt_is_finite(q)) {continue;}
     const auto g = f.grid().worldToGridF(q.x(), q.y());
     s += f.likelihoodAtF(g.x(), g.y());
     inl += (std::abs(f.sdf(g.x(), g.y())) < inlier_gate) ? 1.0 : 0.0;
+    ++n;
   }
   score = n > 0 ? s / n : 0.0;
   inlier_ratio = n > 0 ? inl / n : 0.0;
 }
 
-// H⁻¹ 保守膨胀后的协方差
-// H⁻¹ 保守膨胀后的协方差（含物理下限：扫描匹配不得宣称亚毫米精度）
+// 基于特征分解的安全海森求逆协方差（退化方向夹紧至正下界保留大方差，含物理下限）
 Cov3 cov_from_hessian(
   const Eigen::Matrix3d & H, double res_var,
   double min_var_xy = 1e-4,                       // (1cm)²
-  double min_var_th = 1.2e-5,                       // (0.2°)²
+  double min_var_th = 1.2e-5,                     // (0.2°)²
   double inflation = 2.0)
 {
-  Eigen::Matrix3d Hs = H;
-    // 对角加载防奇异（走廊退化方向自动膨胀）
-  Hs.diagonal().array() += 1e-6;
-  Cov3 cov = std::max(res_var, min_var_xy) * Hs.inverse();
+  const Eigen::Matrix3d Hsym = 0.5 * (H + H.transpose());
+  Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> es(Hsym);
+  if (es.info() != Eigen::Success) {
+    Cov3 fallback = Cov3::Zero();
+    fallback(0, 0) = 1.0;
+    fallback(1, 1) = 1.0;
+    fallback(2, 2) = 1.0;
+    return fallback;
+  }
+  constexpr double kMinEig = 1e-4;
+  const Eigen::Vector3d eigs = es.eigenvalues().cwiseMax(kMinEig);
+  const Eigen::Matrix3d H_inv =
+    es.eigenvectors() * eigs.cwiseInverse().asDiagonal() *
+    es.eigenvectors().transpose();
+  const double scale = std::max(res_var, min_var_xy) * inflation;
+  Cov3 cov = scale * H_inv;
   cov = 0.5 * (cov + cov.transpose()).eval();
-  cov = cov * inflation;
   cov(0, 0) = std::max(cov(0, 0), min_var_xy);
   cov(1, 1) = std::max(cov(1, 1), min_var_xy);
   cov(2, 2) = std::max(cov(2, 2), min_var_th);
@@ -97,24 +108,46 @@ MatchResult CorrelativeMatcher::match(
   const MatchOptions & opt) const
 {
   MatchResult res;
-  if (!field.valid()) {return res;}
+  if (!field.valid() || !pose_is_finite(prior) || scan.points.empty()) {
+    return res;
+  }
+  if (!std::isfinite(opt.step_lin) || opt.step_lin <= 0.0 ||
+    !std::isfinite(opt.step_ang) || opt.step_ang <= 0.0 ||
+    !std::isfinite(opt.window_lin) || opt.window_lin < 0.0 ||
+    !std::isfinite(opt.window_ang) || opt.window_ang < 0.0)
+  {
+    return res;
+  }
   const auto * grid = &field.grid();
-  const int n = static_cast<int>(scan.points.size());
-  if (n == 0) {return res;}
+
+  std::vector<Vec2> valid_pts;
+  valid_pts.reserve(scan.points.size());
+  for (const auto & pt : scan.points) {
+    if (pt_is_finite(pt)) {valid_pts.push_back(pt);}
+  }
+  const int n = static_cast<int>(valid_pts.size());
+  if (n < 5) {return res;}
 
     // 粗搜 + 细搜两轮（细轮在粗最优 ± 一个粗步长内以 1/3 步长重扫）
   double best_s = -1.0;
-  double best_x = prior.x, best_y = prior.y, best_th = prior.theta;
-  std::vector<double> coarse_scores;     // 响应面（协方差用）
-  std::vector<std::array<double, 4>> coarse_poses;    // (s,x,y,θ)
+  double best_x = prior.x, best_y = prior.y, best_th = wrap_angle(prior.theta);
+  std::vector<std::array<double, 4>> coarse_poses;    // (s, x, y, θ)
+  std::vector<Eigen::Vector2d> cells;
+  cells.reserve(valid_pts.size());
+  const double inv_2sig2 =
+    0.5 / std::max(field.sigma_m_ * field.sigma_m_, 1e-6);
+  const double max_gx = static_cast<double>(grid->width - 1);
+  const double max_gy = static_cast<double>(grid->height - 1);
 
   for (int round = 0; round < 2; ++round) {
+    if (round == 1) {
+      best_s = -1.0;  // 细轮用连续 SDF 似然重评分，消除栅格量化平顶
+    }
     const double lin_step =
       round == 0 ? opt.step_lin : opt.step_lin / 3.0;
     const double ang_step =
       round == 0 ? opt.step_ang : opt.step_ang / 3.0;
-    const double wlin = round == 0 ? opt.window_lin :
-      opt.step_lin;                                     // 细搜只搜粗最优附近
+    const double wlin = round == 0 ? opt.window_lin : opt.step_lin;
     const double wang = round == 0 ? opt.window_ang : opt.step_ang;
     const int n_x = static_cast<int>(
       std::max(1.0, std::ceil(2.0 * wlin / lin_step)) + 1);
@@ -123,44 +156,60 @@ MatchResult CorrelativeMatcher::match(
       std::max(1.0, std::ceil(2.0 * wang / ang_step)) + 1);
     const double cx = round == 0 ? prior.x : best_x;
     const double cy = round == 0 ? prior.y : best_y;
-    const double cth = round == 0 ? prior.theta : best_th;
-    coarse_poses.clear();
-    coarse_scores.clear();
+    const double cth = round == 0 ? wrap_angle(prior.theta) : best_th;
+    if (round == 0) {
+      coarse_poses.reserve(
+        static_cast<std::size_t>(n_a) *
+        static_cast<std::size_t>(n_x) *
+        static_cast<std::size_t>(n_y));
+    }
 
     for (int ai = 0; ai < n_a; ++ai) {
       const double th =
-        cth - 0.5 * (n_a - 1) * ang_step + ai * ang_step;
+        wrap_angle(cth - 0.5 * (n_a - 1) * ang_step + ai * ang_step);
       const double c = std::cos(th), s = std::sin(th);
-            // 找到该角度的预旋转索引（粗轮直接重算，细轮用最近邻）
-      std::vector<Eigen::Vector2d> cells;
-      cells.reserve(scan.points.size());
-      for (const auto & p : scan.points) {
+      cells.clear();
+      for (const auto & p : valid_pts) {
         const double wx = prior.x + c * p.x() - s * p.y();
         const double wy = prior.y + s * p.x() + c * p.y();
         cells.push_back(grid->worldToGridF(wx, wy));
       }
       for (int yi = 0; yi < n_y; ++yi) {
+        const double local_dy = (yi - 0.5 * (n_y - 1)) * lin_step;
+        const double cand_y = cy + local_dy;
+        const double dy = cand_y - prior.y;
+        const double offy = dy / grid->resolution;
         for (int xi = 0; xi < n_x; ++xi) {
-          const double dx =
-            (cx - prior.x) + (xi - 0.5 * (n_x - 1)) * lin_step;
-          const double dy =
-            (cy - prior.y) + (yi - 0.5 * (n_y - 1)) * lin_step;
+          const double local_dx = (xi - 0.5 * (n_x - 1)) * lin_step;
+          const double cand_x = cx + local_dx;
+          const double dx = cand_x - prior.x;
           const double offx = dx / grid->resolution;
-          const double offy = dy / grid->resolution;
           double sc = 0.0;
-          for (const auto & cel : cells) {
-            sc += field.likelihood(
-                            static_cast<int>(std::lround(cel.x() + offx)),
-                            static_cast<int>(std::lround(cel.y() + offy)));
+          if (round == 0) {
+            for (const auto & cel : cells) {
+              sc += field.likelihood(
+                static_cast<int>(std::lround(cel.x() + offx)),
+                static_cast<int>(std::lround(cel.y() + offy)));
+            }
+          } else {
+            for (const auto & cel : cells) {
+              const double gx = cel.x() + offx;
+              const double gy = cel.y() + offy;
+              if (gx < 0.0 || gx > max_gx || gy < 0.0 || gy > max_gy) {
+                continue;
+              }
+              const double r = field.sdf(gx, gy);
+              sc += std::exp(-r * r * inv_2sig2);
+            }
           }
           sc /= n;
           if (round == 0) {
-            coarse_poses.push_back({sc, cx + dx, cy + dy, th});
+            coarse_poses.push_back({sc, cand_x, cand_y, th});
           }
           if (sc > best_s) {
             best_s = sc;
-            best_x = cx + dx;
-            best_y = cy + dy;
+            best_x = cand_x;
+            best_y = cand_y;
             best_th = th;
           }
         }
@@ -168,40 +217,53 @@ MatchResult CorrelativeMatcher::match(
     }
   }
 
-  res.pose = {best_x, best_y, best_th};
-    // 响应面二阶矩协方差（karto 思路：软最大加权，以粗轮最优为参考）
+  res.pose = {best_x, best_y, wrap_angle(best_th)};
+    // 响应面二阶矩后验协方差（基于完整窗口均匀采样，softmax 权重 + SPD 下界保护）
+  Cov3 cov = Cov3::Zero();
+  bool cov_computed = false;
   if (!coarse_poses.empty()) {
-        // 粗轮最优响应（细轮可能更高，用它做权重会整体塌缩）
     double smax_c = -1.0;
     for (const auto & q : coarse_poses) {
       smax_c = std::max(smax_c, q[0]);
     }
+    const double beta = std::clamp(static_cast<double>(n), 80.0, 250.0);
     double wsum = 0.0;
     Eigen::Vector3d mean = Eigen::Vector3d::Zero();
     Eigen::Matrix3d m2 = Eigen::Matrix3d::Zero();
     for (const auto & q : coarse_poses) {
-      const double w = std::exp((q[0] - smax_c) * 25.0);
-      if (w < 1e-6) {continue;}
-      const Eigen::Vector3d v(q[1] - best_x, q[2] - best_y,
-        q[3] - best_th);
+      const double w = std::exp((q[0] - smax_c) * beta);
+      if (w < 1e-9) {continue;}
+      const Eigen::Vector3d v(
+        q[1] - best_x, q[2] - best_y, wrap_angle(q[3] - best_th));
       wsum += w;
       mean += w * v;
       m2 += w * v * v.transpose();
     }
-    if (wsum > 1e-9) {
+    if (wsum > 1e-12) {
       mean /= wsum;
       m2 /= wsum;
-      const Eigen::Matrix3d cov = m2 - mean * mean.transpose();
-            // 3σ 下限，防病态过紧
-      res.covariance(0, 0) = std::max(cov(0, 0), 9e-6);
-      res.covariance(1, 1) = std::max(cov(1, 1), 9e-6);
-      res.covariance(2, 2) = std::max(cov(2, 2), 9e-6);
-      res.covariance(0, 1) = cov(0, 1);
-      res.covariance(1, 0) = cov(0, 1);
+      cov = m2 - mean * mean.transpose();
+      cov = 0.5 * (cov + cov.transpose()).eval();
+      cov_computed = true;
     }
   }
+  if (!cov_computed) {
+    cov = Cov3::Zero();
+  }
+  // SPD 下界保护（同时避免退化时压垮奇异特征值比）
+  Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> es(cov);
+  if (es.info() == Eigen::Success) {
+    const Eigen::Vector3d eigs = es.eigenvalues().cwiseMax(1e-5);
+    cov = es.eigenvectors() * eigs.asDiagonal() * es.eigenvectors().transpose();
+    cov = 0.5 * (cov + cov.transpose()).eval();
+  }
+  cov(0, 0) = std::max(cov(0, 0), 2.5e-5);
+  cov(1, 1) = std::max(cov(1, 1), 2.5e-5);
+  cov(2, 2) = std::max(cov(2, 2), 1e-5);
+  res.covariance = cov;
+
   eval_stats(field, res.pose, scan, opt.inlier_gate, res.score,
-               res.inlier_ratio);
+    res.inlier_ratio);
   res.valid = best_s > 0.0;
   return res;
 }
@@ -215,76 +277,114 @@ MatchResult FieldGnMatcher::match(
   const MatchOptions & opt) const
 {
   MatchResult res;
-  if (!field.valid()) {return res;}
+  if (!field.valid() || !pose_is_finite(prior)) {return res;}
   const auto * grid = &field.grid();
   const int n = static_cast<int>(scan.points.size());
   if (n < 5) {return res;}
 
-  Pose2 p = prior;
-  double best_score = -1.0;
-  Pose2 best_pose = prior;
-  Eigen::Matrix3d best_H = Eigen::Matrix3d::Identity() * 1e-6;
+  auto eval_pose = [&](
+    const Pose2 & pose, Eigen::Matrix3d & H, Eigen::Vector3d & b,
+    double & ravg, int & used)
+    {
+      const double c = std::cos(pose.theta), s = std::sin(pose.theta);
+      H.setZero();
+      b.setZero();
+      double rsum = 0.0, rw = 0.0;
+      used = 0;
+      for (const auto & pt : scan.points) {
+        if (!pt_is_finite(pt)) {continue;}
+        const double lx = pt.x(), ly = pt.y();
+        const double wx = pose.x + c * lx - s * ly;
+        const double wy = pose.y + s * lx + c * ly;
+        const auto g = grid->worldToGridF(wx, wy);
+        Eigen::Vector2d grad;
+        const double r = field.sdf(g.x(), g.y(), &grad);
+        if (std::abs(r) > opt.trim_dist) {continue;}
+        const double ar = std::abs(r);
+        const double w = ar <= opt.huber_delta ?
+          1.0 :
+          opt.huber_delta / std::max(ar, 1e-9);
+          // ∂w/∂p = [gx, gy, gx·(-(wy-py)) + gy·(wx-px)]
+        const double jth = grad.x() * (-(wy - pose.y)) +
+          grad.y() * (wx - pose.x);
+        const Eigen::Vector3d J(grad.x(), grad.y(), jth);
+        H += w * J * J.transpose();
+        b += w * J * r;
+        rsum += w * r * r;
+        rw += w;
+        ++used;
+      }
+      ravg = rw > 0.0 ? rsum / rw : std::numeric_limits<double>::infinity();
+    };
+
+  Pose2 p(prior.x, prior.y, wrap_angle(prior.theta));
+  bool has_valid_iter = false;
+  double best_ravg = std::numeric_limits<double>::infinity();
+  Pose2 best_pose = p;
+  Eigen::Matrix3d best_H = Eigen::Matrix3d::Zero();
   double best_var = 1e-6;
+
   for (int it = 0; it < opt.max_iterations; ++it) {
-    const double c = std::cos(p.theta), s = std::sin(p.theta);
-    Eigen::Matrix3d H = Eigen::Matrix3d::Zero();
-    Eigen::Vector3d b = Eigen::Vector3d::Zero();
-    double rsum = 0.0, rw = 0.0;
+    Eigen::Matrix3d H;
+    Eigen::Vector3d b;
+    double ravg = 0.0;
     int used = 0;
-    for (const auto & pt : scan.points) {
-      const double lx = pt.x(), ly = pt.y();
-      const double wx = p.x + c * lx - s * ly;
-      const double wy = p.y + s * lx + c * ly;
-      const auto g = grid->worldToGridF(wx, wy);
-      Eigen::Vector2d grad;
-      const double r = field.sdf(g.x(), g.y(), &grad);
-      if (std::abs(r) > opt.trim_dist) {continue;}
-            // Huber
-      const double ar = std::abs(r);
-      const double w = ar <= opt.huber_delta ?
-        1.0 :
-        opt.huber_delta / std::max(ar, 1e-9);
-            // ∂w/∂p = [gx, gy, gx·(-(wy-py)) + gy·(wx-px)]
-      const double jth = grad.x() * (-(wy - p.y)) +
-        grad.y() * (wx - p.x);
-      Eigen::Vector3d J(grad.x(), grad.y(), jth);
-      H += w * J * J.transpose();
-      b += w * J * r;
-      rsum += w * r * r;
-      rw += w;
-      ++used;
-    }
+    eval_pose(p, H, b, ravg, used);
     if (used < 5) {break;}
-        // LM 阻尼只用于解步；协方差用未阻尼 Hessian（退化方向如实膨胀）
+
+      // 应用步长前，先用当前位姿 p 与其自身残差 ravg 更新历史最优
+    if (!has_valid_iter || ravg < best_ravg) {
+      has_valid_iter = true;
+      best_ravg = ravg;
+      best_pose = p;
+      best_H = H;
+      best_var = std::max(ravg, 1e-6);
+    }
+
+      // LM 阻尼只用于解步；协方差用未阻尼 Hessian（退化方向如实膨胀）
     Eigen::Matrix3d Hd = H;
-    Hd.diagonal().array() += 1e-3 * H.diagonal().maxCoeff() + 1e-9;
+    Hd.diagonal().array() += 1e-6 * H.diagonal().array().max(1.0);
     const Eigen::Vector3d dp = Hd.ldlt().solve(-b);
     if (!dp.allFinite()) {break;}
-        // 步长护栏：单次迭代 ≤0.2m / 0.1rad
+      // 步长护栏：单次迭代 ≤0.2m / 0.1rad
     const double nl = dp.head<2>().norm();
     const double s_clip =
       std::min(1.0, std::min(0.2 / std::max(nl, 1e-9),
-                                   0.1 / std::max(std::abs(dp(2)), 1e-9)));
+        0.1 / std::max(std::abs(dp(2)), 1e-9)));
     p.x += s_clip * dp(0);
     p.y += s_clip * dp(1);
-    p.theta += s_clip * dp(2);
-        // 记录残差最小点（防发散：残差单调性破坏时回退）
-    const double ravg = rsum / std::max(rw, 1.0);
-    if (ravg < best_score || best_score < 0.0) {
-      best_score = ravg;
-      best_pose = p;
-      best_H = H;                    // 协方差取残差最优点处的 Hessian
-      best_var = std::max(ravg, 1e-6);
-    }
+    p.theta = wrap_angle(p.theta + s_clip * dp(2));
     if (nl * s_clip < opt.converg_t &&
       std::abs(dp(2)) * s_clip < opt.converg_r)
     {
       break;
     }
   }
+
+  if (!has_valid_iter) {
+    res.valid = false;
+    return res;
+  }
+
+    // 评估循环结束后的最终位姿 p，若残差更优则采纳
+  {
+    Eigen::Matrix3d H_end;
+    Eigen::Vector3d b_end;
+    double ravg_end = 0.0;
+    int used_end = 0;
+    eval_pose(p, H_end, b_end, ravg_end, used_end);
+    if (used_end >= 5 && ravg_end < best_ravg) {
+      best_ravg = ravg_end;
+      best_pose = p;
+      best_H = H_end;
+      best_var = std::max(ravg_end, 1e-6);
+    }
+  }
+
   res.pose = best_pose;
   res.covariance = cov_from_hessian(best_H, best_var);
-  eval_stats(field, p, scan, opt.inlier_gate, res.score, res.inlier_ratio);
+  eval_stats(field, res.pose, scan, opt.inlier_gate, res.score,
+    res.inlier_ratio);
   res.valid = true;
   return res;
 }
@@ -298,25 +398,30 @@ MatchResult IcpP2pMatcher::match(
   const MatchOptions & opt) const
 {
   MatchResult res;
-  if (!field.valid()) {return res;}
+  if (!field.valid() || !pose_is_finite(prior)) {return res;}
   const auto * grid = &field.grid();
   const int n = static_cast<int>(scan.points.size());
   if (n < 5) {return res;}
 
-  Pose2 p = prior;
+  Pose2 p(prior.x, prior.y, wrap_angle(prior.theta));
+  bool has_valid_iter = false;
+  Eigen::Matrix3d last_H = Eigen::Matrix3d::Zero();
+  double last_var = 1e-6;
+
   for (int it = 0; it < opt.max_iterations; ++it) {
     const double c = std::cos(p.theta), s = std::sin(p.theta);
     Eigen::Matrix3d H = Eigen::Matrix3d::Zero();
     Eigen::Vector3d b = Eigen::Vector3d::Zero();
     int used = 0;
-    double rsum = 0.0;
+    double rsum = 0.0, rw = 0.0;
     for (const auto & pt : scan.points) {
+      if (!pt_is_finite(pt)) {continue;}
       const double wx = p.x + c * pt.x() - s * pt.y();
       const double wy = p.y + s * pt.x() + c * pt.y();
       const auto g = grid->worldToGridF(wx, wy);
       const auto ob = field.descendToObstacle(
-                static_cast<int>(std::lround(g.x())),
-                static_cast<int>(std::lround(g.y())));
+        static_cast<int>(std::lround(g.x())),
+        static_cast<int>(std::lround(g.y())));
       const auto qw = grid->gridToWorld(ob.x(), ob.y());
       const double ex = wx - qw.x(), ey = wy - qw.y();
       const double e2 = ex * ex + ey * ey;
@@ -325,31 +430,70 @@ MatchResult IcpP2pMatcher::match(
       const double w = e <= opt.huber_delta ?
         1.0 :
         opt.huber_delta / std::max(e, 1e-9);
+        // 世界系相对机器人位姿的旋转力臂
       Eigen::Matrix<double, 2, 3> J;
-      J << 1.0, 0.0, -(wy - qw.y()), 0.0, 1.0, (wx - qw.x());
+      J << 1.0, 0.0, -(wy - p.y), 0.0, 1.0, (wx - p.x);
       H += w * J.transpose() * J;
       b += w * J.transpose() * Eigen::Vector2d(ex, ey);
       rsum += w * e2;
+      rw += w;
       ++used;
     }
     if (used < 5) {break;}
-    H.diagonal().array() += 1e-9;
-    const Eigen::Vector3d dp = H.ldlt().solve(-b);
-    p.x += dp(0);
-    p.y += dp(1);
-    p.theta += dp(2);
-    if (dp.head<2>().norm() < opt.converg_t &&
-      std::abs(dp(2)) < opt.converg_r)
+    has_valid_iter = true;
+    last_H = H;
+    last_var = std::max(rsum / std::max(rw, 1e-9), 1e-6);
+
+    Eigen::Matrix3d Hd = H;
+    Hd.diagonal().array() += 1e-6 * H.diagonal().array().max(1.0);
+    const Eigen::Vector3d dp = Hd.ldlt().solve(-b);
+    if (!dp.allFinite()) {break;}
+    const double nl = dp.head<2>().norm();
+    const double s_clip =
+      std::min(1.0, std::min(0.2 / std::max(nl, 1e-9),
+        0.1 / std::max(std::abs(dp(2)), 1e-9)));
+    p.x += s_clip * dp(0);
+    p.y += s_clip * dp(1);
+    p.theta = wrap_angle(p.theta + s_clip * dp(2));
+    if (nl * s_clip < opt.converg_t &&
+      std::abs(dp(2)) * s_clip < opt.converg_r)
     {
       break;
     }
-    if (it == opt.max_iterations - 1) {
-      res.covariance =
-        cov_from_hessian(H, std::max(rsum / used, 1e-6));
+  }
+
+  if (!has_valid_iter) {
+    res.valid = false;
+    return res;
+  }
+
+    // 基于最终位姿处的表面法向信息矩阵计算几何协方差（如实反映走廊等滑移退化）
+  Eigen::Matrix3d H_geom = Eigen::Matrix3d::Zero();
+  {
+    const double c = std::cos(p.theta), s = std::sin(p.theta);
+    int used_g = 0;
+    for (const auto & pt : scan.points) {
+      if (!pt_is_finite(pt)) {continue;}
+      const double wx = p.x + c * pt.x() - s * pt.y();
+      const double wy = p.y + s * pt.x() + c * pt.y();
+      const auto g = grid->worldToGridF(wx, wy);
+      Eigen::Vector2d grad;
+      const double r = field.sdf(g.x(), g.y(), &grad);
+      if (std::abs(r) > opt.trim_dist) {continue;}
+      const double jth = grad.x() * (-(wy - p.y)) + grad.y() * (wx - p.x);
+      const Eigen::Vector3d Jg(grad.x(), grad.y(), jth);
+      H_geom += Jg * Jg.transpose();
+      ++used_g;
+    }
+    if (used_g < 5) {
+      H_geom = last_H;
     }
   }
+
   res.pose = p;
-  eval_stats(field, p, scan, opt.inlier_gate, res.score, res.inlier_ratio);
+  res.covariance = cov_from_hessian(H_geom, last_var);
+  eval_stats(field, res.pose, scan, opt.inlier_gate, res.score,
+    res.inlier_ratio);
   res.valid = true;
   return res;
 }
@@ -357,35 +501,51 @@ MatchResult IcpP2pMatcher::match(
 // ============================================================================
 // NdtMatcher —— 2D NDT（体素高斯，D2P 分数最大化）
 // ============================================================================
-void NdtMatcher::build(const OccupancyGrid & grid, double voxel_m)
+bool NdtMatcher::build(const OccupancyGrid & grid, double voxel_m)
 {
+  gauss_.clear();
+  voxel_gauss_idx_.clear();
+  voxel_w_ = 0;
+  voxel_h_ = 0;
+  if (grid.width <= 0 || grid.height <= 0 ||
+    !std::isfinite(grid.resolution) || grid.resolution <= 0.0 ||
+    !std::isfinite(voxel_m) || voxel_m <= 0.0 ||
+    grid.cells.size() <
+    static_cast<std::size_t>(grid.width) *
+    static_cast<std::size_t>(grid.height))
+  {
+    return false;
+  }
+
   voxel_m_ = voxel_m;
-  voxel_grid_ = grid;    // 复用分辨率字段存体素划分
-  voxel_grid_.resolution = voxel_m;
+  origin_x_ = grid.origin_x;
+  origin_y_ = grid.origin_y;
   const int vw = static_cast<int>(
-    std::ceil(grid.width * grid.resolution / voxel_m));
+    std::max(1.0, std::ceil(grid.width * grid.resolution / voxel_m)));
   const int vh = static_cast<int>(
-    std::ceil(grid.height * grid.resolution / voxel_m));
-  voxel_grid_.width = vw;
-  voxel_grid_.height = vh;
+    std::max(1.0, std::ceil(grid.height * grid.resolution / voxel_m)));
+  voxel_w_ = vw;
+  voxel_h_ = vh;
 
   std::vector<std::vector<Eigen::Vector2d>> buckets(
-    static_cast<std::size_t>(vw) * vh);
+    static_cast<std::size_t>(vw) * static_cast<std::size_t>(vh));
   for (int y = 0; y < grid.height; ++y) {
     for (int x = 0; x < grid.width; ++x) {
       if (!grid.occupied(x, y)) {continue;}
       const auto w = grid.gridToWorld(x, y);
-      const int vx = std::min(
-                vw - 1,
-                static_cast<int>((w.x() - grid.origin_x) / voxel_m));
-      const int vy = std::min(
-                vh - 1,
-                static_cast<int>((w.y() - grid.origin_y) / voxel_m));
-      buckets[static_cast<std::size_t>(vy) * vw + vx].push_back(w);
+      const int vx = std::clamp(
+        static_cast<int>(std::floor((w.x() - origin_x_) / voxel_m_)),
+        0, vw - 1);
+      const int vy = std::clamp(
+        static_cast<int>(std::floor((w.y() - origin_y_) / voxel_m_)),
+        0, vh - 1);
+      buckets[static_cast<std::size_t>(vy) * static_cast<std::size_t>(vw) +
+        static_cast<std::size_t>(vx)].push_back(w);
     }
   }
-  gauss_.clear();
-  for (auto & b : buckets) {
+  voxel_gauss_idx_.assign(buckets.size(), -1);
+  for (std::size_t bi = 0; bi < buckets.size(); ++bi) {
+    const auto & b = buckets[bi];
     if (b.size() < 3) {continue;}
     Gauss g;
     g.mu = Eigen::Vector2d::Zero();
@@ -399,23 +559,14 @@ void NdtMatcher::build(const OccupancyGrid & grid, double voxel_m)
       cov += d * d.transpose();
     }
     cov /= static_cast<double>(b.size() - 1);
-        // 正则化：保证正定（NDT 惯例 λ=0.001·voxel²）
-    cov.diagonal().array() += 0.001 * voxel_m * voxel_m;
+      // 正则化：保证正定（NDT 惯例 λ=0.001·voxel²）
+    cov.diagonal().array() += 0.001 * voxel_m_ * voxel_m_;
     g.cov = cov;
     g.cov_inv = cov.inverse();
+    voxel_gauss_idx_[bi] = static_cast<int>(gauss_.size());
     gauss_.push_back(g);
-        // 登记体素索引（挂在 bucket 位置上）
   }
-    // 体素 → 高斯映射表
-  voxel_gauss_idx_.assign(buckets.size(), -1);
-  {
-    std::size_t gi = 0;
-    for (std::size_t bi = 0; bi < buckets.size(); ++bi) {
-      if (buckets[bi].size() >= 3) {
-        voxel_gauss_idx_[bi] = static_cast<int>(gi++);
-      }
-    }
-  }
+  return !gauss_.empty();
 }
 
 MatchResult NdtMatcher::match(
@@ -424,91 +575,112 @@ MatchResult NdtMatcher::match(
   const MatchOptions & opt) const
 {
   MatchResult res;
-  if (!field.valid() || gauss_.empty()) {return res;}
-  const auto * grid = &field.grid();
+  if (!field.valid() || !pose_is_finite(prior) || gauss_.empty() ||
+    voxel_w_ <= 0 || voxel_h_ <= 0 || voxel_m_ <= 0.0 ||
+    scan.points.size() < 5)
+  {
+    return res;
+  }
   const double cell_r = 2.0 * voxel_m_;    // 对应搜索半径
 
-  Pose2 p = prior;
+  Pose2 p(prior.x, prior.y, wrap_angle(prior.theta));
+  bool has_valid_iter = false;
+  Eigen::Matrix3d last_H = Eigen::Matrix3d::Zero();
+  int last_used = 0;
+
   for (int it = 0; it < opt.max_iterations; ++it) {
     const double c = std::cos(p.theta), s = std::sin(p.theta);
     Eigen::Matrix3d H = Eigen::Matrix3d::Zero();
     Eigen::Vector3d g3 = Eigen::Vector3d::Zero();
-    double score = 0.0;
     int used = 0;
     for (const auto & pt : scan.points) {
+      if (!pt_is_finite(pt)) {continue;}
       const double wx = p.x + c * pt.x() - s * pt.y();
       const double wy = p.y + s * pt.x() + c * pt.y();
-      const int vx = std::min(
-                voxel_grid_.width - 1,
-                std::max(0, static_cast<int>(
-          (wx - grid->origin_x) / voxel_m_)));
-      const int vy = std::min(
-                voxel_grid_.height - 1,
-                std::max(0, static_cast<int>(
-          (wy - grid->origin_y) / voxel_m_)));
-            // 找最近的非空体素（3x3 邻域）
+      if (!std::isfinite(wx) || !std::isfinite(wy)) {continue;}
+      const double fx = std::floor((wx - origin_x_) / voxel_m_);
+      const double fy = std::floor((wy - origin_y_) / voxel_m_);
+      if (fx < -1.0 || fx > static_cast<double>(voxel_w_) ||
+        fy < -1.0 || fy > static_cast<double>(voxel_h_))
+      {
+        continue;
+      }
+      const int vx = static_cast<int>(fx);
+      const int vy = static_cast<int>(fy);
+        // 完整遍历 3x3 邻域，挑选马氏距离最小的高斯体素
       int best_g = -1;
-      double best_d2 = cell_r * cell_r;
-      for (int dy = -1; dy <= 1 && best_g < 0; ++dy) {
+      double best_m2 = 9.0;  // 3σ 截断
+      for (int dy = -1; dy <= 1; ++dy) {
         for (int dx = -1; dx <= 1; ++dx) {
           const int nx = vx + dx, ny = vy + dy;
-          if (nx < 0 || ny < 0 || nx >= voxel_grid_.width ||
-            ny >= voxel_grid_.height)
-          {
+          if (nx < 0 || ny < 0 || nx >= voxel_w_ || ny >= voxel_h_) {
             continue;
           }
           const int gi = voxel_gauss_idx_[static_cast<std::size_t>(ny) *
-              voxel_grid_.width + nx];
+              static_cast<std::size_t>(voxel_w_) +
+              static_cast<std::size_t>(nx)];
           if (gi < 0) {continue;}
-          const Eigen::Vector2d d(wx - gauss_[gi].mu.x(),
-            wy - gauss_[gi].mu.y());
-          const double d2 = d.squaredNorm();
-          if (d2 < best_d2) {
-            best_d2 = d2;
+          const Gauss & cand = gauss_[static_cast<std::size_t>(gi)];
+          const Eigen::Vector2d d(wx - cand.mu.x(), wy - cand.mu.y());
+          if (d.squaredNorm() > cell_r * cell_r) {continue;}
+          const double m2 = d.dot(cand.cov_inv * d);
+          if (m2 < best_m2) {
+            best_m2 = m2;
             best_g = gi;
           }
         }
       }
       if (best_g < 0) {continue;}
       const Gauss & G = gauss_[static_cast<std::size_t>(best_g)];
-      Eigen::Vector2d d(wx - G.mu.x(), wy - G.mu.y());
+      const Eigen::Vector2d d(wx - G.mu.x(), wy - G.mu.y());
       const Eigen::Vector2d cd = G.cov_inv * d;
-      const double m2 = d.dot(cd);
-      if (m2 > 9.0) {continue;}          // 3σ 截断
-      const double sc = std::exp(-0.5 * m2);
-      score += sc;
-            // ∂s/∂p = s · Jᵀ C⁻¹ d   （J = ∂d/∂p, 2x3）
+      const double sc = std::exp(-0.5 * best_m2);
+        // ∂s/∂p = -s · Jᵀ C⁻¹ d （J = ∂d/∂p, 2x3）
       Eigen::Matrix<double, 2, 3> J;
       J << 1.0, 0.0, -(wy - p.y), 0.0, 1.0, (wx - p.x);
       const Eigen::Vector3d grad = sc * J.transpose() * cd;
-            // GN 近似 Hessian（Magnusson：丢弃二阶项）
+        // GN 近似 Hessian（Magnusson：丢弃二阶项）
       H += sc * J.transpose() * G.cov_inv * J;
       g3 += grad;
       ++used;
     }
     if (used < 5) {break;}
-        // 最大化 F=Σs 的近似牛顿步：∇F = -Σ s JᵀC⁻¹d，
-        // -∇²F ≈ Σ s JᵀC⁻¹J = H（PSD，丢弃二阶项，Magnusson eq.17-19）
+    has_valid_iter = true;
+    last_H = H;
+    last_used = used;
+
+      // 最大化 F=Σs 的近似牛顿步：∇F = -Σ s JᵀC⁻¹d，
+      // -∇²F ≈ Σ s JᵀC⁻¹J = H（PSD，丢弃二阶项，Magnusson eq.17-19）
     Eigen::Matrix3d Hs = H;
-    Hs.diagonal().array() += 1e-6;
-    Eigen::Vector3d dp = -Hs.ldlt().solve(g3);      // dp = H⁻¹∇F = -H⁻¹g3
+    Hs.diagonal().array() += 1e-3 * H.diagonal().maxCoeff() + 1e-6;
+    const Eigen::Vector3d dp = -Hs.ldlt().solve(g3);      // dp = H⁻¹∇F = -H⁻¹g3
     if (!dp.allFinite()) {break;}
-        // 步长护栏：单步不超过 0.5m / 0.2rad（防远场高斯误导时发散）
+      // 步长护栏：单步不超过 0.5m / 0.2rad（防远场高斯误导时发散）
     const double nl = dp.head<2>().norm();
     const double s_clip =
       std::min(1.0, std::min(0.5 / std::max(nl, 1e-9),
-                                   0.2 / std::max(std::abs(dp(2)), 1e-9)));
+        0.2 / std::max(std::abs(dp(2)), 1e-9)));
     p.x += s_clip * dp(0);
     p.y += s_clip * dp(1);
-    p.theta += s_clip * dp(2);
+    p.theta = wrap_angle(p.theta + s_clip * dp(2));
     if (nl * s_clip < opt.converg_t &&
       std::abs(dp(2)) * s_clip < opt.converg_r)
     {
       break;
     }
   }
+
+  if (!has_valid_iter) {
+    res.valid = false;
+    return res;
+  }
+
   res.pose = p;
-  eval_stats(field, p, scan, opt.inlier_gate, res.score, res.inlier_ratio);
+    // NDT 的 H 已含 C⁻¹（单位 m⁻²）；按有效点数归一化后求逆，防止 N 倍过自信并保留退化比
+  const Eigen::Matrix3d H_norm = last_H / static_cast<double>(std::max(1, last_used));
+  res.covariance = cov_from_hessian(H_norm, 1.0);
+  eval_stats(field, res.pose, scan, opt.inlier_gate, res.score,
+    res.inlier_ratio);
   res.valid = true;
   return res;
 }
@@ -521,85 +693,121 @@ MatchResult ComposedMatcher::match(
   const Scan & scan,
   const MatchOptions & opt) const
 {
+  MatchResult res;
+  if (!coarse_ && !fine_) {return res;}
+  if (!coarse_) {return fine_->match(field, prior, scan, opt);}
   MatchResult coarse = coarse_->match(field, prior, scan, opt);
-  if (!coarse.valid) {return coarse;}
+  if (!coarse.valid || !fine_) {return coarse;}
   MatchResult fine = fine_->match(field, coarse.pose, scan, opt);
-    // 门限：精修后似然不应显著低于粗匹配（防精修跑飞）
-  if (fine.score + 0.05 < coarse.score) {return coarse;}
+    // 门限：精修需有效且似然不应显著低于粗匹配（防精修跑飞）
+  if (!fine.valid || fine.score + 0.05 < coarse.score) {return coarse;}
   return fine;
 }
 
 // ============================================================================
-// ============================================================================
-// ============================================================================
-// ============================================================================
 // GlobalCorrelative —— 分支定界全局搜索（Cartographer MatchFullSubmap 思路）
 //
-// · 金字塔层存 max-pool，跨越式 4 胞元取最大 → 对胞元内任意离散位姿
-//   都是可采纳上界（B&B 正确性的关键）；
+// · 金字塔层存滑窗最大值 swmax_ → 对偏移块 [b, b+2^lv) 内任意离散位姿
+//   提供紧致可采纳上界（越界光束按 0 分处理而非剔除整个位姿）；
 // · 优先队列按上界出队，弹出 level-0 节点即精确得分；
-// · 重复结构环境（货架/柱阵）保留 top-K 假设，交给后续帧确认；
-// · 末端小窗口细修（±10cm / ±0.5°），产出交给跟踪匹配器。
+// · 固定容量 top-K + 空间/角度 NMS 维护剪枝下界 worst_kept；
+// · 末端小窗口细修（±2 格 / ±半角步长），产出交给跟踪匹配器。
 // ============================================================================
-// 统一整偏移 B&B：候选位姿 = (aidx, 整数偏移 d)。
-// 点 i 落在胞元 c_i + d（整偏移可交换于 lround）。
-// 节点 = 偏移块 [b, b+2^lv)，bound = Σ swmax_lv[c_i+b]/n —— 由滑窗栈
-// 性质知这是块内任意候选的紧致可采纳上界（无逐点松弛）。
-// level-0 弹出即用 likelihood() 精确重评分（出界点记 0）。
 GlobalResult global_correlative(
   const MapField & field, const Scan & scan,
   int beams_subsample, double ang_step,
   int n_hypotheses)
 {
   GlobalResult out;
-  if (!field.valid() || scan.points.empty()) {return out;}
+  if (!field.valid() || scan.points.empty() ||
+    !std::isfinite(ang_step) || ang_step <= 0.0)
+  {
+    return out;
+  }
   const auto * grid = &field.grid();
   const int topk = std::max(1, n_hypotheses);
+  const int W = grid->width, H = grid->height;
 
-    // 降采样（B&B 用粗点集，末端重评分用全点集）
-  Scan sub;
-  for (std::size_t i = 0; i < scan.points.size();
-    i += static_cast<std::size_t>(std::max(1, beams_subsample)))
-  {
-    sub.points.push_back(scan.points[i]);
+    // 收集有限点并降采样（B&B 用粗点集，末端重评分用全点集）
+  std::vector<Vec2> valid_pts;
+  valid_pts.reserve(scan.points.size());
+  for (const auto & pt : scan.points) {
+    if (pt_is_finite(pt)) {valid_pts.push_back(pt);}
   }
-  const int n = static_cast<int>(sub.points.size());
+  if (valid_pts.size() < 5) {return out;}
+
+  std::vector<Vec2> sub_pts;
+  const std::size_t step =
+    static_cast<std::size_t>(std::max(1, beams_subsample));
+  for (std::size_t i = 0; i < valid_pts.size(); i += step) {
+    sub_pts.push_back(valid_pts[i]);
+  }
+  const int n = static_cast<int>(sub_pts.size());
   if (n < 5) {return out;}
   const int K = field.poolLevels() - 1;
   if (K < 0) {return out;}
-  const int n_ang =
-    static_cast<int>(std::ceil(2.0 * M_PI / ang_step));
 
-    // 每角度：整数胞元 c_i + 合法偏移范围
+    // 计算地图自由空间边界框作为机器人位姿搜索域（允许部分光束越界记 0 分）
+  int free_xmin = W, free_xmax = -1, free_ymin = H, free_ymax = -1;
+  for (int y = 0; y < H; ++y) {
+    for (int x = 0; x < W; ++x) {
+      const int8_t c = grid->cells[static_cast<std::size_t>(y) *
+          static_cast<std::size_t>(W) + static_cast<std::size_t>(x)];
+      if (c >= 0 && c <= 65) {
+        free_xmin = std::min(free_xmin, x);
+        free_xmax = std::max(free_xmax, x);
+        free_ymin = std::min(free_ymin, y);
+        free_ymax = std::max(free_ymax, y);
+      }
+    }
+  }
+  if (free_xmin > free_xmax || free_ymin > free_ymax) {
+    return out;
+  }
+
+  const int n_ang = static_cast<int>(std::ceil(kTwoPi / ang_step));
+  if (n_ang <= 0) {return out;}
+
+    // 每角度：整数胞元 c_i + 机器人合法偏移范围
   struct AngData
   {
     std::vector<Eigen::Vector2i> cells;
     int dx_min{0}, dx_max{0}, dy_min{0}, dy_max{0};
   };
   std::vector<AngData> ang(static_cast<std::size_t>(n_ang));
-  const int W = grid->width, H = grid->height;
   for (int a = 0; a < n_ang; ++a) {
     const double th = a * ang_step;
     const double cc = std::cos(th), ss = std::sin(th);
     auto & A = ang[static_cast<std::size_t>(a)];
-    A.cells.reserve(sub.points.size());
-    int minx = W, maxx = -W, miny = H, maxy = -H;
-    for (const auto & pt : sub.points) {
+    A.cells.reserve(sub_pts.size());
+    for (const auto & pt : sub_pts) {
       const int cx = static_cast<int>(std::lround(
           (cc * pt.x() - ss * pt.y()) / grid->resolution));
       const int cy = static_cast<int>(std::lround(
           (ss * pt.x() + cc * pt.y()) / grid->resolution));
       A.cells.push_back({cx, cy});
-      minx = std::min(minx, cx);
-      maxx = std::max(maxx, cx);
-      miny = std::min(miny, cy);
-      maxy = std::max(maxy, cy);
     }
-    A.dx_min = -minx;
-    A.dx_max = W - 1 - maxx;
-    A.dy_min = -miny;
-    A.dy_max = H - 1 - maxy;
+    A.dx_min = free_xmin;
+    A.dx_max = free_xmax;
+    A.dy_min = free_ymin;
+    A.dy_max = free_ymax;
   }
+
+    // 块上界打分：整块完全越界的光束严格记 0（避免 poolScore 边界夹紧导致虚高上界）
+  auto eval_block_bound = [&](int level, int bx, int by, const AngData & A)
+    {
+      const int span = 1 << level;
+      double sc = 0.0;
+      for (const auto & c : A.cells) {
+        const int px = c.x() + bx;
+        const int py = c.y() + by;
+        if (px >= W || px + span <= 0 || py >= H || py + span <= 0) {
+          continue;
+        }
+        sc += field.poolScore(level, std::max(px, 0), std::max(py, 0));
+      }
+      return sc / n;
+    };
 
   struct Node
   {
@@ -609,22 +817,18 @@ GlobalResult global_correlative(
   };
   std::priority_queue<Node> pq;
 
-    // 播种：顶层块（步长 2^K）覆盖合法偏移范围
+    // 播种：顶层块（步长 2^K）覆盖自由空间边界框
   {
     const int G = 1 << K;
     for (int a = 0; a < n_ang; ++a) {
       const auto & A = ang[static_cast<std::size_t>(a)];
-      const int x0 = static_cast<int>(std::floor(A.dx_min / static_cast<double>(G))) * G;
-      const int x1 = A.dx_max;
-      const int y0 = static_cast<int>(std::floor(A.dy_min / static_cast<double>(G))) * G;
-      const int y1 = A.dy_max;
-      for (int by = y0; by <= y1; by += G) {
-        for (int bx = x0; bx <= x1; bx += G) {
-          double sc = 0.0;
-          for (const auto & c : A.cells) {
-            sc += field.poolScore(K, c.x() + bx, c.y() + by);
-          }
-          sc /= n;
+      const int x0 = static_cast<int>(
+        std::floor(A.dx_min / static_cast<double>(G))) * G;
+      const int y0 = static_cast<int>(
+        std::floor(A.dy_min / static_cast<double>(G))) * G;
+      for (int by = y0; by <= A.dy_max; by += G) {
+        for (int bx = x0; bx <= A.dx_max; bx += G) {
+          const double sc = eval_block_bound(K, bx, by, A);
           if (sc > 0.05) {pq.push({sc, K, bx, by, a});}
         }
       }
@@ -632,45 +836,96 @@ GlobalResult global_correlative(
   }
   if (pq.empty()) {return out;}
 
-    // B&B 主循环
+    // NMS 判定阈值（用于区分多峰假设，防止同一峰相邻像素占满 top-K）
+  constexpr double kNmsLinM = 0.50;
+  constexpr double kNmsAngRad = 0.35;
+
   struct Hyp { double score; int dx, dy, aidx; };
   std::vector<Hyp> hyps;
+  hyps.reserve(static_cast<std::size_t>(topk));
   double worst_kept = 0.0;
+
+  auto same_mode = [&](const Hyp & a, const Hyp & b)
+    {
+      const double dist_m = std::hypot(
+        (a.dx - b.dx) * grid->resolution,
+        (a.dy - b.dy) * grid->resolution);
+      const double dang = std::abs(wrap_angle((a.aidx - b.aidx) * ang_step));
+      return dist_m < kNmsLinM && dang < kNmsAngRad;
+    };
+
+  auto update_worst_kept = [&]()
+    {
+      if (static_cast<int>(hyps.size()) < topk) {
+        worst_kept = 0.0;
+        return;
+      }
+      double w = hyps[0].score;
+      for (std::size_t i = 1; i < hyps.size(); ++i) {
+        w = std::min(w, hyps[i].score);
+      }
+      worst_kept = w;
+    };
+
+    // B&B 主循环
   std::int64_t expanded = 0;
   while (!pq.empty()) {
     const Node nd = pq.top();
     pq.pop();
     if (static_cast<int>(hyps.size()) >= topk && nd.bound <= worst_kept) {
-      break;        // 剪枝
+      break;        // 剪枝：所有剩余节点上界均不超过当前第 K 优假设
     }
+    const auto & A = ang[static_cast<std::size_t>(nd.aidx)];
     if (nd.level == 0) {
-            // 精确重评分（出界点 0 分，无滑窗膨胀）
+      if (nd.bx < A.dx_min || nd.bx > A.dx_max ||
+        nd.by < A.dy_min || nd.by > A.dy_max)
+      {
+        continue;
+      }
+        // 精确重评分（出界点 0 分，无滑窗膨胀）
       double sc = 0.0;
-      const auto & A = ang[static_cast<std::size_t>(nd.aidx)];
       for (const auto & c : A.cells) {
         sc += field.likelihood(c.x() + nd.bx, c.y() + nd.by);
       }
       sc /= n;
       if (sc > 0.10) {
-        hyps.push_back({sc, nd.bx, nd.by, nd.aidx});
-        worst_kept = hyps.size() == 1 ?
-          hyps[0].score :
-          std::min(worst_kept, hyps.back().score);
+        const Hyp cand{sc, nd.bx, nd.by, nd.aidx};
+        bool merged = false;
+        for (auto & h : hyps) {
+          if (same_mode(h, cand)) {
+            if (cand.score > h.score) {h = cand;}
+            merged = true;
+            break;
+          }
+        }
+        if (!merged) {
+          if (static_cast<int>(hyps.size()) < topk) {
+            hyps.push_back(cand);
+          } else {
+            auto worst_it = std::min_element(
+              hyps.begin(), hyps.end(),
+              [](const Hyp & a, const Hyp & b) {return a.score < b.score;});
+            if (cand.score > worst_it->score) {
+              *worst_it = cand;
+            }
+          }
+        }
+        update_worst_kept();
       }
       continue;
     }
-    const auto & A = ang[static_cast<std::size_t>(nd.aidx)];
+
     const int h = 1 << (nd.level - 1);
     for (int dy = 0; dy < 2; ++dy) {
       for (int dx = 0; dx < 2; ++dx) {
         const int bx = nd.bx + dx * h;
         const int by = nd.by + dy * h;
-        if (bx > A.dx_max || by > A.dy_max) {continue;}
-        double sc = 0.0;
-        for (const auto & c : A.cells) {
-          sc += field.poolScore(nd.level - 1, c.x() + bx, c.y() + by);
+        if (bx > A.dx_max || by > A.dy_max ||
+          bx + h - 1 < A.dx_min || by + h - 1 < A.dy_min)
+        {
+          continue;
         }
-        sc /= n;
+        const double sc = eval_block_bound(nd.level - 1, bx, by, A);
         if (sc > 0.05 &&
           (static_cast<int>(hyps.size()) < topk || sc > worst_kept))
         {
@@ -683,29 +938,35 @@ GlobalResult global_correlative(
   }
   if (hyps.empty()) {return out;}
 
-    // 每个假设：连续小窗口细修 + 全点集重评分
+    // 每个假设：连续小窗口细修 + 全点集重评分（点云旋转提至 5x5 平移循环外）
   struct Refined { double score; Pose2 pose; };
   std::vector<Refined> refined;
+  refined.reserve(hyps.size());
+  std::vector<Eigen::Vector2d> rot_pts;
+  rot_pts.reserve(valid_pts.size());
   for (const auto & hyp : hyps) {
     const double th0 = hyp.aidx * ang_step;
     const Eigen::Vector2d w0 = grid->gridToWorld(hyp.dx, hyp.dy);
     double best_sc = -1.0;
-    double bx = w0.x(), by = w0.y(), bth = th0;
+    double bx = w0.x(), by = w0.y(), bth = wrap_angle(th0);
     for (int dth = -4; dth <= 4; ++dth) {
-      const double th = th0 + dth * ang_step / 8.0;
+      const double th = wrap_angle(th0 + dth * ang_step / 8.0);
       const double cc = std::cos(th), ss = std::sin(th);
+      rot_pts.clear();
+      for (const auto & pt : valid_pts) {
+        rot_pts.emplace_back(
+          cc * pt.x() - ss * pt.y(), ss * pt.x() + cc * pt.y());
+      }
       for (int dy = -2; dy <= 2; ++dy) {
+        const double py = w0.y() + dy * grid->resolution;
         for (int dx = -2; dx <= 2; ++dx) {
           const double px = w0.x() + dx * grid->resolution;
-          const double py = w0.y() + dy * grid->resolution;
           double sc = 0.0;
-          for (const auto & pt : scan.points) {           // 全点集
-            const double wx = px + cc * pt.x() - ss * pt.y();
-            const double wy = py + ss * pt.x() + cc * pt.y();
-            const auto g = grid->worldToGridF(wx, wy);
+          for (const auto & rpt : rot_pts) {
+            const auto g = grid->worldToGridF(px + rpt.x(), py + rpt.y());
             sc += field.likelihoodAtF(g.x(), g.y());
           }
-          sc /= static_cast<double>(scan.points.size());
+          sc /= static_cast<double>(rot_pts.size());
           if (sc > best_sc) {
             best_sc = sc;
             bx = px;
@@ -720,12 +981,33 @@ GlobalResult global_correlative(
   std::sort(refined.begin(), refined.end(),
     [](const Refined & a, const Refined & b) {
       return a.score > b.score;
-              });
+    });
 
-  out.pose = refined[0].pose;
-  out.score = refined[0].score;
-  for (std::size_t i = 1; i < refined.size(); ++i) {
-    out.alternates.push_back(refined[i].pose);
+    // 精修后最终 NMS 去重，保证 alternates 满足最小间距且总数 <= topk
+  std::vector<Refined> dedup;
+  dedup.reserve(static_cast<std::size_t>(topk));
+  for (const auto & r : refined) {
+    bool dup = false;
+    for (const auto & kept : dedup) {
+      const double dist_m = std::hypot(
+        r.pose.x - kept.pose.x, r.pose.y - kept.pose.y);
+      const double dang = std::abs(wrap_angle(r.pose.theta - kept.pose.theta));
+      if (dist_m < kNmsLinM && dang < kNmsAngRad) {
+        dup = true;
+        break;
+      }
+    }
+    if (!dup) {
+      dedup.push_back(r);
+      if (static_cast<int>(dedup.size()) >= topk) {break;}
+    }
+  }
+  if (dedup.empty()) {return out;}
+
+  out.pose = dedup[0].pose;
+  out.score = dedup[0].score;
+  for (std::size_t i = 1; i < dedup.size(); ++i) {
+    out.alternates.push_back(dedup[i].pose);
   }
   out.valid = out.score > 0.10;
   return out;
@@ -745,13 +1027,13 @@ std::shared_ptr<Matcher> make_matcher(
   if (name == "ndt") {
     if (grid == nullptr) {return nullptr;}
     auto m = std::make_shared<NdtMatcher>();
-    m->build(*grid, ndt_voxel);
+    if (!m->build(*grid, ndt_voxel)) {return nullptr;}
     return m;
   }
   if (name == "composed") {
     return std::make_shared<ComposedMatcher>(
-            std::make_shared<CorrelativeMatcher>(),
-            std::make_shared<FieldGnMatcher>());
+      std::make_shared<CorrelativeMatcher>(),
+      std::make_shared<FieldGnMatcher>());
   }
   return nullptr;
 }

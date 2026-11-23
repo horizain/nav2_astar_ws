@@ -157,6 +157,18 @@ if(BUILD_TESTING)
     target_link_libraries(test_map_field scan_localizer_core)
     target_compile_options(test_map_field PRIVATE ${SCAN_LOCALIZER_WARN_FLAGS})
   endif()
+
+  ament_add_gtest(test_matchers test/test_matchers.cpp)
+  if(TARGET test_matchers)
+    target_link_libraries(test_matchers scan_localizer_core scan_localizer_sim_lib)
+    target_compile_options(test_matchers PRIVATE ${SCAN_LOCALIZER_WARN_FLAGS})
+  endif()
+
+  ament_add_gtest(test_particle_filter test/test_particle_filter.cpp)
+  if(TARGET test_particle_filter)
+    target_link_libraries(test_particle_filter scan_localizer_core scan_localizer_sim_lib)
+    target_compile_options(test_particle_filter PRIVATE ${SCAN_LOCALIZER_WARN_FLAGS})
+  endif()
 endif()
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)

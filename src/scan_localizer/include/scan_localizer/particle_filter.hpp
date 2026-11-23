@@ -34,17 +34,25 @@ struct PfOptions
   double alpha_rot_trans{0.05};
   double alpha_trans_trans{0.05};
   double alpha_trans_rot{0.05};
-    // 观测
+    // 观测（混合似然场模型）
   int obs_subsample{3};
-    // 重采样
+  double z_hit{0.9};
+  double z_rand{0.1};
+  int free_thresh{25};
+    // 重采样与可选运动门控/随机粒子注入
   double ess_frac{0.5};
+  double update_min_d{0.0};
+  double update_min_a{0.0};
+  double random_particle_ratio{0.0};
 };
 
 class ParticleFilter {
 public:
+  struct Particle { double x, y, th, w; };
+
   explicit ParticleFilter(PfOptions opt = {});
 
-  void init_global(const OccupancyGrid & grid, std::mt19937 & rng);
+  bool init_global(const OccupancyGrid & grid, std::mt19937 & rng);
   void init_gaussian(
     const Pose2 & mean, double std_xy, double std_th,
     std::mt19937 & rng);
@@ -55,19 +63,25 @@ public:
     // 似然场观测更新 + ESS 重采样；返回有效粒子占比
   double update(const MapField & field, const Scan & scan, std::mt19937 & rng);
 
-    // 加权均值位姿 + 协方差（角度用 sin/cos 均值）
+    // 加权均值位姿 + 完整 3x3 协方差（角度用 sin/cos 均值）
   void estimate(Pose2 & mean, Cov3 & cov) const;
 
   double mean_score() const {return mean_score_;}
   bool initialized() const {return !particles_.empty();}
   std::size_t size() const {return particles_.size();}
+  const std::vector<Particle> & particles() const {return particles_;}
 
 private:
-  struct Particle { double x, y, th, w; };
   std::vector<Particle> particles_;
+  std::vector<Particle> resample_buf_;
+  std::vector<Vec2> sub_pts_;
+  std::vector<double> log_w_buf_;
   PfOptions opt_;
   double mean_score_{0.0};
-  void resample(std::mt19937 & rng);
+  double accum_d_{0.0};
+  double accum_a_{0.0};
+  bool has_updated_{false};
+  void resample(std::mt19937 & rng, const OccupancyGrid * grid = nullptr);
 };
 
 }  // namespace sloc

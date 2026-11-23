@@ -333,26 +333,32 @@ Eigen::Vector2i MapField::descendToObstacle(int ix, int iy) const
     return {ix, iy};
   }
 
-  // 起点在障碍内部或未知区（sdf < 0）：沿正 SDF 梯度单调爬升至障碍表面
+  // 起点在障碍内部或未知区（sdf < 0）：沿正 SDF 最陡梯度单调爬升至障碍表面
   if (cur < 0.f) {
     for (int step = 0; step < max_steps; ++step) {
       int bx = ix, by = iy;
       float bv = cur;
+      float best_slope = 0.f;
       for (int dy = -1; dy <= 1; ++dy) {
         for (int dx = -1; dx <= 1; ++dx) {
           if (dx == 0 && dy == 0) {continue;}
           const int nx = ix + dx, ny = iy + dy;
           if (nx < 0 || ny < 0 || nx >= w || ny >= h) {continue;}
           const float v = sdf_at(nx, ny);
-          if (v > bv) {
-            bv = v;
-            bx = nx;
-            by = ny;
+          if (v > cur) {
+            const float step_len = (dx != 0 && dy != 0) ? 1.41421356f : 1.0f;
+            const float slope = (v - cur) / step_len;
+            if (slope > best_slope) {
+              best_slope = slope;
+              bv = v;
+              bx = nx;
+              by = ny;
+            }
           }
         }
       }
       // 严格递增防振荡：无更高邻域则停在当前局部极大值
-      if (bv <= cur) {
+      if (best_slope <= 0.f) {
         return {ix, iy};
       }
       if (bv >= 0.f) {
@@ -377,24 +383,30 @@ Eigen::Vector2i MapField::descendToObstacle(int ix, int iy) const
     }
   }
 
-  // 起点在自由区（sdf > 0）：8 邻域严格下降至障碍表面（sdf <= 0）
+  // 起点在自由区（sdf > 0）：8 邻域最陡梯度严格下降至障碍表面（sdf <= 0）
   for (int step = 0; step < max_steps; ++step) {
     int bx = ix, by = iy;
     float bv = cur;
+    float best_slope = 0.f;
     for (int dy = -1; dy <= 1; ++dy) {
       for (int dx = -1; dx <= 1; ++dx) {
         if (dx == 0 && dy == 0) {continue;}
         const int nx = ix + dx, ny = iy + dy;
         if (nx < 0 || ny < 0 || nx >= w || ny >= h) {continue;}
         const float v = sdf_at(nx, ny);
-        if (v < bv) {
-          bv = v;
-          bx = nx;
-          by = ny;
+        if (v < cur) {
+          const float step_len = (dx != 0 && dy != 0) ? 1.41421356f : 1.0f;
+          const float slope = (cur - v) / step_len;
+          if (slope > best_slope) {
+            best_slope = slope;
+            bv = v;
+            bx = nx;
+            by = ny;
+          }
         }
       }
     }
-    if (bv >= cur || bv <= 0.f) {
+    if (best_slope <= 0.f || bv <= 0.f) {
       return bv <= 0.f ? Eigen::Vector2i(bx, by) : Eigen::Vector2i(ix, iy);
     }
     ix = bx;

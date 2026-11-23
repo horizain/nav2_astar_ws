@@ -101,8 +101,8 @@ public:
 // ---------- 2D NDT（D2P 分数最大化，解析 GN） ----------
 class NdtMatcher : public Matcher {
 public:
-    // 从占据单元预构建体素高斯
-  void build(const OccupancyGrid & grid, double voxel_m);
+    // 从占据单元预构建体素高斯；无效地图或非正体素尺寸返回 false
+  bool build(const OccupancyGrid & grid, double voxel_m);
   MatchResult match(
     const MapField & field, const Pose2 & prior,
     const Scan & scan,
@@ -113,7 +113,10 @@ private:
   std::vector<Gauss> gauss_;
   std::vector<int> voxel_gauss_idx_;    // 体素 → gauss_ 索引（-1 空）
   double voxel_m_{0.5};
-  OccupancyGrid voxel_grid_;    // 高斯桶索引网格（w,h = 地图/voxel）
+  int voxel_w_{0};
+  int voxel_h_{0};
+  double origin_x_{0.0};
+  double origin_y_{0.0};
 };
 
 // ---------- 组合：粗捕获 + 精修 ----------
