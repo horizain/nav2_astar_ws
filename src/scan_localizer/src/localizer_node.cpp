@@ -314,7 +314,7 @@ void LocalizerNode::onImu(const sensor_msgs::msg::Imu::SharedPtr m)
   last_imu_stamp_ = stamp;
     // 陀螺积分（任意固定系；core 用帧间差分，慢漂移自动消除）
   imu_yaw_ += m->angular_velocity.z * dt;
-  core_->on_imu_yaw(imu_yaw_);
+  core_->on_imu_yaw(imu_yaw_, dt);
 }
 
 bool LocalizerNode::loadMapFromYaml(const std::string & yaml_path)
@@ -503,9 +503,10 @@ void LocalizerNode::onGlobalRelocalize(
     res->message = "not configured";
     return;
   }
-  core_->request_global();
-  res->success = true;
-  res->message = "global relocalization requested";
+  const bool ok = core_->request_global();
+  res->success = ok;
+  res->message = ok ? "global relocalization requested" :
+    "global relocalization rejected (not ready or already active)";
 }
 
 void LocalizerNode::onSetFineMode(

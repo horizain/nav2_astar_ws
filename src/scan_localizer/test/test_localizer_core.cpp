@@ -1,0 +1,700 @@
+// Copyright 2026 ruijianding
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+#include <gtest/gtest.h>
+
+#include <cmath>
+#include <limits>
+#include <memory>
+#include <random>
+#include <string>
+#include <vector>
+
+#include "scan_localizer/localizer_core.hpp"
+#include "scan_localizer/map_field.hpp"
+#include "scan_localizer/matchers.hpp"
+#include "scan_localizer/sim_world.hpp"
+
+namespace
+{
+
+class ScriptedMatcher : public sloc::Matcher {
+public:
+  sloc::MatchResult next_result{};
+  bool offset_from_prior{false};
+  sloc::Pose2 prior_offset{};
+
+  sloc::MatchResult match(
+    const sloc::MapField &, const sloc::Pose2 & prior,
+    const sloc::Scan &, const sloc::MatchOptions &) const override
+  {
+    sloc::MatchResult r = next_result;
+    if (offset_from_prior) {
+      r.pose = sloc::Pose2(
+        prior.x + prior_offset.x,
+        prior.y + prior_offset.y,
+        sloc::wrap_angle(prior.theta + prior_offset.theta));
+    }
+    return r;
+  }
+};
+
+class HypothesisAwareMatcher : public sloc::Matcher {
+public:
+  sloc::Pose2 true_pose{};
+
+  sloc::MatchResult match(
+    const sloc::MapField &, const sloc::Pose2 & prior,
+    const sloc::Scan &, const sloc::MatchOptions &) const override
+  {
+    sloc::MatchResult r;
+    const double d = std::hypot(prior.x - true_pose.x, prior.y - true_pose.y);
+    const double da = std::abs(sloc::wrap_angle(prior.theta - true_pose.theta));
+    if (d < 0.5 && da < 0.3) {
+      r.valid = true;
+      r.pose = true_pose;
+      r.score = 0.92;
+      r.inlier_ratio = 0.95;
+      r.covariance = sloc::Cov3::Identity() * 1e-3;
+    } else {
+      r.valid = true;
+      r.pose = prior;
+      r.score = 0.15;
+      r.inlier_ratio = 0.20;
+      r.covariance = sloc::Cov3::Identity() * 0.5;
+    }
+    return r;
+  }
+};
+
+struct WarehouseFixture
+{
+  sloc::OccupancyGrid grid;
+  std::shared_ptr<sloc::MapField> field;
+
+  WarehouseFixture()
+  {
+    grid = sloc::sim::make_warehouse(0.05);
+    field = std::make_shared<sloc::MapField>();
+    field->build(grid, 0.20);
+  }
+};
+
+const WarehouseFixture & shared_warehouse()
+{
+  static const WarehouseFixture kFixture;
+  return kFixture;
+}
+
+sloc::Scan make_dummy_scan()
+{
+  sloc::Scan s;
+  s.points.emplace_back(1.0, 0.0);
+  s.points.emplace_back(0.0, 1.0);
+  s.points.emplace_back(-1.0, 0.0);
+  return s;
+}
+
+TEST(LocalizerCoreTest, AllFiveMatchersTrackWithZeroFalseRejections)
+{
+  const auto & wf = shared_warehouse();
+  const std::vector<std::string> names = {
+    "correlative", "field_gn", "icp_p2p", "ndt", "composed"
+  };
+
+  sloc::sim::ScanSimConfig scfg;
+  scfg.beams = 360;
+  scfg.noise_std = 0.0;
+
+  for (const auto & name : names) {
+    SCOPED_TRACE("matcher=" + name);
+    auto matcher = sloc::make_matcher(name, &wf.grid, 0.5);
+    ASSERT_NE(matcher, nullptr);
+
+    sloc::CoreConfig cfg;
+    cfg.match_opt.window_lin = 0.20;
+    cfg.match_opt.window_ang = 0.12;
+    sloc::LocalizerCore core(cfg);
+    core.set_map(wf.field);
+    core.set_matcher(matcher);
+
+    std::mt19937 rng(123);
+    sloc::Pose2 gt(10.0, 8.5, 0.3);
+    core.on_odom(gt);
+    core.set_initial_pose(gt);
+    ASSERT_EQ(core.state(), sloc::LocState::TRACKING);
+
+    for (int step = 0; step < 5; ++step) {
+      gt = gt * sloc::Pose2(0.15, 0.0, 0.02);
+      core.on_odom(gt);
+      const auto scan = sloc::sim::make_scan(wf.grid, gt, scfg, rng);
+      const auto out = core.on_scan(scan);
+      EXPECT_TRUE(out.accepted);
+      EXPECT_EQ(out.state, sloc::LocState::TRACKING);
+      EXPECT_EQ(out.reject_streak, 0);
+      EXPECT_LT(std::hypot(out.pose.x - gt.x, out.pose.y - gt.y), 0.08);
+      EXPECT_LT(std::abs(sloc::wrap_angle(out.pose.theta - gt.theta)), 0.05);
+    }
+  }
+}
+
+TEST(LocalizerCoreTest, NonZeroInitialImuYawHasNoFirstScanJump)
+{
+  const auto & wf = shared_warehouse();
+  auto matcher = sloc::make_matcher("composed");
+  ASSERT_NE(matcher, nullptr);
+
+  sloc::CoreConfig cfg;
+  cfg.use_imu_yaw = true;
+  sloc::LocalizerCore core(cfg);
+  core.set_map(wf.field);
+  core.set_matcher(matcher);
+
+  const sloc::Pose2 p0(10.0, 8.5, 0.4);
+  core.on_odom(p0);
+  core.set_initial_pose(p0);
+
+  // First IMU sample starts at non-zero 1.5 rad
+  core.on_imu_yaw(1.5, 0.02);
+
+  std::mt19937 rng(7);
+  sloc::sim::ScanSimConfig scfg;
+  scfg.beams = 360;
+  scfg.noise_std = 0.0;
+  const auto scan = sloc::sim::make_scan(wf.grid, p0, scfg, rng);
+  const auto out = core.on_scan(scan);
+  EXPECT_TRUE(out.accepted);
+  EXPECT_EQ(out.state, sloc::LocState::TRACKING);
+  EXPECT_LT(std::abs(sloc::wrap_angle(out.pose.theta - p0.theta)), 0.01);
+
+  // Next IMU sample increments by +0.02 rad (no jump from 0)
+  const sloc::Pose2 p1(10.0, 8.5, 0.42);
+  core.on_odom(p1);
+  core.on_imu_yaw(1.52, 0.02);
+  const auto scan1 = sloc::sim::make_scan(wf.grid, p1, scfg, rng);
+  const auto out1 = core.on_scan(scan1);
+  EXPECT_TRUE(out1.accepted);
+  EXPECT_LT(std::abs(sloc::wrap_angle(out1.pose.theta - p1.theta)), 0.01);
+}
+
+TEST(LocalizerCoreTest, FourDimEkfGyroBiasConverges)
+{
+  const auto & wf = shared_warehouse();
+  auto sm = std::make_shared<ScriptedMatcher>();
+  sm->next_result.valid = true;
+  sm->next_result.score = 0.95;
+  sm->next_result.inlier_ratio = 0.98;
+  sm->next_result.covariance = sloc::Cov3::Zero();
+  sm->next_result.covariance(0, 0) = 1e-4;
+  sm->next_result.covariance(1, 1) = 1e-4;
+  sm->next_result.covariance(2, 2) = 1e-5;
+
+  sloc::CoreConfig cfg;
+  cfg.use_imu_yaw = true;
+  cfg.gyro_bias_init_var = 0.05;
+  cfg.gyro_bias_rw_var_per_s = 1e-6;
+  cfg.max_gyro_bias = 0.5;
+  sloc::LocalizerCore core(cfg);
+  core.set_map(wf.field);
+  core.set_matcher(sm);
+
+  const double true_bias = 0.05;  // rad/s
+  const double dt = 0.1;          // 10 Hz scans
+  const double true_wz = 0.10;    // rad/s
+  const sloc::Scan dummy = make_dummy_scan();
+
+  sloc::Pose2 gt(5.0, 5.0, 0.0);
+  core.on_odom(gt);
+  core.set_initial_pose(gt);
+  const double init_bias_var = core.gyro_bias_var();
+
+  double max_heading_err_after_warmup = 0.0;
+  for (int k = 1; k <= 60; ++k) {
+    gt = gt * sloc::Pose2(0.05, 0.0, true_wz * dt);
+    core.on_odom(gt);
+    // Inject raw gyro rate corrupted by constant bias
+    core.on_imu_gyro(true_wz + true_bias, dt);
+    sm->next_result.pose = gt;
+
+    const auto out = core.on_scan(dummy);
+    ASSERT_TRUE(out.accepted);
+    if (k >= 20) {
+      const double herr = std::abs(sloc::wrap_angle(out.pose.theta - gt.theta));
+      max_heading_err_after_warmup = std::max(max_heading_err_after_warmup, herr);
+    }
+  }
+
+  EXPECT_NEAR(core.gyro_bias(), true_bias, 0.005);
+  EXPECT_LT(core.gyro_bias_var(), init_bias_var * 0.2);
+  EXPECT_LT(max_heading_err_after_warmup, 0.01);
+}
+
+TEST(LocalizerCoreTest, MapToOdomInvariantBetweenScans)
+{
+  const auto & wf = shared_warehouse();
+  auto sm = std::make_shared<ScriptedMatcher>();
+  sm->next_result.valid = true;
+  sm->next_result.pose = sloc::Pose2(10.0, 8.0, 0.5);
+  sm->next_result.score = 0.9;
+  sm->next_result.inlier_ratio = 0.9;
+  sm->next_result.covariance = sloc::Cov3::Identity() * 1e-3;
+
+  sloc::LocalizerCore core;
+  core.set_map(wf.field);
+  core.set_matcher(sm);
+
+  const sloc::Pose2 odom0(1.0, 2.0, 0.1);
+  core.on_odom(odom0);
+  core.set_initial_pose(sloc::Pose2(10.0, 8.0, 0.5));
+  const auto out = core.on_scan(make_dummy_scan());
+  ASSERT_TRUE(out.accepted);
+
+  const sloc::Pose2 m2o_ref = core.map_to_odom();
+  // Feed multiple odom updates without any scan
+  for (int i = 1; i <= 10; ++i) {
+    core.on_odom(sloc::Pose2(1.0 + 0.2 * i, 2.0 - 0.1 * i, 0.1 + 0.05 * i));
+    const sloc::Pose2 m2o_now = core.map_to_odom();
+    EXPECT_NEAR(m2o_now.x, m2o_ref.x, 1e-12);
+    EXPECT_NEAR(m2o_now.y, m2o_ref.y, 1e-12);
+    EXPECT_NEAR(sloc::wrap_angle(m2o_now.theta - m2o_ref.theta), 0.0, 1e-12);
+  }
+}
+
+TEST(LocalizerCoreTest, OdomlessInitAndTracking)
+{
+  const auto & wf = shared_warehouse();
+  auto matcher = sloc::make_matcher("composed");
+  ASSERT_NE(matcher, nullptr);
+
+  sloc::CoreConfig cfg;
+  cfg.allow_odomless = true;
+  sloc::LocalizerCore core(cfg);
+  core.set_map(wf.field);
+  core.set_matcher(matcher);
+
+  // Never call on_odom()
+  const sloc::Pose2 gt(10.0, 8.5, 0.3);
+  core.set_initial_pose(gt);
+  EXPECT_EQ(core.state(), sloc::LocState::TRACKING);
+
+  std::mt19937 rng(99);
+  sloc::sim::ScanSimConfig scfg;
+  scfg.beams = 360;
+  scfg.noise_std = 0.0;
+
+  sloc::Pose2 cur = gt;
+  for (int i = 0; i < 4; ++i) {
+    cur = cur * sloc::Pose2(0.05, 0.0, 0.01);
+    const auto scan = sloc::sim::make_scan(wf.grid, cur, scfg, rng);
+    const auto out = core.on_scan(scan);
+    EXPECT_TRUE(out.accepted);
+    EXPECT_EQ(out.state, sloc::LocState::TRACKING);
+    EXPECT_LT(std::hypot(out.pose.x - cur.x, out.pose.y - cur.y), 0.05);
+    const sloc::Pose2 m2o = core.map_to_odom();
+    EXPECT_NEAR(m2o.x, out.pose.x, 1e-12);
+    EXPECT_NEAR(m2o.y, out.pose.y, 1e-12);
+  }
+
+  // Odom-less global recovery
+  ASSERT_TRUE(core.request_global());
+  EXPECT_EQ(core.state(), sloc::LocState::GLOBAL);
+  core.set_global_fn([&](const sloc::Scan &, sloc::Pose2 & out_p, double & sc) {
+      out_p = cur;
+      sc = 0.91;
+      return true;
+    });
+  const auto scan_g = sloc::sim::make_scan(wf.grid, cur, scfg, rng);
+  const auto out_g = core.on_scan(scan_g);
+  EXPECT_TRUE(out_g.accepted);
+  EXPECT_EQ(out_g.state, sloc::LocState::TRACKING);
+  EXPECT_GT(out_g.inlier_ratio, 0.8);
+  EXPECT_TRUE(out_g.covariance.allFinite());
+  EXPECT_NEAR(out_g.covariance(0, 0), 0.04, 1e-12);
+}
+
+TEST(LocalizerCoreTest, FullStateMachineAndImmediateDegradedRecovery)
+{
+  const auto & wf = shared_warehouse();
+  auto sm = std::make_shared<ScriptedMatcher>();
+
+  sloc::CoreConfig cfg;
+  cfg.degraded_after = 2;
+  cfg.lost_after = 5;
+  cfg.anomaly_window = 0;  // Disable anomaly shortcut so lost_after is tested directly
+  sloc::LocalizerCore core(cfg);
+
+  // request_global() contract before map/matcher are set
+  EXPECT_FALSE(core.request_global());
+
+  core.set_map(wf.field);
+  core.set_matcher(sm);
+  EXPECT_EQ(core.state(), sloc::LocState::UNINIT);
+
+  const sloc::Pose2 p0(10.0, 8.5, 0.0);
+  core.on_odom(p0);
+  core.set_initial_pose(p0);
+  EXPECT_EQ(core.state(), sloc::LocState::TRACKING);
+
+  const sloc::Scan dummy = make_dummy_scan();
+
+  // Trigger DEGRADED (2 rejections)
+  sm->next_result.valid = false;
+  auto out = core.on_scan(dummy);
+  EXPECT_FALSE(out.accepted);
+  EXPECT_EQ(out.state, sloc::LocState::TRACKING);
+  out = core.on_scan(dummy);
+  EXPECT_FALSE(out.accepted);
+  EXPECT_EQ(out.state, sloc::LocState::DEGRADED);
+
+  // Recover DEGRADED -> TRACKING: out.state MUST be TRACKING on the recovery frame!
+  sm->next_result.valid = true;
+  sm->next_result.pose = p0;
+  sm->next_result.score = 0.9;
+  sm->next_result.inlier_ratio = 0.9;
+  sm->next_result.covariance = sloc::Cov3::Identity() * 1e-3;
+  out = core.on_scan(dummy);
+  EXPECT_TRUE(out.accepted);
+  EXPECT_EQ(out.state, sloc::LocState::TRACKING);
+  EXPECT_EQ(core.state(), sloc::LocState::TRACKING);
+
+  // Drive TRACKING -> DEGRADED -> LOST (5 rejections)
+  sm->next_result.valid = false;
+  for (int i = 0; i < 4; ++i) {
+    out = core.on_scan(dummy);
+    EXPECT_FALSE(out.accepted);
+  }
+  EXPECT_EQ(out.state, sloc::LocState::DEGRADED);
+  out = core.on_scan(dummy);
+  EXPECT_EQ(out.state, sloc::LocState::LOST);
+
+  // LOST -> GLOBAL via request_global()
+  EXPECT_TRUE(core.request_global());
+  EXPECT_EQ(core.state(), sloc::LocState::GLOBAL);
+  // Already GLOBAL -> returns false
+  EXPECT_FALSE(core.request_global());
+
+  // GLOBAL -> TRACKING via global_fn_
+  std::mt19937 rng(5);
+  sloc::sim::ScanSimConfig scfg;
+  scfg.beams = 180;
+  scfg.noise_std = 0.0;
+  const auto real_scan = sloc::sim::make_scan(wf.grid, p0, scfg, rng);
+
+  core.set_global_fn([&](const sloc::Scan &, sloc::Pose2 & g, double & sc) {
+      g = p0;
+      sc = 0.88;
+      return true;
+    });
+  out = core.on_scan(real_scan);
+  EXPECT_TRUE(out.accepted);
+  EXPECT_EQ(out.state, sloc::LocState::TRACKING);
+  EXPECT_DOUBLE_EQ(out.score, 0.88);
+  EXPECT_GT(out.inlier_ratio, 0.8);
+  EXPECT_NEAR(out.covariance(0, 0), 0.04, 1e-12);
+}
+
+TEST(LocalizerCoreTest, AllFourGatesTriggeredIndividually)
+{
+  const auto & wf = shared_warehouse();
+  auto sm = std::make_shared<ScriptedMatcher>();
+  const sloc::Pose2 p0(5.0, 5.0, 0.0);
+  const sloc::Scan dummy = make_dummy_scan();
+
+  auto make_core = [&]() {
+      sloc::CoreConfig cfg;
+      cfg.min_inlier_ratio = 0.60;
+      cfg.min_score = 0.35;
+      cfg.mahal_gate = 9.0;
+      cfg.max_cov_eig = 1.0;
+      sloc::LocalizerCore core(cfg);
+      core.set_map(wf.field);
+      core.set_matcher(sm);
+      core.on_odom(p0);
+      core.set_initial_pose(p0);
+      return core;
+    };
+
+  auto set_good = [&]() {
+      sm->next_result.valid = true;
+      sm->next_result.pose = p0;
+      sm->next_result.score = 0.90;
+      sm->next_result.inlier_ratio = 0.90;
+      sm->next_result.covariance = sloc::Cov3::Identity() * 1e-3;
+    };
+
+  // Baseline passes all gates
+  set_good();
+  EXPECT_TRUE(make_core().on_scan(dummy).accepted);
+
+  // 1) valid gate
+  set_good();
+  sm->next_result.valid = false;
+  EXPECT_FALSE(make_core().on_scan(dummy).accepted);
+
+  // 2) inlier_ratio gate
+  set_good();
+  sm->next_result.inlier_ratio = 0.40;
+  EXPECT_FALSE(make_core().on_scan(dummy).accepted);
+
+  // 3) score gate
+  set_good();
+  sm->next_result.score = 0.20;
+  EXPECT_FALSE(make_core().on_scan(dummy).accepted);
+
+  // 4) mahalanobis gate (huge pose jump with small covariance)
+  set_good();
+  sm->next_result.pose = sloc::Pose2(p0.x + 2.0, p0.y, p0.theta);
+  EXPECT_FALSE(make_core().on_scan(dummy).accepted);
+
+  // 5) max_cov_eig gate (min eigenvalue >= max_cov_eig)
+  set_good();
+  sm->next_result.covariance = sloc::Cov3::Identity() * 2.0;
+  EXPECT_FALSE(make_core().on_scan(dummy).accepted);
+}
+
+TEST(LocalizerCoreTest, DegenerateCorridorAnisotropicEkf)
+{
+  const auto & wf = shared_warehouse();
+  auto sm = std::make_shared<ScriptedMatcher>();
+
+  sloc::CoreConfig cfg;
+  cfg.odom_trans_var_per_m = 0.01;  // After 1m, prior var = 0.01 m^2
+  sloc::LocalizerCore core(cfg);
+  core.set_map(wf.field);
+  core.set_matcher(sm);
+
+  core.on_odom(sloc::Pose2(0.0, 0.0, 0.0));
+  core.set_initial_pose(sloc::Pose2(0.0, 0.0, 0.0));
+
+  // Move 1m forward so prior covariance grows to ~0.01 m^2
+  core.on_odom(sloc::Pose2(1.0, 0.0, 0.0));
+
+  // Degenerate corridor along x: R_xx = 200 m^2, lateral R_yy = 0.001 m^2
+  // Matcher drifts +0.50 m along x, and measures true lateral y = +0.05 m
+  sm->next_result.valid = true;
+  sm->next_result.score = 0.90;
+  sm->next_result.inlier_ratio = 0.90;
+  sm->next_result.pose = sloc::Pose2(1.50, 0.05, 0.0);
+  sm->next_result.covariance = sloc::Cov3::Zero();
+  sm->next_result.covariance(0, 0) = 200.0;
+  sm->next_result.covariance(1, 1) = 0.001;
+  sm->next_result.covariance(2, 2) = 0.001;
+
+  const auto out = core.on_scan(make_dummy_scan());
+  ASSERT_TRUE(out.accepted);
+
+  // Along-corridor drift absorption must be < 5% of 0.50 m (= 0.025 m)
+  const double along_absorbed = std::abs(out.pose.x - 1.0);
+  EXPECT_LT(along_absorbed, 0.50 * 0.05);
+
+  // Constrained lateral direction snaps to LiDAR (< 0.01 m error from 0.05 m)
+  const double lateral_err = std::abs(out.pose.y - 0.05);
+  EXPECT_LT(lateral_err, 0.01);
+}
+
+TEST(LocalizerCoreTest, Se2HeadingVariancePropagatesToPosition)
+{
+  const auto & wf = shared_warehouse();
+  auto sm = std::make_shared<ScriptedMatcher>();
+
+  sloc::CoreConfig cfg;
+  cfg.odom_trans_var_per_m = 0.0;
+  cfg.odom_rot_var_per_rad = 0.0;
+  cfg.odom_rot_var_per_m = 0.0;
+  cfg.degraded_after = 10;
+  sloc::LocalizerCore core(cfg);
+  core.set_map(wf.field);
+  core.set_matcher(sm);
+
+  // Inject large heading variance via global recovery (0.04 rad^2)
+  core.set_global_fn([](const sloc::Scan &, sloc::Pose2 & g, double & sc) {
+      g = sloc::Pose2(0.0, 0.0, 0.0);
+      sc = 0.9;
+      return true;
+    });
+  core.on_odom(sloc::Pose2(0.0, 0.0, 0.0));
+  ASSERT_TRUE(core.on_scan(make_dummy_scan()).accepted);
+  const double py_before = core.last_cov()(1, 1);
+  const double pth_before = core.last_cov()(2, 2);
+  ASSERT_GT(pth_before, 0.01);
+
+  // Move forward 2.0 m along x=0, theta=0 with matcher rejected so we inspect pure pred cov
+  // F(1, 2) = dx * cos(0) = 2.0 => P_yy' = P_yy + 4.0 * P_thth
+  sm->next_result.valid = false;
+  core.on_odom(sloc::Pose2(2.0, 0.0, 0.0));
+  const auto out = core.on_scan(make_dummy_scan());
+  EXPECT_FALSE(out.accepted);
+  EXPECT_NEAR(out.covariance(1, 1), py_before + 4.0 * pth_before, 1e-6);
+  EXPECT_GT(out.covariance(1, 2), 0.0);
+}
+
+TEST(LocalizerCoreTest, MultiHypothesisPropagationPromotionAndAutoClear)
+{
+  const auto & wf = shared_warehouse();
+  auto hm = std::make_shared<HypothesisAwareMatcher>();
+  const sloc::Scan dummy = make_dummy_scan();
+
+  sloc::CoreConfig cfg;
+  cfg.degraded_after = 1;
+  cfg.lost_after = 20;
+  cfg.hyp_confirm_frames = 2;
+  cfg.hyp_min_score = 0.70;
+  cfg.hyp_min_inlier = 0.65;
+  cfg.anomaly_window = 0;
+  sloc::LocalizerCore core(cfg);
+  core.set_map(wf.field);
+  core.set_matcher(hm);
+
+  // Start at wrong pose (0,0,0), true robot is at (5,5,0)
+  hm->true_pose = sloc::Pose2(5.0, 5.0, 0.0);
+  core.on_odom(sloc::Pose2(0.0, 0.0, 0.0));
+  core.set_initial_pose(sloc::Pose2(0.0, 0.0, 0.0));
+  core.add_hypotheses({sloc::Pose2(5.0, 5.0, 0.0), sloc::Pose2(12.0, 12.0, 0.0)});
+  ASSERT_EQ(core.hypothesis_count(), 2u);
+
+  // Move +0.5 m: both primary and hypotheses propagate by +0.5 m
+  hm->true_pose = sloc::Pose2(5.5, 5.0, 0.0);
+  core.on_odom(sloc::Pose2(0.5, 0.0, 0.0));
+  auto out = core.on_scan(dummy);
+  EXPECT_FALSE(out.accepted);
+  EXPECT_EQ(out.state, sloc::LocState::DEGRADED);
+  // First confirmation frame -> not yet promoted (needs 2)
+  ASSERT_EQ(core.hypothesis_count(), 2u);
+  EXPECT_NEAR(core.hypothesis_poses()[0].x, 5.5, 1e-6);
+
+  // Second frame (+0.5 m): second confirmation -> promoted to TRACKING & cleared!
+  hm->true_pose = sloc::Pose2(6.0, 5.0, 0.0);
+  core.on_odom(sloc::Pose2(1.0, 0.0, 0.0));
+  out = core.on_scan(dummy);
+  EXPECT_TRUE(out.accepted);
+  EXPECT_EQ(out.state, sloc::LocState::TRACKING);
+  EXPECT_NEAR(out.pose.x, 6.0, 1e-6);
+  EXPECT_EQ(core.hypothesis_count(), 0u);
+
+  // Auto-clear on stable TRACKING
+  core.add_hypotheses({sloc::Pose2(20.0, 20.0, 0.0)});
+  EXPECT_EQ(core.hypothesis_count(), 1u);
+  EXPECT_TRUE(core.on_scan(dummy).accepted);
+  EXPECT_TRUE(core.on_scan(dummy).accepted);
+  EXPECT_EQ(core.hypothesis_count(), 0u);
+
+  // Auto-clear on set_initial_pose and set_map
+  core.add_hypotheses({sloc::Pose2(20.0, 20.0, 0.0)});
+  core.set_initial_pose(sloc::Pose2(6.0, 5.0, 0.0));
+  EXPECT_EQ(core.hypothesis_count(), 0u);
+
+  core.add_hypotheses({sloc::Pose2(20.0, 20.0, 0.0)});
+  core.set_map(wf.field);
+  EXPECT_EQ(core.hypothesis_count(), 0u);
+}
+
+TEST(LocalizerCoreTest, ActiveKidnappedDetectionTriggersGlobalEarly)
+{
+  const auto & wf = shared_warehouse();
+  auto sm = std::make_shared<ScriptedMatcher>();
+
+  sloc::CoreConfig cfg;
+  cfg.degraded_after = 5;
+  cfg.lost_after = 60;
+  cfg.anomaly_window = 10;
+  cfg.anomaly_bad_threshold = 8;
+  cfg.anomaly_low_score = 0.25;
+  sloc::LocalizerCore core(cfg);
+  core.set_map(wf.field);
+  core.set_matcher(sm);
+
+  core.on_odom(sloc::Pose2(2.0, 2.0, 0.0));
+  core.set_initial_pose(sloc::Pose2(2.0, 2.0, 0.0));
+
+  // Simulate kidnapped robot: very low score every scan
+  sm->next_result.valid = true;
+  sm->next_result.pose = sloc::Pose2(2.0, 2.0, 0.0);
+  sm->next_result.score = 0.10;
+  sm->next_result.inlier_ratio = 0.10;
+  sm->next_result.covariance = sloc::Cov3::Identity() * 0.1;
+
+  const sloc::Scan dummy = make_dummy_scan();
+  sloc::CoreOutput out;
+  int frames_to_global = -1;
+  for (int i = 1; i <= 15; ++i) {
+    out = core.on_scan(dummy);
+    if (out.state == sloc::LocState::GLOBAL) {
+      frames_to_global = i;
+      break;
+    }
+  }
+  EXPECT_EQ(frames_to_global, 8);
+  EXPECT_EQ(core.state(), sloc::LocState::GLOBAL);
+}
+
+TEST(LocalizerCoreTest, SetOptionsHotSwapAndNonFiniteInputSafety)
+{
+  const auto & wf = shared_warehouse();
+  auto sm = std::make_shared<ScriptedMatcher>();
+  const sloc::Pose2 p0(5.0, 5.0, 0.0);
+
+  sloc::CoreConfig cfg;
+  cfg.min_inlier_ratio = 0.60;
+  cfg.use_imu_yaw = true;
+  sloc::LocalizerCore core(cfg);
+  core.set_map(wf.field);
+  core.set_matcher(sm);
+  core.on_odom(p0);
+  core.set_initial_pose(p0);
+
+  sm->next_result.valid = true;
+  sm->next_result.pose = p0;
+  sm->next_result.score = 0.85;
+  sm->next_result.inlier_ratio = 0.70;
+  sm->next_result.covariance = sloc::Cov3::Identity() * 1e-3;
+
+  const sloc::Scan dummy = make_dummy_scan();
+  EXPECT_TRUE(core.on_scan(dummy).accepted);
+
+  // Hot-swap stricter min_inlier_ratio -> same match now rejected
+  cfg.min_inlier_ratio = 0.80;
+  core.set_options(cfg);
+  EXPECT_FALSE(core.on_scan(dummy).accepted);
+
+  // NaN / +-inf safety across all inputs
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  const double inf = std::numeric_limits<double>::infinity();
+  core.set_initial_pose(sloc::Pose2(nan, inf, -inf));
+  core.on_odom(sloc::Pose2(nan, 0.0, inf));
+  core.on_imu_yaw(nan, 0.02);
+  core.on_imu_yaw(inf, nan);
+  core.on_imu_gyro(nan, 0.02);
+  core.on_imu_gyro(0.1, -inf);
+  core.add_hypotheses({sloc::Pose2(nan, 1.0, 0.0), sloc::Pose2(1.0, inf, 0.0)});
+  EXPECT_EQ(core.hypothesis_count(), 0u);
+
+  sloc::Scan bad_scan;
+  bad_scan.points.emplace_back(nan, 1.0);
+  bad_scan.points.emplace_back(1.0, inf);
+  bad_scan.points.emplace_back(1.0, 0.0);
+
+  sm->next_result.pose = sloc::Pose2(nan, inf, -inf);
+  sm->next_result.score = nan;
+  sm->next_result.inlier_ratio = inf;
+  sm->next_result.covariance = sloc::Cov3::Constant(nan);
+
+  const auto out = core.on_scan(bad_scan);
+  EXPECT_FALSE(out.accepted);
+  EXPECT_TRUE(std::isfinite(out.pose.x));
+  EXPECT_TRUE(std::isfinite(out.pose.y));
+  EXPECT_TRUE(std::isfinite(out.pose.theta));
+  EXPECT_TRUE(out.covariance.allFinite());
+}
+
+}  // namespace

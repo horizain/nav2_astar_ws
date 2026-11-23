@@ -169,6 +169,12 @@ if(BUILD_TESTING)
     target_link_libraries(test_particle_filter scan_localizer_core scan_localizer_sim_lib)
     target_compile_options(test_particle_filter PRIVATE ${SCAN_LOCALIZER_WARN_FLAGS})
   endif()
+
+  ament_add_gtest(test_localizer_core test/test_localizer_core.cpp)
+  if(TARGET test_localizer_core)
+    target_link_libraries(test_localizer_core scan_localizer_core scan_localizer_sim_lib)
+    target_compile_options(test_localizer_core PRIVATE ${SCAN_LOCALIZER_WARN_FLAGS})
+  endif()
 endif()
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
