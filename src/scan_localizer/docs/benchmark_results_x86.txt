@@ -1,79 +1,89 @@
 scan_localizer benchmark (quick x1)
-warehouse map: 800x600 cells, MapField build: 0.0397393 s
+warehouse map: 800x600 cells, MapField build: 0.0277 s
 
 == E1 tracking accuracy (prior err ~2cm/0.5deg, clean scan) ==
-matcher                    pos_med     pos_p90ang_med(deg)      ms_med     succ%
-correlative                  0.038       0.080       0.141       4.584      64.0
-field_gn                     0.000       0.036       0.000       0.042     100.0
-icp_p2p                      0.076       0.164       0.297       0.207      35.0
-ndt                          0.035       0.040       0.007       0.105      94.0
-composed                     0.000       0.049       0.000       4.626      99.0
+matcher                 pos_med    pos_p90  ang_med(deg)     ms_med     succ%
+correlative               0.020      0.030         0.092      6.362     100.0
+field_gn                  0.020      0.029         0.047      0.054     100.0
+icp_p2p                   0.020      0.031         0.047      0.297     100.0
+ndt                       0.035      0.035         0.001      0.132      99.0
+composed                  0.020      0.029         0.047      6.393     100.0
 
-== E2 capture range (success% by initial error) ==
-matcher               0.050000m 0.150000m 0.400000m 0.800000m 1.500000m ms@large    
-correlative           56.0      4.0       0.0       0.0       0.0       4.6         
-field_gn              100.0     100.0     78.0      46.0      10.0      0.2         
-icp_p2p               0.0       0.0       0.0       0.0       0.0       1.4         
-ndt                   94.0      66.0      8.0       0.0       0.0       0.1         
-composed              100.0     100.0     100.0     76.0      14.0      4.8         
-composed_wide         100.0     100.0     94.0      98.0      78.0      175.6       
+== E2 capture range (paired trials, success% by initial error) ==
+matcher                  0.05m     0.15m     0.40m     0.80m     1.50m    ms@large
+correlative              100.0     100.0       0.0       0.0       0.0         6.0
+correlative_wide         100.0     100.0     100.0     100.0     100.0       208.8
+field_gn                 100.0     100.0      98.0      48.0       6.0         0.2
+icp_p2p                  100.0     100.0      28.0      10.0       4.0         1.5
+ndt                      100.0      68.0       0.0       0.0       0.0         0.2
+composed                 100.0     100.0     100.0      86.0      16.0         6.2
+composed_wide            100.0     100.0     100.0     100.0     100.0       208.8
 
-== E3 range noise (median pos err, prior 2cm) ==
-matcher               sigma=0.000000sigma=0.010000sigma=0.030000sigma=0.050000
-correlative           0.040       0.028       0.054       0.090       
-field_gn              0.000       0.001       0.009       0.017       
-icp_p2p               0.079       0.081       0.080       0.112       
-ndt                   0.035       0.035       0.027       0.028       
-composed              0.000       0.001       0.011       0.020       
+== E3 range noise (paired trials, median pos err m, prior 2cm) ==
+matcher               sigma=0.00  sigma=0.01  sigma=0.03  sigma=0.05
+correlative                0.019       0.019       0.015       0.030
+field_gn                   0.020       0.020       0.014       0.014
+icp_p2p                    0.020       0.021       0.021       0.021
+ndt                        0.035       0.035       0.030       0.026
+composed                   0.020       0.020       0.014       0.014
 
-== E4 dynamic obstacles (2 boxes 0.6m near robot) ==
+== E4 dynamic obstacles (injected 200 boxes across 100 trials, min=2/trial) ==
 
-== E4 dynamic obstacles ==
-matcher                    pos_med     pos_p90ang_med(deg)      ms_med     succ%
-correlative                  0.043       0.104       0.125       4.594      58.0
-field_gn                     0.000       0.000       0.000       0.042     100.0
-field_gn_tight               0.000       0.000       0.000       0.042     100.0
-ndt                          0.035       0.037       0.006       0.110      98.0
-composed                     0.000       0.050       0.000       4.642      96.0
-composed_tight               0.000       0.050       0.000       4.636      96.0
+== E4 dynamic obstacles (2 boxes 0.7m near robot) ==
+matcher                 pos_med    pos_p90  ang_med(deg)     ms_med     succ%
+correlative               0.021      0.032         0.100      6.770      99.0
+field_gn                  0.022      0.031         0.050      0.055      99.0
+field_gn_tight            0.022      0.031         0.049      0.057      99.0
+ndt                       0.035      0.035         0.001      0.126      99.0
+composed                  0.022      0.031         0.050      6.830      99.0
+composed_tight            0.022      0.031         0.049      6.798      99.0
 
-== E5 corridor degeneracy (30x3m) ==
-matcher                 err_along(m) err_across(m) cov_along_med
-correlative                    0.041         0.022         1.000
-field_gn                       0.000         0.000         0.000
-icp_p2p                        0.447         0.002         0.000
-ndt                            0.022         0.025         1.000
-composed                       0.000         0.000         0.000
+== E5 corridor degeneracy (30x3m, strictly x in [13,17]) ==
+matcher               err_along(m) err_across(m)  cov_along_med cov_across_med
+correlative                 0.1792        0.0026          0.009        0.00019
+field_gn                    0.0136        0.0003         12.482        0.00010
+icp_p2p                     0.0132        0.0003         16.613        0.00010
+ndt                         0.0161        0.0250          0.068        0.00073
+composed                    0.1792        0.0003         12.482        0.00010
+  EKF corridor 4m  : max_along 0.0798 m, max_across 0.0000 m, cov_along 0.0017, cov_across 0.0001, accept 16/16
 
-== E6 scan density (720/360/180/90 beams) ==
-matcher                    beams       pos_med      ms_med
-correlative                  720        0.0424      4.6397
-correlative                  360        0.0424      2.3148
-correlative                  180        0.0424      1.1772
-correlative                   90        0.0424      0.6198
-field_gn                     720        0.0001      0.0226
-field_gn                     360        0.0000      0.0144
-field_gn                     180        0.0001      0.0085
-field_gn                      90        0.0000      0.0061
-composed                     720        0.0001      4.6432
-composed                     360        0.0002      2.3786
-composed                     180        0.0002      1.2135
-composed                      90        0.0002      0.6145
+== E6 scan density (720/360/180/90 beams, prior 2cm, noise 1cm) ==
+matcher                  beams    pos_med(m)      ms_med
+correlative                720        0.0196       6.422
+correlative                360        0.0193       3.282
+correlative                180        0.0192       1.675
+correlative                 90        0.0193       0.877
+field_gn                   720        0.0197       0.060
+field_gn                   360        0.0198       0.031
+field_gn                   180        0.0205       0.016
+field_gn                    90        0.0203       0.008
+composed                   720        0.0199       6.458
+composed                   360        0.0198       3.311
+composed                   180        0.0205       1.697
+composed                    90        0.0203       0.869
+
+== E7 per-matcher CPU latency summary (720 beams, E1 dataset) ==
+matcher                   ms_med      ms_p90     ms_mean
+correlative                6.362       8.008       6.442
+field_gn                   0.054       0.075       0.057
+icp_p2p                    0.297       0.448       0.307
+ndt                        0.132       0.348       0.177
+composed                   6.393       8.157       6.502
 
 == E8 global localization (cold start, 30 trials) ==
-global_correlative : succ 80.0000%  median 6.9898 ms (n=30)
-pf_global(20000,20步) : succ 3.3333%  median 542.3475 ms  err_med 16.4220 m
+global_correlative     : succ 76.7%  median 20.38 ms (n=30)
+pf_global(20000,10步)  : succ 6.7%  median 445.89 ms  err_med 15.596 m
 
-== E9 trajectory tracking (100m loop, odom slip, crowd segment) ==
-A core+composed   : mean_err 0.0184 m, max_err 0.0596 m, accept_rate 98.0769%
-B particle_filter : mean_err 0.0787 m, max_err 0.2371 m (2000 particles)
+== E9 trajectory tracking (104m loop, 2% odom slip, 10 crowd scan frames) ==
+A core+composed   : mean_err 0.0214 m, max_err 0.0356 m, accept 100.0%, cpu 11.26 ms/scan (total 1171.52 ms)
+B particle_filter : mean_err 0.0332 m, max_err 0.2158 m (2000 particles), cpu 3.96 ms/scan (total 412.01 ms)
 
-== E10 IMU yaw fusion (crowd 80 frames) ==
+== E10 IMU yaw fusion (104m loop, 20 crowd scan frames, gyro bias=0.02 rad/s + RW) ==
   [wheel rot slip 3% (realistic)]
-    A wheel_only : mean_err 1.2734 m, max_err 5.9956 m, accept 35.6% (reject 67)
-    B imu_fused  : mean_err 0.0184 m, max_err 0.0864 m, accept 98.1% (reject 2)
+    A wheel_only : mean_err 0.0207 m, max_err 0.0338 m, accept 100.0% (reject 0)
+    B imu_fused  : mean_err 0.0207 m, max_err 0.0338 m, accept 100.0% (reject 0), est_bg 0.0202 rad/s (true 0.0199)
   [wheel rot slip 10% (carpet)]
-    A wheel_only : mean_err 5.0820 m, max_err 12.0139 m, accept 10.6% (reject 93)
-    B imu_fused  : mean_err 0.1110 m, max_err 0.3599 m, accept 64.4% (reject 37)
+    A wheel_only : mean_err 6.9824 m, max_err 12.8688 m, accept 10.6% (reject 93)
+    B imu_fused  : mean_err 0.0233 m, max_err 0.1216 m, accept 97.1% (reject 3), est_bg 0.0200 rad/s (true 0.0198)
 
 benchmark done.

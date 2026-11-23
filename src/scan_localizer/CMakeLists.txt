@@ -94,8 +94,10 @@ rclcpp_components_register_node(localizer_node_component
 add_executable(scan_localizer_sim src/localizer_sim.cpp)
 ament_target_dependencies(scan_localizer_sim PUBLIC
   rclcpp
+  geometry_msgs
   sensor_msgs
   nav_msgs
+  tf2_ros
 )
 target_link_libraries(scan_localizer_sim PRIVATE
   scan_localizer_core
@@ -180,6 +182,18 @@ if(BUILD_TESTING)
   if(TARGET test_localizer_node)
     target_link_libraries(test_localizer_node localizer_node_component scan_localizer_sim_lib)
     target_compile_options(test_localizer_node PRIVATE ${SCAN_LOCALIZER_WARN_FLAGS})
+  endif()
+
+  ament_add_gtest(test_sim_world test/test_sim_world.cpp)
+  if(TARGET test_sim_world)
+    target_link_libraries(test_sim_world scan_localizer_core scan_localizer_sim_lib)
+    target_compile_options(test_sim_world PRIVATE ${SCAN_LOCALIZER_WARN_FLAGS})
+  endif()
+
+  ament_add_gtest(test_benchmark_regression test/test_benchmark_regression.cpp)
+  if(TARGET test_benchmark_regression)
+    target_link_libraries(test_benchmark_regression scan_localizer_core scan_localizer_sim_lib)
+    target_compile_options(test_benchmark_regression PRIVATE ${SCAN_LOCALIZER_WARN_FLAGS})
   endif()
 endif()
 
