@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>第 5 章 · 长走廊退化与各向异性协方差 | scan_localizer</title>
+  <link rel="stylesheet" href="../../website/vendor/katex/katex.min.css" />
+  <link rel="stylesheet" href="../css/apple.css" />
+  <script>window.TUTORIAL_ROOT = ".."; window.PAGE_ID = "ch05";</script>
+  <script defer src="../../website/vendor/katex/katex.min.js"></script>
+  <script defer src="../../website/vendor/katex/contrib/auto-render.min.js"></script>
+  <script defer src="../../../slam-mpc-academy/assets/vendor/hljs/highlight.min.js"></script>
+  <script defer src="../js/code-manifest.js"></script>
+  <script defer src="../js/sim-core.js"></script>
+  <script defer src="../js/app.js"></script>
+  <script defer src="../js/sim-ch05.js"></script>
+</head>
+<body>
+  <div id="site-nav"></div>
+
+  <header class="page-header">
+    <div class="container">
+      <div class="crumb"><a href="../index.html">概览</a> / 第二阶段 · 扫描匹配演进 / 第 5 章</div>
+      <h1>长走廊退化与各向异性协方差</h1>
+      <p class="sub">机器人走进一条没有任何柱子的 30 米光秃走廊：为什么许多开源定位节点要么直接发散乱跳，要么整帧拒绝？关键就在这一行：<strong>协方差绝不能混入 LM 阻尼！</strong></p>
+      <div class="pill-row">
+        <span class="pill">预计 25 分钟</span>
+        <span class="pill">核心文件：matchers.cpp (cov_from_hessian)</span>
+        <span class="pill">动画：走廊 120,000× 协方差椭圆实验室</span>
+      </div>
+    </div>
+  </header>
+
+  <div class="doc-layout">
+    <aside class="toc-aside">
+      <div class="toc-title">本章目录</div>
+      <ul class="toc-list" id="page-toc"></ul>
+    </aside>
+
+    <article class="article-col">
+      <h2 id="sec-intro"><span class="sec-no">5.1</span>交互实验室：亲眼看透各向异性协方差椭圆</h2>
+      <p>在 30m×3m 的严格走廊中（两端堵墙都在 12m 激光量程之外），上下墙的梯度只有 $y$ 分量，没有 $x$ 分量。因此信息矩阵 $H$ 在 $x$ 方向特征值接近零、在 $y$ 方向巨大——逆协方差应当拉成一根<strong>极扁的水平细长椭圆</strong>（横向紧锁，沿轴极度不确定）。点击对比错误注入 LM 阻尼或切到仓库转角的差异：</p>
+
+      <div class="lab-frame">
+        <div class="lab-head">
+          <div class="lab-title"><span>长走廊 Hessian 协方差椭圆实验室</span><span class="lab-badge">交互动画 5</span></div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <button type="button" class="btn btn-secondary btn-sm" id="ch05-scene">切到仓库对比</button>
+            <button type="button" class="btn btn-primary btn-sm" id="ch05-damp">错误注入 LM 阻尼到协方差</button>
+          </div>
+        </div>
+        <div class="lab-body">
+          <div class="lab-canvas-wrap"><canvas id="ch05-canvas" width="740" height="360"></canvas></div>
+          <div class="lab-controls">
+            <label class="ctrl-group">轮式打滑率 <input type="range" id="ch05-slip" min="0" max="5" step="0.5" value="2" /><span class="ctrl-val" id="ch05-slip-v">2.0%</span></label>
+          </div>
+          <div class="telemetry">
+            <div class="tel-cell"><div class="tel-k">沿轴方差 cov_xx</div><div class="tel-v" id="ch05-c00">-</div></div>
+            <div class="tel-cell"><div class="tel-k">横向方差 cov_yy</div><div class="tel-v ok" id="ch05-c11">-</div></div>
+            <div class="tel-cell"><div class="tel-k">各向异性比 (xx/yy)</div><div class="tel-v" id="ch05-ratio">-</div></div>
+            <div class="tel-cell"><div class="tel-k">4m 走廊 EKF 融合表现</div><div class="tel-v" id="ch05-ekf">-</div></div>
+          </div>
+        </div>
+      </div>
+
+      <h2 id="sec-math"><span class="sec-no">5.2</span>线性代数本质：特征值分解揭露不可观测子空间</h2>
+      <p>在每条平行于 $x$ 轴的走廊墙壁上，$\nabla\text{SDF} = (0, \pm 1)^\top$，即每束点的雅可比 $g_x \approx 0$。于是 Hessian 矩阵为：</p>
+      <div class="math-card">
+        <div class="math-title">未阻尼 Hessian 求逆与特征值下界夹紧</div>
+        $$H = \sum_i w_i \mathbf{J}_i^\top \mathbf{J}_i \approx \begin{bmatrix} \sim 0 &amp; 0 &amp; 0 \\ 0 &amp; \gg 1 &amp; * \\ 0 &amp; * &amp; \gg 1 \end{bmatrix}, \qquad
+        H = Q \Lambda Q^\top \implies \Sigma_{\text{match}} = s \cdot Q\,\mathrm{diag}\!\Bigl(\max(\lambda_j, 10^{-4})^{-1}\Bigr) Q^\top$$
+      </div>
+      <p>这就是各向异性 EKF 能做到 <strong>横向误差 0.0 mm、沿轴完全信任里程计预测（16/16 全帧采纳）</strong> 的全部秘密：在卡尔曼增益 $K = P_{\text{pred}}(P_{\text{pred}} + R)^{-1}$ 里，横向 $R_{yy} = 0.0001\text{ m}^2 \ll P_{yy}$，所以激光权重接近 100%；而沿轴 $R_{xx} = 12.48\text{ m}^2 \gg P_{xx} = 0.0017\text{ m}^2$，所以激光权重自动趋近于 0，里程计平滑接管！</p>
+
+      <h2 id="sec-code"><span class="sec-no">5.3</span>源码精读：`cov_from_hessian`</h2>
+      <div class="src-bar">
+        <button type="button" class="src-jump" data-file="src/matchers.cpp" data-lines="71-98"><span class="tag">源码抽屉</span>matchers.cpp : L71-98 (cov_from_hessian)</button>
+        <button type="button" class="src-jump" data-file="src/matchers.cpp" data-lines="344-348"><span class="tag">源码抽屉</span>matchers.cpp : L344-348 (只给 Hd 加阻尼)</button>
+      </div>
+
+      <h2 id="sec-pitfall"><span class="sec-no">5.4</span>真实踩坑复盘：为什么门控曾误杀退化走廊？</h2>
+      <div class="callout callout-pitfall">
+        <div class="callout-head">Phase 3 修复：<code>max_eig</code> vs <code>min_eig</code>（<code>localizer_core.cpp:L617</code>）</div>
+        <p>早期的协方差门控试图检验“最大特征值 <code>&lt; max_cov_eig</code>”，结果恰恰把沿走廊合理膨胀出 $12.48\text{ m}^2$ 的健康退化帧全杀掉了！门控真正该卡的是<strong><code>min_eig &lt; cfg_.max_cov_eig</code></strong>（只要至少在一个方向上定位紧实，帧就绝不是坏帧，退化方向交给各向异性 EKF 自动信任预测）。</p>
+      </div>
+
+      <nav class="pager">
+        <a href="ch04.html"><div class="dir">← 上一章</div><div class="ttl">第 4 章 · 王牌精修：Field-GN</div></a>
+        <a class="next" href="ch06.html"><div class="dir">下一章 →</div><div class="ttl">第 6 章 · B&amp;B 全局定位 vs 粒子滤波</div></a>
+      </nav>
+    </article>
+  </div>
+  <footer class="site-footer">scan_localizer Engineering Tutorial · Chapter 05</footer>
+</body>
+</html>

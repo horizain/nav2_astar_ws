@@ -1,6 +1,6 @@
 # `scan_localizer` 交互式工程教程建设计划
 
-> **状态**：规划已定稿，**本轮仅将方案固化到文档中，暂不开始编码实现**。
+> **状态**：**已完成（M1 → M4 全链路落地）**。教程入口见 [30 scan_localizer 交互式工程教程导览](30_scan_localizer教程导览.md) 与 [教程首页](scan_localizer_tutorial/index.html)。
 >
 > **基线提交**：`98fcd28`（`src/scan_localizer` 共 33 个文件 / ~11,900 行代码；`colcon test` 192 项测试 0 失败；Intel Research Lab 450 组真值三方评测 GT Trans RPE RMSE **3.06 cm**）。
 
