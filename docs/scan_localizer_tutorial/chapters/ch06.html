@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>第 6 章 · 全局重定位：B&amp;B vs 粒子滤波 | scan_localizer</title>
+  <link rel="stylesheet" href="../../website/vendor/katex/katex.min.css" />
+  <link rel="stylesheet" href="../css/apple.css" />
+  <script>window.TUTORIAL_ROOT = ".."; window.PAGE_ID = "ch06";</script>
+  <script defer src="../../website/vendor/katex/katex.min.js"></script>
+  <script defer src="../../website/vendor/katex/contrib/auto-render.min.js"></script>
+  <script defer src="../../../slam-mpc-academy/assets/vendor/hljs/highlight.min.js"></script>
+  <script defer src="../js/code-manifest.js"></script>
+  <script defer src="../js/sim-core.js"></script>
+  <script defer src="../js/app.js"></script>
+  <script defer src="../js/sim-ch06.js"></script>
+</head>
+<body>
+  <div id="site-nav"></div>
+
+  <header class="page-header">
+    <div class="container">
+      <div class="crumb"><a href="../index.html">概览</a> / 第三阶段 · 全局重定位与滤波 / 第 6 章</div>
+      <h1>迷路了怎么办：金字塔 B&amp;B 全局定位 vs 粒子滤波</h1>
+      <p class="sub">为什么在 40×30m 仓库冷启动时，20,000 粒子在 E8 只有 6.7% 召回率（446ms），而基于 <code>swmax_</code> 的分支定界（B&amp;B）一帧就能以 20.38ms 命中全局真解？</p>
+      <div class="pill-row">
+        <span class="pill">预计 35 分钟</span>
+        <span class="pill">核心文件：matchers.cpp · particle_filter.cpp</span>
+        <span class="pill">动画：B&amp;B 块剪枝 vs 400 粒子滤波 PK</span>
+      </div>
+    </div>
+  </header>
+
+  <div class="doc-layout">
+    <aside class="toc-aside">
+      <div class="toc-title">本章目录</div>
+      <ul class="toc-list" id="page-toc"></ul>
+    </aside>
+
+    <article class="article-col">
+      <h2 id="sec-intro"><span class="sec-no">6.1</span>交互实验室：一键绑架，看 B&amp;B 与 PF 谁先抓回真值</h2>
+      <p>点击<strong>“一键随机绑架机器人”</strong>：左侧确定性的分支定界搜索把整张地图当成树，一帧立刻标出前 3 优候选峰（蓝点第一优、橙点备选峰）；右侧粒子滤波撒出 400 颗粒子后需要一步步运动加权、ESS 重采样才会逐步坍缩。</p>
+
+      <div class="lab-frame">
+        <div class="lab-head">
+          <div class="lab-title"><span>全局重定位竞技场：B&amp;B 分支定界 vs AMCL-lite</span><span class="lab-badge">交互动画 6</span></div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <button type="button" class="btn btn-primary btn-sm" id="ch06-kidnap-btn">一键随机绑架机器人</button>
+            <button type="button" class="btn btn-secondary btn-sm" id="ch06-pf-step">PF 运动+观测 1 步</button>
+          </div>
+        </div>
+        <div class="lab-body">
+          <div class="lab-grid-2">
+            <div class="lab-canvas-wrap"><canvas id="ch06-bnb-canvas" width="360" height="260"></canvas></div>
+            <div class="lab-canvas-wrap"><canvas id="ch06-pf-canvas" width="360" height="260"></canvas></div>
+          </div>
+          <div class="telemetry">
+            <div class="tel-cell"><div class="tel-k">B&amp;B 一帧误差 &amp; 剪枝</div><div class="tel-v ok" id="ch06-bnb-stat">-</div></div>
+            <div class="tel-cell"><div class="tel-k">粒子滤波状态</div><div class="tel-v" id="ch06-pf-stat">-</div></div>
+          </div>
+        </div>
+      </div>
+
+      <h2 id="sec-bnb"><span class="sec-no">6.2</span>分支定界（Branch-and-Bound）的可采纳上界证明</h2>
+      <p>想在全球地图 $W \times H \times N_\theta$ 个格子上搜完一个都不漏，总候选量往往上千万。Cartographer 与 <code>scan_localizer</code> 用 <code>swmax_[level]</code> 在常数时间内算出“一个 $2^{\ell}\times 2^{\ell}$ 大块里的最高可能得分”：</p>
+      <div class="math-card">
+        <div class="math-title">可采纳上界不等式（永不漏真解）</div>
+        $$B(\text{block } [b_x, b_x+2^\ell) \times [b_y, b_y+2^\ell), \theta) = \frac{1}{N}\sum_{i=1}^N \underbrace{\max_{(\delta x,\delta y)\in[0,2^\ell)^2} L(c_{x,i}+\delta x,\; c_{y,i}+\delta y)}_{\text{swmax\_}[\ell][c_{x,i}+b_x,\, c_{y,i}+b_y]} \;\ge\; \max_{\boldsymbol{\xi}\in\text{block}} S(\boldsymbol{\xi})$$
+      </div>
+      <p>优先队列每次弹出当前上界 <code>bound</code> 最高的块。一旦已经收满 <code>top-K</code> 个经过 <code>kNmsLinM=0.5m</code> 非极大值抑制的多峰候选，队列中凡是 <code>bound &lt;= worst_kept</code> 的所有剩余大块<strong>直接整枝剪掉</strong>！</p>
+
+      <h2 id="sec-pf"><span class="sec-no">6.3</span>对比对照组：粒子滤波（AMCL-lite）的数值稳定性改造</h2>
+      <p>为了在仓库做公平对照组（E8/E9），我们按 Thrun《Probabilistic Robotics》完整实现了 <code>ParticleFilter</code>，并修复了初学者最容易写炸的三处数学细节：</p>
+      <ul>
+        <li><strong>倒车反向分解（<code>particle_filter.cpp:L130-136</code>）</strong>：当机器人倒车时 $\mathrm{atan2}(dy, dx) \approx \pm\pi$，直接代入正交采样公式会让 $\alpha_1\,\text{rot}_1^2$ 放大航向噪声几十倍；因此 $|\text{rot}_1| &gt; \pi/2$ 时必须翻转 $+\pi$ 并把平移符号取反。</li>
+        <li><strong>log-sum-exp 防下溢</strong>：200 束光连乘似然很容易跌破 $10^{-308}$ 变成 IEEE 754 `0.0`，全转对数域减去 <code>max_lw</code> 后再 <code>exp</code> 并加上效光束缩放因子 <code>beam_scale = min(1.0, 30/N)</code> 防止单帧粒子塌缩。</li>
+        <li><strong>圆均值角估计</strong>：计算均值角度绝不能做线性加权平均（$\pm 179^\circ$ 平均变 $0^\circ$），必须用 $\mathrm{atan2}(\sum w_i\sin\theta_i, \sum w_i\cos\theta_i)$。</li>
+      </ul>
+
+      <h2 id="sec-code"><span class="sec-no">6.4</span>源码精读与跳变定位</h2>
+      <div class="src-bar">
+        <button type="button" class="src-jump" data-file="src/matchers.cpp" data-lines="797-940"><span class="tag">源码抽屉</span>matchers.cpp : L797-940 (B&amp;B 上界剪枝与 NMS)</button>
+        <button type="button" class="src-jump" data-file="src/particle_filter.cpp" data-lines="121-254"><span class="tag">源码抽屉</span>particle_filter.cpp : L121-254 (倒车预测与 log-sum-exp)</button>
+      </div>
+
+      <h2 id="sec-pitfall"><span class="sec-no">6.5</span>工程踩坑复盘：B&amp;B 曾为何在冷启动卡死？</h2>
+      <div class="callout callout-pitfall">
+        <div class="callout-head">Phase 2 修复：100% 激光越界剔除 + `worst_kept` 剪枝错乱（<code>matchers.cpp:L804</code>）</div>
+        <p>早期代码规定“只要有一束激光在边缘处越界就丢弃整个候选方块”，导致机器人在大厅边缘时合法方块全被扔掉（<code>pq</code> 变空）。正确逻辑是：<strong>只对整块完全越界的那几束光线记 0 分</strong>，机器人搜索框严格限定在自由空间外接矩形 <code>[free_xmin, free_xmax]</code> 内。另一处 Bug 是多峰去重更新前未重算第 $K$ 优阈值，导致真解过早被误剪。</p>
+      </div>
+
+      <nav class="pager">
+        <a href="ch05.html"><div class="dir">← 上一章</div><div class="ttl">第 5 章 · 长走廊退化与各向异性协方差</div></a>
+        <a class="next" href="ch07.html"><div class="dir">下一章 →</div><div class="ttl">第 7 章 · 4D 各向异性 EKF 与状态机</div></a>
+      </nav>
+    </article>
+  </div>
+  <footer class="site-footer">scan_localizer Engineering Tutorial · Chapter 06</footer>
+</body>
+</html>

@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>scan_localizer 交互式工程教程 —— 从零入门到生产级 2D 激光定位</title>
+  <link rel="stylesheet" href="../website/vendor/katex/katex.min.css" />
+  <link rel="stylesheet" href="css/apple.css" />
+  <script>window.TUTORIAL_ROOT = "."; window.PAGE_ID = "home";</script>
+  <script defer src="../website/vendor/katex/katex.min.js"></script>
+  <script defer src="../website/vendor/katex/contrib/auto-render.min.js"></script>
+  <script defer src="../../slam-mpc-academy/assets/vendor/hljs/highlight.min.js"></script>
+  <script defer src="js/code-manifest.js"></script>
+  <script defer src="js/sim-core.js"></script>
+  <script defer src="js/app.js"></script>
+  <script defer src="js/sim-hero.js"></script>
+</head>
+<body>
+  <div id="site-nav"></div>
+
+  <section class="hero-home">
+    <div class="container">
+      <span class="eyebrow">2D Known-Map Localization · ROS 2 Jazzy · C++20</span>
+      <h1>精确到厘米的 2D 激光定位。<br />从一行公式到生产工程。</h1>
+      <p class="lead">
+        一套完全从零讲解、可拖拽调参、可实时查看真实 C++ 源码的工程课程。
+        涵盖 $SE(2)$ 坐标底座、精确欧氏距离场、Field-GN、退化协方差、B&amp;B 全局重定位、4D EKF 零偏估计与 Lifecycle 节点设计。
+      </p>
+      <div class="cta-row">
+        <a class="btn btn-primary" href="chapters/ch01.html">开始学习 · 第 1 章</a>
+        <a class="btn btn-secondary" href="code-index.html">浏览 33 个源码文件索引</a>
+        <button type="button" class="btn btn-secondary" onclick="window.SlocApp && window.SlocApp.openSearch()">快速检索符号 ⌘K</button>
+      </div>
+
+      <div class="lab-frame" style="text-align:left; margin-top: 28px;">
+        <div class="lab-head">
+          <div class="lab-title"><span>SDF 连续场实时扫描定位示意</span><span class="lab-badge">24m × 16m Warehouse</span></div>
+          <div style="font-size:12.5px;color:var(--ink-3);">蓝色晕影为 $\text{SDF}(x)&lt;1.2\text{ m}$ 连续梯度场 · 无需 kd-tree 数据关联</div>
+        </div>
+        <div class="lab-body" style="padding:12px;">
+          <div class="lab-canvas-wrap">
+            <canvas id="hero-canvas" width="920" height="380"></canvas>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section section-alt">
+    <div class="container">
+      <span class="eyebrow">Real-World Benchmark · Intel Research Lab</span>
+      <h2 style="font-size:32px;margin-bottom:24px;">实测验证，而非纸上谈兵。</h2>
+      <div class="bento-4">
+        <div class="card">
+          <div class="metric-val" style="color:var(--accent);">3.06 cm</div>
+          <div class="metric-label">GT 平移 RPE RMSE</div>
+          <div class="metric-sub">Intel Lab 450 组手工精校真值三方实测，优于 `nav2_amcl` (12.57 cm) 与 `slam_toolbox` (24.56 cm)。</div>
+        </div>
+        <div class="card">
+          <div class="metric-val" style="color:var(--green);">0.054 ms</div>
+          <div class="metric-label">Field-GN 单帧耗时</div>
+          <div class="metric-sub">720 束激光在 SDF 双线性场上做 Huber IRLS 高斯-牛顿，比 ICP-P2P 快 5.5 倍。</div>
+        </div>
+        <div class="card">
+          <div class="metric-val" style="color:var(--indigo);">120,000×</div>
+          <div class="metric-label">走廊退化各向异性比</div>
+          <div class="metric-sub">未阻尼 Hessian 求逆保持 `cov_along = 12.48 m²`、`cov_across = 0.0001 m²`，横向零误修。</div>
+        </div>
+        <div class="card">
+          <div class="metric-val">33 · 192</div>
+          <div class="metric-label">33 源码文件 · 192 项测试</div>
+          <div class="metric-sub">算法核与 ROS 零耦合，包含 9 组 GTest + ASan/UBSan 回归与完整 ament lint。</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="container">
+      <span class="eyebrow">Architecture Overview</span>
+      <h2 style="font-size:32px;margin-bottom:10px;">五层极简架构：点击直达模块与源码</h2>
+      <p style="color:var(--ink-3);max-width:720px;margin-bottom:24px;">
+        点击下方任意卡片打开真实代码索引或直达对应章节，理解“纯算法核 → ROS 2 适配层”的零耦合工程境界。
+      </p>
+      <div class="card" style="padding:20px;overflow-x:auto;">
+        <svg viewBox="0 0 1060 270" style="width:100%;min-width:760px;height:auto;font-family:var(--font-sans);">
+          <defs>
+            <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+              <path d="M0 1L9 5L0 9z" fill="currentColor" opacity="0.45"/>
+            </marker>
+          </defs>
+          <!-- Layer 1 -->
+          <g style="cursor:pointer" onclick="location.href='chapters/ch01.html'">
+            <rect x="16" y="34" width="180" height="84" rx="16" fill="var(--bg-alt)" stroke="var(--hairline-strong)"/>
+            <text x="106" y="64" text-anchor="middle" font-size="14" font-weight="700" fill="var(--ink)">SE(2) &amp; MapIO</text>
+            <text x="106" y="86" text-anchor="middle" font-size="12" fill="var(--ink-3)">Pose2 · Y 轴翻转</text>
+            <text x="106" y="105" text-anchor="middle" font-size="11" fill="var(--accent)">Ch01 · se2.hpp</text>
+          </g>
+          <g style="cursor:pointer" onclick="location.href='chapters/ch02.html'">
+            <rect x="16" y="148" width="180" height="84" rx="16" fill="var(--bg-alt)" stroke="var(--hairline-strong)"/>
+            <text x="106" y="178" text-anchor="middle" font-size="14" font-weight="700" fill="var(--ink)">MapField 地图场</text>
+            <text x="106" y="200" text-anchor="middle" font-size="12" fill="var(--ink-3)">EDT → SDF → swmax_</text>
+            <text x="106" y="219" text-anchor="middle" font-size="11" fill="var(--accent)">Ch02 · map_field.cpp</text>
+          </g>
+          <!-- Layer 2 -->
+          <g style="cursor:pointer" onclick="location.href='chapters/ch04.html'">
+            <rect x="242" y="34" width="210" height="84" rx="16" fill="var(--accent-soft)" stroke="var(--accent)"/>
+            <text x="347" y="64" text-anchor="middle" font-size="14" font-weight="700" fill="var(--ink)">局部扫描匹配族</text>
+            <text x="347" y="86" text-anchor="middle" font-size="12" fill="var(--ink-2)">Correlative → Field-GN</text>
+            <text x="347" y="105" text-anchor="middle" font-size="11" fill="var(--accent)">Ch03–05 · matchers.cpp</text>
+          </g>
+          <g style="cursor:pointer" onclick="location.href='chapters/ch06.html'">
+            <rect x="242" y="148" width="210" height="84" rx="16" fill="var(--bg-alt)" stroke="var(--hairline-strong)"/>
+            <text x="347" y="178" text-anchor="middle" font-size="14" font-weight="700" fill="var(--ink)">全局搜索与 PF 对照</text>
+            <text x="347" y="200" text-anchor="middle" font-size="12" fill="var(--ink-3)">金字塔 B&amp;B · AMCL-lite</text>
+            <text x="347" y="219" text-anchor="middle" font-size="11" fill="var(--accent)">Ch06 · particle_filter.cpp</text>
+          </g>
+          <!-- Layer 3 -->
+          <g style="cursor:pointer" onclick="location.href='chapters/ch07.html'">
+            <rect x="500" y="68" width="240" height="128" rx="18" fill="var(--bg-card)" stroke="var(--indigo)" stroke-width="1.5"/>
+            <text x="620" y="102" text-anchor="middle" font-size="15" font-weight="700" fill="var(--ink)">LocalizerCore (纯 C++)</text>
+            <text x="620" y="126" text-anchor="middle" font-size="12" fill="var(--ink-2)">4D EKF [x, y, θ, b_g]ᵀ · Joseph</text>
+            <text x="620" y="146" text-anchor="middle" font-size="12" fill="var(--ink-2)">四道门控 · 五态机 · 多假设队列</text>
+            <text x="620" y="176" text-anchor="middle" font-size="11" fill="var(--indigo)">Ch07 · localizer_core.cpp (760L)</text>
+          </g>
+          <!-- Layer 4 -->
+          <g style="cursor:pointer" onclick="location.href='chapters/ch08.html'">
+            <rect x="788" y="34" width="256" height="92" rx="16" fill="var(--bg-alt)" stroke="var(--hairline-strong)"/>
+            <text x="916" y="64" text-anchor="middle" font-size="14" font-weight="700" fill="var(--ink)">LocalizerNode (ROS 2)</text>
+            <text x="916" y="86" text-anchor="middle" font-size="12" fill="var(--ink-3)">Lifecycle · TF2 3D 外参 · 锁外构场</text>
+            <text x="916" y="106" text-anchor="middle" font-size="11" fill="var(--accent)">Ch08 · localizer_node.cpp (1672L)</text>
+          </g>
+          <g style="cursor:pointer" onclick="location.href='chapters/ch09.html'">
+            <rect x="788" y="146" width="256" height="86" rx="16" fill="var(--bg-alt)" stroke="var(--hairline-strong)"/>
+            <text x="916" y="176" text-anchor="middle" font-size="14" font-weight="700" fill="var(--ink)">SimWorld &amp; E1–E10 测试</text>
+            <text x="916" y="198" text-anchor="middle" font-size="12" fill="var(--ink-3)">10 组消融 · 9 组 GTest · Intel Lab</text>
+            <text x="916" y="218" text-anchor="middle" font-size="11" fill="var(--accent)">Ch09 · benchmark.cpp (975L)</text>
+          </g>
+          <!-- Arrows -->
+          <line x1="196" y1="76" x2="238" y2="76" stroke="var(--ink-3)" stroke-width="1.6" marker-end="url(#ar)"/>
+          <line x1="196" y1="190" x2="238" y2="190" stroke="var(--ink-3)" stroke-width="1.6" marker-end="url(#ar)"/>
+          <line x1="452" y1="88" x2="496" y2="112" stroke="var(--ink-3)" stroke-width="1.6" marker-end="url(#ar)"/>
+          <line x1="452" y1="186" x2="496" y2="156" stroke="var(--ink-3)" stroke-width="1.6" marker-end="url(#ar)"/>
+          <line x1="740" y1="116" x2="784" y2="88" stroke="var(--ink-3)" stroke-width="1.6" marker-end="url(#ar)"/>
+          <line x1="740" y1="152" x2="784" y2="184" stroke="var(--ink-3)" stroke-width="1.6" marker-end="url(#ar)"/>
+        </svg>
+      </div>
+    </div>
+  </section>
+
+  <section class="section section-alt">
+    <div class="container">
+      <span class="eyebrow">Curriculum · 10 Chapters + Code Atlas</span>
+      <h2 style="font-size:32px;margin-bottom:24px;">十章完整学习路线</h2>
+      <div class="bento-2">
+        <a class="card card-hover" href="chapters/ch01.html">
+          <div class="eyebrow">Ch01 · 第一阶段 入门与底座</div>
+          <h3>定位是什么 &amp; SE(2) 与 TF 树</h3>
+          <p style="color:var(--ink-3);font-size:15px;margin:8px 0 0;">极坐标点云、群复合与群逆、为什么必须广播 <code>map→odom</code>、PGM 图像 Y 轴翻转与格心 0.5 偏移。含倒装雷达动画。</p>
+        </a>
+        <a class="card card-hover" href="chapters/ch02.html">
+          <div class="eyebrow">Ch02 · 第一阶段 入门与底座</div>
+          <h3>一张地图喂饱所有算法：MapField</h3>
+          <p style="color:var(--ink-3);font-size:15px;margin:8px 0 0;">Felzenszwalb-Huttenlocher 1D/2D 精确 EDT 抛物线包络、<code>floor_div</code> 边界、双线性 SDF 梯度与 <code>swmax_</code> 金字塔。</p>
+        </a>
+        <a class="card card-hover" href="chapters/ch03.html">
+          <div class="eyebrow">Ch03 · 第二阶段 扫描匹配演进</div>
+          <h3>Correlative / ICP-P2P / 2D NDT 演进</h3>
+          <p style="color:var(--ink-3);font-size:15px;margin:8px 0 0;">网格穷举热力图、ICP 旋转力臂雅可比与局部极小困境、NDT 体素高斯建模。拖动误差滑块亲眼看 ICP 掉坑。</p>
+        </a>
+        <a class="card card-hover" href="chapters/ch04.html">
+          <div class="eyebrow">Ch04 · 第二阶段 扫描匹配演进</div>
+          <h3>王牌精修：Field-GN 与两级组合</h3>
+          <p style="color:var(--ink-3);font-size:15px;margin:8px 0 0;">零数据关联点-线等价原理、Huber IRLS + 残差截断抗行人遮挡、LM 步进与回滚、<code>ComposedMatcher</code> 互补流水线。</p>
+        </a>
+        <a class="card card-hover" href="chapters/ch05.html">
+          <div class="eyebrow">Ch05 · 第二阶段 扫描匹配演进</div>
+          <h3>长走廊退化与各向异性协方差</h3>
+          <p style="color:var(--ink-3);font-size:15px;margin:8px 0 0;">为什么匹配协方差绝不能混入 LM 阻尼项、特征分解如何暴露不可观测方向，及长走廊 120,000× 各向异性实测。</p>
+        </a>
+        <a class="card card-hover" href="chapters/ch06.html">
+          <div class="eyebrow">Ch06 · 第三阶段 全局重定位</div>
+          <h3>分支定界 B&amp;B vs 粒子滤波 AMCL-lite</h3>
+          <p style="color:var(--ink-3);font-size:15px;margin:8px 0 0;"><code>swmax_</code> 可采纳上界剪枝与 Top-K NMS，同场 PK 粒子滤波（Thrun 反向分解、log-sum-exp 与 ESS 重采样）。</p>
+        </a>
+        <a class="card card-hover" href="chapters/ch07.html">
+          <div class="eyebrow">Ch07 · 第三阶段 滤波与状态机</div>
+          <h3>4D 各向异性 EKF、四道门控与状态机</h3>
+          <p style="color:var(--ink-3);font-size:15px;margin:8px 0 0;">在线估计 IMU 陀螺零偏 $b_g$、Joseph 形式更新、五态机与静止马氏锁死/对称走廊误跳变 <code>98fcd28</code> 真实修复。</p>
+        </a>
+        <a class="card card-hover" href="chapters/ch08.html">
+          <div class="eyebrow">Ch08 · 第四阶段 ROS 2 生产工程</div>
+          <h3>LocalizerNode 生命周期组件节点</h3>
+          <p style="color:var(--ink-3);font-size:15px;margin:8px 0 0;">Lifecycle 五回调、锁外构场原子交换、TF2 3D 外参与插值、6×6 协方差下标 <code>[35]</code> 坑与全链路驾驶舱。</p>
+        </a>
+        <a class="card card-hover" href="chapters/ch09.html">
+          <div class="eyebrow">Ch09 · 第四阶段 实验与评测</div>
+          <h3>E1–E10 受控基准与 Intel Lab 真值对比</h3>
+          <p style="color:var(--ink-3);font-size:15px;margin:8px 0 0;">如何设计不说谎的消融实验、避开基准自欺陷阱，及 450 组精校真值三方实测图表完整解读。</p>
+        </a>
+        <a class="card card-hover" href="chapters/ch10.html">
+          <div class="eyebrow">Ch10 · 第五阶段 语法与实战手册</div>
+          <h3>C++20 × Eigen × ROS 2 高频实战手册</h3>
+          <p style="color:var(--ink-3);font-size:15px;margin:8px 0 0;">全仓 24 张语法与工程技巧卡片：<code>concept</code>、零分配缓冲、Eigen <code>LDLT</code>、并发快照与十大真实踩坑对照。</p>
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="container">
+      <div class="bento-2">
+        <div class="card">
+          <div class="eyebrow">Live Source Drawer</div>
+          <h3>一键启动带实时源码抽屉的教程站</h3>
+          <p style="color:var(--ink-3);font-size:15px;">任意页面中的蓝色代码徽章（如 <code>localizer_core.cpp:L528-605</code>）在 HTTP 模式下可直接从侧栏调出仓库真实 C++ 源文件并高亮焦点行。</p>
+          <div class="code-card" style="margin-bottom:0;">
+            <div class="code-head"><span class="code-file">bash</span><button type="button" class="code-btn code-copy-btn">复制</button></div>
+            <pre><code class="language-bash">cd ~/ros2_jazzy/nav2_astar_ws
+./docs/scan_localizer_tutorial/serve.sh
+# 浏览器打开 http://127.0.0.1:8090/docs/scan_localizer_tutorial/index.html</code></pre>
+          </div>
+        </div>
+        <div class="card">
+          <div class="eyebrow">Complete Package Atlas</div>
+          <h3>33 个文件、全部符号全景索引</h3>
+          <p style="color:var(--ink-3);font-size:15px;">从入门学习路线图到测试套件，提供 3 条阅读路线（3 小时速通 / 算法核精读 / 全栈工程）与实时符号检索。</p>
+          <div style="margin-top:20px;display:flex;gap:10px;flex-wrap:wrap;">
+            <a class="btn btn-primary" href="code-index.html">打开代码全景索引</a>
+            <a class="btn btn-secondary" href="../README.md">返回 docs 总目录</a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <footer class="site-footer">
+    scan_localizer Engineering Tutorial · ROS 2 Jazzy · Baseline Commit 98fcd28
+  </footer>
+</body>
+</html>

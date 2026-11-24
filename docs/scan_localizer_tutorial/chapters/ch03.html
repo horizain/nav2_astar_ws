@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>第 3 章 · 经典匹配器演进：Correlative / ICP / NDT | scan_localizer</title>
+  <link rel="stylesheet" href="../../website/vendor/katex/katex.min.css" />
+  <link rel="stylesheet" href="../css/apple.css" />
+  <script>window.TUTORIAL_ROOT = ".."; window.PAGE_ID = "ch03";</script>
+  <script defer src="../../website/vendor/katex/katex.min.js"></script>
+  <script defer src="../../website/vendor/katex/contrib/auto-render.min.js"></script>
+  <script defer src="../../../slam-mpc-academy/assets/vendor/hljs/highlight.min.js"></script>
+  <script defer src="../js/code-manifest.js"></script>
+  <script defer src="../js/sim-core.js"></script>
+  <script defer src="../js/app.js"></script>
+  <script defer src="../js/sim-ch03.js"></script>
+</head>
+<body>
+  <div id="site-nav"></div>
+
+  <header class="page-header">
+    <div class="container">
+      <div class="crumb"><a href="../index.html">概览</a> / 第二阶段 · 扫描匹配演进 / 第 3 章</div>
+      <h1>从暴力搜索到经典匹配器：Correlative / ICP / NDT</h1>
+      <p class="sub">为什么局部优化（ICP / NDT）在大初值误差下会掉进局部极小，而 Olson 相关性搜索却能稳稳抓回全局最优？拖动误差滑块亲眼验证。</p>
+      <div class="pill-row">
+        <span class="pill">预计 30 分钟</span>
+        <span class="pill">核心文件：matchers.hpp · matchers.cpp</span>
+        <span class="pill">动画：热力图 vs ICP 拉扯 vs NDT 椭圆</span>
+      </div>
+    </div>
+  </header>
+
+  <div class="doc-layout">
+    <aside class="toc-aside">
+      <div class="toc-title">本章目录</div>
+      <ul class="toc-list" id="page-toc"></ul>
+    </aside>
+
+    <article class="article-col">
+      <h2 id="sec-intro"><span class="sec-no">3.1</span>交互实验室：局部极小名场面 vs 滑窗热力图</h2>
+      <p>当你把初值误差拉大到 <code>0.6m / 25°</code>：右图中点到点 ICP-P2P 会因为最近邻匹配找错了墙面，越迭代越歪；而左图 <code>CorrelativeMatcher</code> 在 $(x, y, \theta)$ 窗口里像拉网一样查似然场，总能直接锁定全局最高峰。</p>
+
+      <div class="lab-frame">
+        <div class="lab-head">
+          <div class="lab-title"><span>Correlative 热力图 vs ICP-P2P 迭代对比</span><span class="lab-badge">交互动画 3</span></div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <button type="button" class="btn btn-secondary btn-sm" id="ch03-icp-step">ICP 单步</button>
+            <button type="button" class="btn btn-primary btn-sm" id="ch03-icp-run">运行 12 步 ICP</button>
+            <button type="button" class="btn btn-secondary btn-sm" id="ch03-ndt-toggle">叠加 NDT 体素椭圆</button>
+          </div>
+        </div>
+        <div class="lab-body">
+          <div class="lab-grid-2">
+            <div class="lab-canvas-wrap"><canvas id="ch03-corr-canvas" width="360" height="300"></canvas></div>
+            <div class="lab-canvas-wrap"><canvas id="ch03-icp-canvas" width="360" height="300"></canvas></div>
+          </div>
+          <div class="lab-controls">
+            <label class="ctrl-group">初始平移误差 <input type="range" id="ch03-err-xy" min="0.05" max="0.65" step="0.05" value="0.35" /><span class="ctrl-val" id="ch03-err-xy-v">0.35 m</span></label>
+            <label class="ctrl-group">初始航向误差 <input type="range" id="ch03-err-th" min="0" max="35" step="1" value="22" /><span class="ctrl-val" id="ch03-err-th-v">22°</span></label>
+          </div>
+          <div class="telemetry">
+            <div class="tel-cell"><div class="tel-k">Correlative 终态误差</div><div class="tel-v ok" id="ch03-corr-err">-</div></div>
+            <div class="tel-cell"><div class="tel-k">ICP-P2P 当前误差</div><div class="tel-v" id="ch03-icp-err">-</div></div>
+          </div>
+        </div>
+      </div>
+
+      <h2 id="sec-math"><span class="sec-no">3.2</span>三种经典匹配器的数学本质</h2>
+      <p><strong>1. Olson Correlative（粗捕获王者）：</strong>在 $(\Delta x, \Delta y, \Delta\theta)$ 网格上最大化平均似然：$$S(\boldsymbol{\xi}) = \frac{1}{N}\sum_{i=1}^N L\bigl(\Pi_{\text{grid}}(T(\boldsymbol{\xi})\,\mathbf{p}_i)\bigr)$$工程精髓在于<strong>先枚举外层 $\theta$ 旋转点云，再在内层 $(x,y)$ 循环直接整数偏移查表</strong>（<code>matchers.cpp:L167-193</code>），并且用响应面上的 Softmax 二阶矩输出协方差。</p>
+
+      <p><strong>2. ICP-P2P（经典点对点）：</strong>利用 <code>MapField::descendToObstacle</code> 省去 kd-tree 找到最近墙体中心 $\mathbf{q}_i$，残差为二维向量 $\mathbf{e}_i = T\mathbf{p}_i - \mathbf{q}_i$，雅可比含不可忽视的<strong>旋转力臂</strong>：</p>
+      <div class="math-card">
+        <div class="math-title">点对点 ICP 2×3 雅可比与旋转力臂</div>
+        $$J_i = \frac{\partial (T\mathbf{p}_i - \mathbf{q}_i)}{\partial [x, y, \theta]^\top} = \begin{bmatrix} 1 &amp; 0 &amp; -(w_{y,i} - p_y) \\ 0 &amp; 1 &amp; +(w_{x,i} - p_x) \end{bmatrix}$$
+      </div>
+
+      <p><strong>3. 2D NDT（体素正态分布变换）：</strong>把地图切分成 $0.5\text{ m}$ 体素，对每个至少含 3 个占据格的体素拟合均值 $\boldsymbol{\mu}$ 与协方差 $\Sigma$。激光点落在 3×3 邻域内匹配马氏距离最小的高斯，最大化 D2P 得分：</p>
+      <div class="math-card">
+        <div class="math-title">2D NDT 目标函数与 Magnusson 近似 Hessian</div>
+        $$s_i = \exp\!\left(-\frac{1}{2}\mathbf{d}_i^\top \Sigma^{-1}\mathbf{d}_i\right), \quad
+        \mathbf{d}_i = T\mathbf{p}_i - \boldsymbol{\mu}, \quad
+        \mathbf{H}_{\text{NDT}} \approx \sum_i s_i\, J_i^\top \Sigma^{-1} J_i$$
+      </div>
+
+      <h2 id="sec-code"><span class="sec-no">3.3</span>核心源码逐行剖析</h2>
+      <div class="src-bar">
+        <button type="button" class="src-jump" data-file="src/matchers.cpp" data-lines="167-217"><span class="tag">源码抽屉</span>matchers.cpp : L167-217 (Correlative 两轮搜)</button>
+        <button type="button" class="src-jump" data-file="src/matchers.cpp" data-lines="421-440"><span class="tag">源码抽屉</span>matchers.cpp : L421-440 (ICP 旋转力臂)</button>
+        <button type="button" class="src-jump" data-file="src/matchers.cpp" data-lines="610-657"><span class="tag">源码抽屉</span>matchers.cpp : L610-657 (NDT 3×3 与牛顿步)</button>
+      </div>
+
+      <h2 id="sec-pitfall"><span class="sec-no">3.4</span>真实修复复盘：那些曾毁掉精度的隐蔽 Bug</h2>
+      <div class="callout callout-pitfall">
+        <div class="callout-head">Phase 2 修复的四个隐蔽缺陷</div>
+        <ul>
+          <li><strong>Correlative 细轮双倍偏移 Bug</strong>：原本 round 1 拿粗最优当旋转中心又以 <code>prior</code> 作偏移基准，已修复为严格以 <code>prior</code> 与当前候选差值算 <code>offx</code>（<code>L173-186</code>）。</li>
+          <li><strong>ICP-P2P 旋转列恒为零</strong>：曾误把旋转力臂与法向量正交内积归零，导致 <code>b(2)==0</code> 完全锁死航向。</li>
+          <li><strong>NDT 协方差 N 倍过自信</strong>：体素逆协方差自带 $\text{m}^{-2}$ 量纲，对 $N$ 束激光求和会放大 $N$ 倍，必须先除以有效点数 <code>last_used</code>（<code>L680</code>）！</li>
+        </ul>
+      </div>
+
+      <h2 id="sec-quiz"><span class="sec-no">3.5</span>思考题与自检</h2>
+      <details class="quiz-item">
+        <summary>1. 从 E1 实测看，为什么 NDT 的中位位置误差总是比 Field-GN 大 1.5 cm（35mm vs 20mm）？</summary>
+        <div class="quiz-ans">因为 NDT 把占据格聚集到了 0.5m 的体素椭圆里，轻微模糊了墙壁锐利边缘；相反它的姿态角极稳且对孤立噪点鲁棒。而我们追求厘米级精修时，<code>FieldGnMatcher</code> 才是正解（下一章揭晓）。</div>
+      </details>
+
+      <nav class="pager">
+        <a href="ch02.html"><div class="dir">← 上一章</div><div class="ttl">第 2 章 · MapField 与精确 EDT</div></a>
+        <a class="next" href="ch04.html"><div class="dir">下一章 →</div><div class="ttl">第 4 章 · 王牌精修：Field-GN</div></a>
+      </nav>
+    </article>
+  </div>
+  <footer class="site-footer">scan_localizer Engineering Tutorial · Chapter 03</footer>
+</body>
+</html>

@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>第 7 章 · 4D 各向异性 EKF、四道门控与五态状态机 | scan_localizer</title>
+  <link rel="stylesheet" href="../../website/vendor/katex/katex.min.css" />
+  <link rel="stylesheet" href="../css/apple.css" />
+  <script>window.TUTORIAL_ROOT = ".."; window.PAGE_ID = "ch07";</script>
+  <script defer src="../../website/vendor/katex/katex.min.js"></script>
+  <script defer src="../../website/vendor/katex/contrib/auto-render.min.js"></script>
+  <script defer src="../../../slam-mpc-academy/assets/vendor/hljs/highlight.min.js"></script>
+  <script defer src="../js/code-manifest.js"></script>
+  <script defer src="../js/sim-core.js"></script>
+  <script defer src="../js/app.js"></script>
+  <script defer src="../js/sim-ch07.js"></script>
+</head>
+<body>
+  <div id="site-nav"></div>
+
+  <header class="page-header">
+    <div class="container">
+      <div class="crumb"><a href="../index.html">概览</a> / 第三阶段 · 滤波与状态机 / 第 7 章</div>
+      <h1>4D 各向异性 EKF、四道门控与五态状态机</h1>
+      <p class="sub"><code>LocalizerCore</code> 是整个定位系统的“中枢大脑”：在线估计 IMU 陀螺零偏 $b_g$、用 Joseph 形式守护协方差正定性、靠四道防线拦截错匹配，并在对称走廊中稳住永不乱跳。</p>
+      <div class="pill-row">
+        <span class="pill">预计 40 分钟</span>
+        <span class="pill">核心文件：localizer_core.hpp · localizer_core.cpp</span>
+        <span class="pill">动画：4D EKF 零偏收敛 + 四门控沙盘</span>
+      </div>
+    </div>
+  </header>
+
+  <div class="doc-layout">
+    <aside class="toc-aside">
+      <div class="toc-title">本章目录</div>
+      <ul class="toc-list" id="page-toc"></ul>
+    </aside>
+
+    <article class="article-col">
+      <h2 id="sec-intro"><span class="sec-no">7.1</span>交互实验室：在线辨识陀螺零偏 $b_g$ 与门控沙盘</h2>
+      <p>就算 IMU 存在 $+0.04\text{ rad/s}$ 的常值零偏漂移（不校正的话 100 秒偏转 229°），4D EKF 也能在激光匹配中把角度残差反推给第 4 维状态 $b_g$，约 15 帧内自动把零偏咬死到真值（绿虚线）。试试“全遮挡异常”触发 <code>DEGRADED → GLOBAL</code>，或测试“静止马氏锁死”的自我解锁机制！</p>
+
+      <div class="lab-frame">
+        <div class="lab-head">
+          <div class="lab-title"><span>4D EKF 零偏辨识曲线 &amp; 四门控监测</span><span class="lab-badge">交互动画 7</span></div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <button type="button" class="btn btn-secondary btn-sm" id="ch07-step-1">步进 1 帧</button>
+            <button type="button" class="btn btn-primary btn-sm" id="ch07-step-10">连跑 15 帧</button>
+            <button type="button" class="btn btn-secondary btn-sm" id="ch07-occ-btn">注入全遮挡异常</button>
+            <button type="button" class="btn btn-secondary btn-sm" id="ch07-lock-btn">模拟静止马氏锁死测试</button>
+            <button type="button" class="btn btn-secondary btn-sm" id="ch07-reset">重置</button>
+          </div>
+        </div>
+        <div class="lab-body">
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center;">
+            <span style="font-size:12.5px;color:var(--ink-3);font-weight:600;">五态机：</span>
+            <span class="pill fsm-pill" data-st="UNINIT">UNINIT</span> →
+            <span class="pill fsm-pill" data-st="TRACKING" style="border-color:var(--accent);background:var(--accent-soft);color:var(--accent);">TRACKING</span> →
+            <span class="pill fsm-pill" data-st="DEGRADED">DEGRADED</span> →
+            <span class="pill fsm-pill" data-st="LOST">LOST</span> →
+            <span class="pill fsm-pill" data-st="GLOBAL">GLOBAL</span>
+          </div>
+          <div class="lab-canvas-wrap"><canvas id="ch07-bias-canvas" width="740" height="260"></canvas></div>
+          <div class="lab-controls">
+            <label class="ctrl-group">真实陀螺零偏 $b_g$ <input type="range" id="ch07-bias-sl" min="0" max="0.08" step="0.005" value="0.04" /><span class="ctrl-val" id="ch07-bias-v">0.040 rad/s</span></label>
+          </div>
+          <div class="telemetry">
+            <div class="tel-cell"><div class="tel-k">1. Score 门限</div><div class="tel-v ok" id="ch07-g-score">-</div></div>
+            <div class="tel-cell"><div class="tel-k">2. Inlier 门限</div><div class="tel-v ok" id="ch07-g-inl">-</div></div>
+            <div class="tel-cell"><div class="tel-k">3. χ²(3) 马氏距离</div><div class="tel-v ok" id="ch07-g-mahal">-</div></div>
+            <div class="tel-cell"><div class="tel-k">4. MinEig 门限</div><div class="tel-v ok" id="ch07-g-eig">-</div></div>
+            <div class="tel-cell"><div class="tel-k">当前状态</div><div class="tel-v ok" id="ch07-state-v">TRACKING</div></div>
+          </div>
+        </div>
+      </div>
+
+      <h2 id="sec-math"><span class="sec-no">7.2</span>公式推导：4 状态 SE(2)+Bias EKF 与 Joseph 更新</h2>
+      <p>状态向量增广至四维：$\mathbf{x}_k = [x_k,\; y_k,\; \theta_k,\; b_{g,k}]^\top$。预测时用扣除零偏后的角速度积分 $\Delta\theta = \Delta\theta_{\text{raw}} - b_g \Delta t$，状态转移雅可比矩阵 $F_4$ 严格刻画了“零偏误差会先传进航向，航向误差再耦合到平动 $(x,y)$”：</p>
+      <div class="math-card">
+        <div class="math-title">4×4 雅可比矩阵 F4 与 Joseph 形式协方差更新</div>
+        $$F_4 = \begin{bmatrix} 1 &amp; 0 &amp; -(\Delta x\sin\theta + \Delta y\cos\theta) &amp; 0 \\ 0 &amp; 1 &amp; \Delta x\cos\theta - \Delta y\sin\theta &amp; 0 \\ 0 &amp; 0 &amp; 1 &amp; -\Delta t \\ 0 &amp; 0 &amp; 0 &amp; 1 \end{bmatrix}, \qquad
+        H = \begin{bmatrix} I_3 &amp; \mathbf{0}_{3\times 1} \end{bmatrix}$$
+        $$S = H P_{k|k-1} H^\top + R, \quad
+        d^2 = \boldsymbol{\nu}^\top S^{-1}\boldsymbol{\nu} &lt; \chi^2_{3,0.99}(9.0), \quad
+        P_{k|k} = (I - K H) P_{k|k-1} (I - K H)^\top + K R K^\top$$
+      </div>
+      <p>工程上选用 <strong>Joseph 形式</strong> $(I-KH)P(I-KH)^\top + KRK^\top$ 而非简化的 $(I-KH)P$，因为当某轴高度病态（如长走廊 120,000× 特征比）时，减法简化式可能因浮点舍入算成非正定负方差矩阵从而崩掉整个滤波器。</p>
+
+      <h2 id="sec-code"><span class="sec-no">7.3</span>核心源码精读</h2>
+      <div class="src-bar">
+        <button type="button" class="src-jump" data-file="include/scan_localizer/localizer_core.hpp" data-lines="43-185"><span class="tag">源码抽屉</span>localizer_core.hpp : L43-185 (状态与配置)</button>
+        <button type="button" class="src-jump" data-file="src/localizer_core.cpp" data-lines="548-704"><span class="tag">源码抽屉</span>localizer_core.cpp : L548-704 (4D F4/Q4、4 门控与 Joseph)</button>
+        <button type="button" class="src-jump" data-file="src/localizer_core.cpp" data-lines="452-492"><span class="tag">源码抽屉</span>localizer_core.cpp : L452-492 (远距离跳变安全保护)</button>
+      </div>
+
+      <h2 id="sec-pitfall"><span class="sec-no">7.4</span>真实故障深度复盘：Intel Lab 两次 20 米神秘跳变是如何修掉的？</h2>
+      <div class="callout callout-pitfall">
+        <div class="callout-head">提交 <code>98fcd28</code> 全程复盘：从 42 次误触发 GLOBAL 降至 0 次</div>
+        <ol>
+          <li><strong>病因 1（静止马氏锁死）</strong>：机器人在走廊原地停留或微转时，里程计位移 $\Delta s \approx 0$，导致预测方差膨胀量 $q_{\text{trans}}\approx 0$。当激光因局部噪声只偏 2cm 但 $P_{\text{pred}}$ 小到 $10^{-5}$ 时，$d^2 = \nu^\top S^{-1}\nu &gt; 9.0$ 拒绝更新；越拒绝就越进纯预测，先验不动、次帧继续拒收，形成死锁！<br /><strong>修复</strong>：在拒绝分支检查 <code>gate_inlier &amp;&amp; gate_score &amp;&amp; gate_cov &amp;&amp; !gate_mahal</code>，适度按 1.5 倍松弛 $P_{3\times 3}$（<code>L711-716</code>），一两帧即可和平解锁。</li>
+          <li><strong>病因 2（对称走廊触发虚假绑架与跳变）</strong>：原 <code>is_anomaly</code> 把纯粹因为马氏门控拒绝的高分高内点帧误记为“遭到绑架”（触发了 42 次 <code>GLOBAL</code>），接着长相似走廊的外部/全局候选乘机把定位瞬移到 20m 外的对称通道。<br /><strong>修复</strong>：① <code>is_anomaly</code> 严格剔除高分高内点帧（<code>L650-652</code>）；② 自动 <code>GLOBAL</code> 加上“远距离跳变保护”：距离超过 <code>global_jump_min_dist (1.0m)</code> 且非手动触发时，候选全局得分必须严格高于局部匹配 <code>local_mr.score + 0.15</code>，否则拒绝瞬移并只加入多假设队列观察（<code>L455-492</code>）。实测修复后 Intel Lab <code>GLOBAL</code> 次数 42→0，ATE RMSE 2.11m→0.56m。</li>
+        </ol>
+      </div>
+
+      <nav class="pager">
+        <a href="ch06.html"><div class="dir">← 上一章</div><div class="ttl">第 6 章 · B&amp;B 全局定位 vs 粒子滤波</div></a>
+        <a class="next" href="ch08.html"><div class="dir">下一章 →</div><div class="ttl">第 8 章 · ROS 2 生产节点 LocalizerNode</div></a>
+      </nav>
+    </article>
+  </div>
+  <footer class="site-footer">scan_localizer Engineering Tutorial · Chapter 07</footer>
+</body>
+</html>

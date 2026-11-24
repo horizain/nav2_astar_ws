@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>第 8 章 · ROS 2 生产级节点架构 LocalizerNode | scan_localizer</title>
+  <link rel="stylesheet" href="../../website/vendor/katex/katex.min.css" />
+  <link rel="stylesheet" href="../css/apple.css" />
+  <script>window.TUTORIAL_ROOT = ".."; window.PAGE_ID = "ch08";</script>
+  <script defer src="../../website/vendor/katex/katex.min.js"></script>
+  <script defer src="../../website/vendor/katex/contrib/auto-render.min.js"></script>
+  <script defer src="../../../slam-mpc-academy/assets/vendor/hljs/highlight.min.js"></script>
+  <script defer src="../js/code-manifest.js"></script>
+  <script defer src="../js/sim-core.js"></script>
+  <script defer src="../js/app.js"></script>
+  <script defer src="../js/sim-ch08.js"></script>
+</head>
+<body>
+  <div id="site-nav"></div>
+
+  <header class="page-header">
+    <div class="container">
+      <div class="crumb"><a href="../index.html">概览</a> / 第四阶段 · ROS 2 生产工程 / 第 8 章</div>
+      <h1>ROS 2 生产级节点架构：LocalizerNode</h1>
+      <p class="sub">把一个纯算法库包装成真正可直接并入 Nav2 生产栈的 ROS 2 Jazzy Lifecycle 组件节点：回调组隔离、锁外构场、原子交换、TF2 时间插值与 6×6 协方差规范。</p>
+      <div class="pill-row">
+        <span class="pill">预计 35 分钟</span>
+        <span class="pill">核心文件：localizer_node.cpp · localizer.yaml · demo.launch.py</span>
+        <span class="pill">动画：端到端仓库定位驾驶舱</span>
+      </div>
+    </div>
+  </header>
+
+  <div class="doc-layout">
+    <aside class="toc-aside">
+      <div class="toc-title">本章目录</div>
+      <ul class="toc-list" id="page-toc"></ul>
+    </aside>
+
+    <article class="article-col">
+      <h2 id="sec-intro"><span class="sec-no">8.1</span>全链路交互驾驶舱：亲手压测完整流水线</h2>
+      <p>下方的仓库驾驶舱在浏览器里实时跑着 <code>odom 预测 (带 2% 滑移) → Field-GN 匹配 → 4D EKF 更新 → 五态状态机</code> 全闭环。尝试点击“开启前方动态行人遮挡”或直接“手动绑架机器人”，观察状态如何切至 <code>GLOBAL</code> 并依靠 B&amp;B 瞬间追回：</p>
+
+      <div class="lab-frame">
+        <div class="lab-head">
+          <div class="lab-title"><span>全链路迷你仓库定位驾驶舱</span><span class="lab-badge">交互动画 8</span></div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <button type="button" class="btn btn-secondary btn-sm" id="ch08-pause">暂停驾驶舱</button>
+            <button type="button" class="btn btn-secondary btn-sm" id="ch08-crowd">开启前方动态行人遮挡</button>
+            <button type="button" class="btn btn-primary btn-sm" id="ch08-kidnap">手动绑架机器人</button>
+          </div>
+        </div>
+        <div class="lab-body">
+          <div class="lab-canvas-wrap"><canvas id="ch08-canvas" width="740" height="380"></canvas></div>
+          <div class="telemetry">
+            <div class="tel-cell"><div class="tel-k">节点状态</div><div class="tel-v ok" id="ch08-st">TRACKING</div></div>
+            <div class="tel-cell"><div class="tel-k">实时位置误差</div><div class="tel-v ok" id="ch08-err">-</div></div>
+            <div class="tel-cell"><div class="tel-k">似然得分 Score</div><div class="tel-v" id="ch08-sc">-</div></div>
+            <div class="tel-cell"><div class="tel-k">内点率 Inlier</div><div class="tel-v" id="ch08-inl">-</div></div>
+          </div>
+        </div>
+      </div>
+
+      <h2 id="sec-arch"><span class="sec-no">8.2</span>四大生产级架构模式</h2>
+      <ul>
+        <li><strong>1. 严格 Lifecycle 生命周期与 <code>autostart: false</code></strong>：真正由 Nav2 <code>lifecycle_manager</code> 驱动，配置阶段 <code>on_configure()</code> 才读参数与建资源，激活阶段才发话题；清理回调 <code>on_cleanup()</code> 调用统一的 <code>resetResources()</code> 保证多次 <code>configure → deactivate → cleanup</code> 不留状态鬼影（例如清零 <code>imu_started_</code> 防止二次激活航向大跳）。</li>
+        <li><strong>2. 锁外重计算 + 原子替换（<code>applyMap()</code>）</strong>：构建大地图场和 NDT 耗时数十毫秒，绝不能在持有 <code>state_mtx_</code> 锁的情况下执行从而饿死高频传感器回调。正确范式是锁外造好 <code>std::shared_ptr&lt;MapField&gt;</code>，再临界区内微秒级指针交换，同时用 <code>OutputSnapshot</code> 在锁外执行 DDS <code>publish()</code>，彻底消除死锁。</li>
+        <li><strong>3. 双回调组 + 组件化零拷贝</strong>：<code>sensor_cb_group_</code> 专责高实时性 `/scan /odom /imu`，<code>work_cb_group_</code> 专责热切图与服务；<code>demo.launch.py</code> 通过 <code>ComposableNodeContainer</code> 打开 `use_intra_process_comms`，在嵌入式芯片上零序列化传递点云与栅格。</li>
+        <li><strong>4. Odom 优先 TF2 + 环形缓冲插值</strong>：按激光扫描严格时间戳 <code>m-&gt;header.stamp</code> 查 TF2 `odom→base_link`，超时/缺失时退回按时间戳线性插值的环形缓冲。</li>
+      </ul>
+
+      <h2 id="sec-code"><span class="sec-no">8.3</span>核心源码精读</h2>
+      <div class="src-bar">
+        <button type="button" class="src-jump" data-file="src/localizer_node.cpp" data-lines="890-963"><span class="tag">源码抽屉</span>localizer_node.cpp : L890-963 (锁外构场 applyMap)</button>
+        <button type="button" class="src-jump" data-file="src/localizer_node.cpp" data-lines="1189-1336"><span class="tag">源码抽屉</span>localizer_node.cpp : L1189-1336 (onScan 3D 外参+插值)</button>
+        <button type="button" class="src-jump" data-file="src/localizer_node.cpp" data-lines="1555-1667"><span class="tag">源码抽屉</span>localizer_node.cpp : L1555-1667 (锁外快照发布)</button>
+        <button type="button" class="src-jump" data-file="config/localizer.yaml" data-lines="1-80"><span class="tag">源码抽屉</span>localizer.yaml : L1-80 (52 项参数契约)</button>
+      </div>
+
+      <h2 id="sec-pitfall"><span class="sec-no">8.4</span>ROS 2 工程经典踩坑复盘</h2>
+      <div class="callout callout-pitfall">
+        <div class="callout-head">四个最容易栽跟头的 ROS 2 细节</div>
+        <ul>
+          <li><strong>6×6 协方差下标写成 `[14]` 而不是 `[35]`！</strong>（<code>localizer_node.cpp:L1584-1590</code>）：ROS `PoseWithCovariance` 的 6 维顺序固定为 `[x, y, z, roll, pitch, yaw]`。2D 定位映射为 <code>constexpr int kIdx[3] = {0, 1, 5};</code>，偏航角方差在行优先索引 <code>6 * 5 + 5 = 35</code>！曾错写为 `[0, 1, 2]` 把航向方差塞进了 z 轴里，坑死下游 EKF。</li>
+          <li><strong>`/imu` QoS 不匹配沉默丢包</strong>：大多数真机 IMU 驱动发 <code>BestEffort</code>（`SensorDataQoS`），用默认可靠 QoS 订阅会一帧都收不到。</li>
+          <li><strong><code>autostart</code> 绕过状态机</strong>：旧版本直接在构造函数用计时器偷偷转 ACTIVE，导致 Nav2 启动管理报状态冲突。</li>
+          <li><strong>热参数不校验</strong>：若运行时通过 `ros2 param set` 传入负数 <code>likelihood_sigma</code> 会导致除零崩盘，必须在 `onSetParameters` 事务化校对全部参数。</li>
+        </ul>
+      </div>
+
+      <nav class="pager">
+        <a href="ch07.html"><div class="dir">← 上一章</div><div class="ttl">第 7 章 · 4D 各向异性 EKF 与状态机</div></a>
+        <a class="next" href="ch09.html"><div class="dir">下一章 →</div><div class="ttl">第 9 章 · E1–E10 与 Intel Lab 真值对比</div></a>
+      </nav>
+    </article>
+  </div>
+  <footer class="site-footer">scan_localizer Engineering Tutorial · Chapter 08</footer>
+</body>
+</html>

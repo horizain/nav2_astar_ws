@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>第 9 章 · 仿真实验 E1–E10 与 Intel Lab 真值三方评测 | scan_localizer</title>
+  <link rel="stylesheet" href="../../website/vendor/katex/katex.min.css" />
+  <link rel="stylesheet" href="../css/apple.css" />
+  <script>window.TUTORIAL_ROOT = ".."; window.PAGE_ID = "ch09";</script>
+  <script defer src="../../website/vendor/katex/katex.min.js"></script>
+  <script defer src="../../website/vendor/katex/contrib/auto-render.min.js"></script>
+  <script defer src="../../../slam-mpc-academy/assets/vendor/hljs/highlight.min.js"></script>
+  <script defer src="../js/code-manifest.js"></script>
+  <script defer src="../js/app.js"></script>
+  <script defer src="../js/sim-ch09.js"></script>
+</head>
+<body>
+  <div id="site-nav"></div>
+
+  <header class="page-header">
+    <div class="container">
+      <div class="crumb"><a href="../index.html">概览</a> / 第四阶段 · 实验与评测 / 第 9 章</div>
+      <h1>实验驱动工程：E1–E10 消融与 Intel Lab 真值三方评测</h1>
+      <p class="sub">工程不是猜出来的，而是测出来的。如何搭建不作弊、不泄密的 E1–E10 消融实验框架，并在 450 组 Kümmerle 手工精校真值上正面比拼 <code>nav2_amcl</code> 与 <code>slam_toolbox</code>？</p>
+      <div class="pill-row">
+        <span class="pill">预计 30 分钟</span>
+        <span class="pill">核心文件：sim_world.cpp · benchmark.cpp · test_*.cpp</span>
+        <span class="pill">数据：Intel Lab 450 组真值三方实测</span>
+      </div>
+    </div>
+  </header>
+
+  <div class="doc-layout">
+    <aside class="toc-aside">
+      <div class="toc-title">本章目录</div>
+      <ul class="toc-list" id="page-toc"></ul>
+    </aside>
+
+    <article class="article-col">
+      <h2 id="sec-intro"><span class="sec-no">9.1</span>核心评测结论速览（点击切换指标维度）</h2>
+      <p>下面这张交互图表直接汇总了真实 ROS 2 回放实测（<code>Intel Research Lab, 3000 帧</code>）与 x86 Release 受控消融核心数字。切换顶部分段按钮比较精度、耗时与大误差捕获能力：</p>
+
+      <div class="lab-frame">
+        <div class="lab-head">
+          <div class="lab-title"><span>核心实验数据对比看板</span><span class="lab-badge">实测数据</span></div>
+          <div class="segmented" id="ch09-metric-tabs">
+            <button type="button" class="active" data-metric="gt3">Intel Lab 真值精度</button>
+            <button type="button" data-metric="e7">E7 单帧计算耗时</button>
+            <button type="button" data-metric="e2">E2 大误差捕获率</button>
+          </div>
+        </div>
+        <div class="lab-body">
+          <div class="lab-canvas-wrap"><canvas id="ch09-bench-canvas" width="740" height="280"></canvas></div>
+        </div>
+      </div>
+
+      <h2 id="sec-gt"><span class="sec-no">9.2</span>Intel Lab 450 组精校真值三方同台评测</h2>
+      <p>在相同 591×580 (0.05m) 静态先验地图上，以 ROS 2 Jazzy <code>use_sim_time:=true</code> 40 Hz 顺序回放 <code>intel.clf</code> 全长 128.42 m 环路（3,000 帧激光），采用 **450 组来自 AIS Freiburg 官方 Kümmerle (ICRA 2009) 的人工精校 SE(2) 真值关系**（含 127 个跨回环约束 `Δt &gt; 20s`）评测三方系统：</p>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>定位方案</th><th>有效更新数</th><th>GT 平移 RPE RMSE</th><th>GT 中位误差</th><th>回环误差 (&gt;20s)</th><th>GT 航向 RMSE</th><th>WallDist 贴墙率 (&lt;10cm)</th><th>总 CPU 占比 / 单帧</th><th>峰值 RSS</th></tr></thead>
+          <tbody>
+            <tr><td><strong>scan_localizer (Composed)</strong></td><td>3,000</td><td><strong>3.06 cm</strong></td><td><strong>1.57 cm</strong></td><td><strong>2.95 cm</strong></td><td><strong>0.46°</strong></td><td><strong>97.4% (1.75 cm)</strong></td><td>12.07% (3.10 ms)</td><td>46.36 MB</td></tr>
+            <tr><td>nav2_amcl (KLD-PF 500–2000)</td><td>517</td><td>12.57 cm</td><td>3.64 cm</td><td>22.60 cm</td><td>1.63°</td><td>76.0% (9.53 cm)</td><td>4.10% (1.05 ms)</td><td>35.66 MB</td></tr>
+            <tr><td>slam_toolbox (Localization)</td><td>498</td><td>24.56 cm</td><td>2.28 cm</td><td>43.99 cm</td><td>1.22°</td><td>74.7% (11.16 cm)</td><td>40.70% (10.44 ms)</td><td>68.34 MB</td></tr>
+            <tr><td>Raw Odometry (对照组)</td><td>3,000</td><td>670.12 cm</td><td>—</td><td>1261.40 cm</td><td>65.30°</td><td>13.1%</td><td>—</td><td>—</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="fig-card">
+        <img src="../assets/img/gt_3way_trajectories.png" alt="Intel Lab GT 3-way Trajectories" />
+        <div class="fig-cap">图 1 · Intel Lab 轨迹对比（点击可放大）：黑色虚线为精校真值轨迹，<code>scan_localizer</code>（蓝）全程紧贴真值与走廊墙壁。</div>
+      </div>
+      <div class="lab-grid-2">
+        <div class="fig-card">
+          <img src="../assets/img/gt_3way_accuracy.png" alt="Intel Lab GT 3-way Accuracy" />
+          <div class="fig-cap">图 2 · 450 组 GT 相对位姿误差分布与累计曲线。</div>
+        </div>
+        <div class="fig-card">
+          <img src="../assets/img/gt_3way_performance.png" alt="Intel Lab GT 3-way Performance" />
+          <div class="fig-cap">图 3 · CPU 占用、P50/Max 延迟与峰值内存对比。</div>
+        </div>
+      </div>
+
+      <h2 id="sec-code"><span class="sec-no">9.3</span>E1–E10 受控消融基准与“防自欺”方法论</h2>
+      <div class="src-bar">
+        <button type="button" class="src-jump" data-file="include/scan_localizer/sim_world.hpp" data-lines="26-82"><span class="tag">源码抽屉</span>sim_world.hpp : L26-82 (仿真环境接口)</button>
+        <button type="button" class="src-jump" data-file="test/benchmark.cpp" data-lines="193-469"><span class="tag">源码抽屉</span>benchmark.cpp : L193-469 (E9 轨线与 E10 10% 滑移 IMU)</button>
+        <button type="button" class="src-jump" data-file="docs/benchmark_results_x86.txt" data-lines="1-89"><span class="tag">源码抽屉</span>benchmark_results_x86.txt : L1-89 (原始报表)</button>
+      </div>
+
+      <div class="callout callout-pitfall">
+        <div class="callout-head">Phase 5 在基准代码里抓出的三大“自欺欺人”陷阱</div>
+        <ul>
+          <li><strong>陷阱 1：<code>rng() % N</code> 把 <code>mt19937</code> 无符号随机数传给浮点分支导致 0 动态障碍</strong>：修复前 E4 表面测动态鲁棒性，实际注入箱数接近 0，修复后强制验证最小注入 200 箱才可过审。</li>
+          <li><strong>陷阱 2：激光点云离散重分箱引入 <code>-0.25°</code> 偏置</strong>：新写 <code>make_laser_ranges</code> 直接按原生光束角 <code>angle_min + i * angle_increment</code> 求交（<code>sim_world.cpp:L198</code>）。</li>
+          <li><strong>陷阱 3：用“有误差的真值泄露”当 E6 基准先验</strong>：严格在配对试验（paired trials）下锁定同一套真值点云与同一张 <code>MapField</code> 评测所有匹配器。</li>
+        </ul>
+      </div>
+
+      <nav class="pager">
+        <a href="ch08.html"><div class="dir">← 上一章</div><div class="ttl">第 8 章 · ROS 2 生产节点 LocalizerNode</div></a>
+        <a class="next" href="ch10.html"><div class="dir">下一章 →</div><div class="ttl">第 10 章 · C++20 × Eigen × ROS 2 实战手册</div></a>
+      </nav>
+    </article>
+  </div>
+  <footer class="site-footer">scan_localizer Engineering Tutorial · Chapter 09</footer>
+</body>
+</html>

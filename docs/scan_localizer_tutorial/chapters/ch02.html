@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>第 2 章 · 一张地图喂饱所有算法：MapField | scan_localizer</title>
+  <link rel="stylesheet" href="../../website/vendor/katex/katex.min.css" />
+  <link rel="stylesheet" href="../css/apple.css" />
+  <script>window.TUTORIAL_ROOT = ".."; window.PAGE_ID = "ch02";</script>
+  <script defer src="../../website/vendor/katex/katex.min.js"></script>
+  <script defer src="../../website/vendor/katex/contrib/auto-render.min.js"></script>
+  <script defer src="../../../slam-mpc-academy/assets/vendor/hljs/highlight.min.js"></script>
+  <script defer src="../js/code-manifest.js"></script>
+  <script defer src="../js/sim-core.js"></script>
+  <script defer src="../js/app.js"></script>
+  <script defer src="../js/sim-ch02.js"></script>
+</head>
+<body>
+  <div id="site-nav"></div>
+
+  <header class="page-header">
+    <div class="container">
+      <div class="crumb"><a href="../index.html">概览</a> / 第一阶段 · 入门与底座 / 第 2 章</div>
+      <h1>一张地图喂饱所有算法：MapField</h1>
+      <p class="sub">只需在启动或切图时预计算 27.7 ms，就把静态的黑白占据栅格升级为四层连续数学场：精确欧氏距离（EDT）、带符号距离场（SDF）、高斯似然场与 Cartographer 滑窗最大值金字塔。</p>
+      <div class="pill-row">
+        <span class="pill">预计 35 分钟</span>
+        <span class="pill">核心文件：map_field.hpp · map_field.cpp</span>
+        <span class="pill">动画：可画墙四层场切换 + 1D 抛物线包络</span>
+      </div>
+    </div>
+  </header>
+
+  <div class="doc-layout">
+    <aside class="toc-aside">
+      <div class="toc-title">本章目录</div>
+      <ul class="toc-list" id="page-toc"></ul>
+    </aside>
+
+    <article class="article-col">
+      <h2 id="sec-intro"><span class="sec-no">2.1</span>为什么不能直接用 0/100 黑白占据栅格定位？</h2>
+      <p>黑白栅格里只有“是墙（100）”和“不是墙（0）”两种跳变信号。假如机器人猜的位姿只偏了 10 厘米，激光点落在了白色空白区，在 0/100 栅格上读到的值是纯粹的 0，没有任何梯度告诉你<strong>“往左走还是往右走才能碰回墙”</strong>。</p>
+      <p><code>MapField</code> 的哲学是：一次性把占据栅格变成“有坡度的连续山谷”，于是 Correlative、Field-GN、ICP-P2P、粒子滤波与全局 B&amp;B 全部都能直接复用这一份数据。点击或拖动画布自由增删墙体，实时观察四层场变化：</p>
+
+      <div class="lab-frame">
+        <div class="lab-head">
+          <div class="lab-title"><span>可编辑四层 MapField 可视化引擎</span><span class="lab-badge">交互动画 2A · 可画墙</span></div>
+          <div class="segmented" id="ch02-layer-tabs">
+            <button type="button" data-layer="occ">1. 占据栅格</button>
+            <button type="button" class="active" data-layer="sdf">2. SDF + 解析梯度</button>
+            <button type="button" data-layer="like">3. 高斯似然场</button>
+            <button type="button" data-layer="swmax">4. swmax 金字塔</button>
+          </div>
+        </div>
+        <div class="lab-body">
+          <div class="lab-canvas-wrap">
+            <canvas id="ch02-map-canvas" width="740" height="400" style="cursor:crosshair;"></canvas>
+          </div>
+          <div class="lab-controls">
+            <label class="ctrl-group">似然尺度 $\sigma_m$ <input type="range" id="ch02-sig" min="0.10" max="0.80" step="0.05" value="0.35" /><span class="ctrl-val" id="ch02-sig-v">0.35 m</span></label>
+            <label class="ctrl-group">金字塔层 $k$ <input type="range" id="ch02-lvl" min="0" max="5" step="1" value="2" /></label>
+            <button type="button" class="btn btn-secondary btn-sm" id="ch02-reset-btn">重置地图墙体</button>
+          </div>
+          <div class="telemetry">
+            <div class="tel-cell"><div class="tel-k">当前视图</div><div class="tel-v" id="ch02-layer-v">-</div></div>
+            <div class="tel-cell"><div class="tel-k">平滑尺度 sigma_m</div><div class="tel-v" id="ch02-sig-v2">32×24 @ 0.25m</div></div>
+            <div class="tel-cell"><div class="tel-k">红色小箭头含义</div><div class="tel-v">∇SDF(x,y) 离开墙体法向</div></div>
+          </div>
+        </div>
+      </div>
+
+      <h2 id="sec-edt"><span class="sec-no">2.2</span>O(HW) 精确欧氏距离变换（EDT）与抛物线下包络</h2>
+      <p>在一张 $800 \times 600$ 的地图上暴力找每个格子到最近墙壁的距离需要 $O(H^2 W^2)$ 次比较，无法接受。Felzenszwalb &amp; Huttenlocher（以及 Meijster）把 2D 平方距离巧妙拆成两次 1D 扫描：</p>
+      <div class="math-card">
+        <div class="math-title">2D EDT 的行列可分离性与抛物线下包络交点</div>
+        $$D_f(x) = \min_{p} \Bigl((x - p)^2 + f(p)\Bigr)$$
+        $$\text{两条抛物线 } p &lt; q \text{ 的交点横坐标：}\quad
+        s = \left\lfloor \frac{(f(q) + q^2) - (f(p) + p^2)}{2(q - p)} \right\rfloor$$
+      </div>
+      <p>每扫过一个点 $q$，若新抛物线与栈顶 $v[k]$ 的交点 $s \le z[k]$，说明原本的栈顶完全被遮挡在上方，弹出它！整个序列每个下标至多入栈出栈一次，所以是严格的线性复杂度 $O(N)$。</p>
+
+      <div class="lab-frame">
+        <div class="lab-head">
+          <div class="lab-title"><span>1D EDT 抛物线下包络构建步进器</span><span class="lab-badge">交互动画 2B</span></div>
+          <div style="display:flex;gap:8px;">
+            <button type="button" class="btn btn-secondary btn-sm" id="ch02-edt-prev">← 上一步 q</button>
+            <button type="button" class="btn btn-primary btn-sm" id="ch02-edt-next">下一步 q →</button>
+          </div>
+        </div>
+        <div class="lab-body">
+          <div class="lab-canvas-wrap">
+            <canvas id="ch02-edt-canvas" width="740" height="260"></canvas>
+          </div>
+          <div id="ch02-edt-info" style="font-family:var(--font-mono);font-size:12.5px;color:var(--ink-2);margin-top:10px;"></div>
+        </div>
+      </div>
+
+      <h2 id="sec-sdf"><span class="sec-no">2.3</span>双向 EDT → SDF、双线性解析梯度与 swmax_ 金字塔</h2>
+      <ul>
+        <li><strong>双向 EDT 构 SDF</strong>：分别对占据格做一次 EDT 得 $d_{\text{occ}}$、对自由格做一次 EDT 得 $d_{\text{free}}$。自由空间 $\text{SDF} = +\sqrt{d_{\text{occ}}}\cdot r &gt; 0$，墙体表面 $=0$，墙体内部深度为负值 $&lt;0$。</li>
+        <li><strong>双线性插值与解析梯度</strong>：在相邻四个格心 $(v_{00}, v_{10}, v_{01}, v_{11})$ 上做双线性插值，$x$ 方向偏导 $\frac{\partial \text{SDF}}{\partial x}$ 就是水平差分插值再除以分辨率 $r$！</li>
+        <li><strong>滑窗最大值栈 <code>swmax_</code></strong>：第 $k$ 层的每个像素记录以它为锚点的 $2^k \times 2^k$ 窗口内似然场的最大值：<code>dst[y][x] = max(src[y][x], src[y][x+h], src[y+h][x], src[y+h][x+h])</code>，第 6 章的 B&amp;B 全局搜全靠它给出不漏解的紧致上界。</li>
+      </ul>
+
+      <h2 id="sec-code"><span class="sec-no">2.4</span>核心源码逐行剖析</h2>
+      <div class="src-bar">
+        <button type="button" class="src-jump" data-file="src/map_field.cpp" data-lines="35-138"><span class="tag">源码抽屉</span>map_field.cpp : L35-138 (floor_div / edt2d / edt1d)</button>
+        <button type="button" class="src-jump" data-file="src/map_field.cpp" data-lines="149-279"><span class="tag">源码抽屉</span>map_field.cpp : L149-279 (MapField::build)</button>
+        <button type="button" class="src-jump" data-file="src/map_field.cpp" data-lines="281-315"><span class="tag">源码抽屉</span>map_field.cpp : L281-315 (sdf 与解析梯度)</button>
+      </div>
+
+      <div class="code-card">
+        <div class="code-head"><span class="code-file">src/map_field.cpp : L35-43 &amp; L257-275</span><button type="button" class="code-btn code-copy-btn">复制</button></div>
+        <pre><code class="language-cpp">// 精确向下取整：C++ '/' 对负数向零截断，会使抛物线交点偏大 1 格！
+inline std::int64_t floor_div(std::int64_t num, std::int64_t den) {
+  std::int64_t q = num / den;
+  const std::int64_t r = num % den;
+  if (r != 0 &amp;&amp; ((r &lt; 0) != (den &lt; 0))) { --q; }
+  return q;
+}
+
+// O(HW) 构建第 k 层 2^k × 2^k 滑窗最大值金字塔（只依赖前一层间隔 h = 2^(k-1)）
+for (int y = 0; y &lt; grid_-&gt;height; ++y) {
+  const int yh = std::min(y + h, grid_-&gt;height - 1);
+  for (int x = 0; x &lt; grid_-&gt;width; ++x) {
+    const int xh = std::min(x + h, grid_-&gt;width - 1);
+    float m = src.data[row_y + ux];
+    m = std::max(m, src.data[row_y + uxh]);
+    m = std::max(m, src.data[row_yh + ux]);
+    m = std::max(m, src.data[row_yh + uxh]);
+    dst.data[row_y + ux] = m;
+  }
+}</code></pre>
+      </div>
+
+      <h2 id="sec-pitfall"><span class="sec-no">2.5</span>工程技巧与踩坑复盘</h2>
+      <div class="callout callout-pitfall">
+        <div class="callout-head">为什么 <code>edt1d([9, 100, 4])</code> 曾算出错误的 9？</div>
+        <p>当 $p=0, q=2, f=[9, 100, 4]$ 时，交点分子为 $(4+4)-(9+0) = -1$，分母为 $4$。数学向下取整 $\lfloor -1/4 \rfloor = -1$，而 C++ 原生整数除法 <code>(-1)/4 = 0</code>（向零截断）。在 $q=1$ 被提前错误判定或分段边界上产生 1 格错位，把真实结果 $[8, 5, 4]$ 算成了 $[9, 5, 4]$。使用 <code>int64_t</code> 配合 <code>floor_div</code> 才彻底修复该 Bug（<code>test_map_field.cpp</code> 有专项回归测试）。</p>
+      </div>
+      <div class="callout callout-syntax">
+        <div class="callout-head">共享只读所有权消除 UAF</div>
+        <p>早期版本 <code>MapField</code> 持有原始指针 <code>const OccupancyGrid * grid_</code>，一旦调用方栈上局部 <code>grid</code> 析构便触发 Use-After-Free。重构后统一改为私有 <code>std::shared_ptr&lt;const OccupancyGrid&gt; grid_</code>（<code>map_field.hpp:L162</code>），即使热切图期间后台仍在读取旧地图也绝对安全。</p>
+      </div>
+
+      <h2 id="sec-quiz"><span class="sec-no">2.6</span>思考题与自检</h2>
+      <details class="quiz-item">
+        <summary>1. 未知栅格（<code>c = -1</code>）应该赋予正 SDF、零 SDF 还是负 SDF？</summary>
+        <div class="quiz-ans">必须赋予<strong>有界负值（非 0）</strong>，似然打分为低背景值 <code>unknown_score_ = 0.10</code>。若未知区给 SDF=0，相当于把没探明的地方都当成“墙表面”，匹配器会把扫描点吸进未知黑洞里！</div>
+      </details>
+
+      <nav class="pager">
+        <a href="ch01.html"><div class="dir">← 上一章</div><div class="ttl">第 1 章 · SE(2) 与 TF 树</div></a>
+        <a class="next" href="ch03.html"><div class="dir">下一章 →</div><div class="ttl">第 3 章 · 经典匹配器演进</div></a>
+      </nav>
+    </article>
+  </div>
+  <footer class="site-footer">scan_localizer Engineering Tutorial · Chapter 02</footer>
+</body>
+</html>
