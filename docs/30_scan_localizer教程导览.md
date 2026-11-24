@@ -23,7 +23,8 @@ cd ~/ros2_ws/src/nav2_astar_ws
 | 阶段 | 入口页面 | 核心主题与交互实验 |
 |---|---|---|
 | 总览 | [首页 · 架构与指标](scan_localizer_tutorial/index.html) | 实时仓库 SDF 扫描动画、Intel Lab 核心指标 Bento、五层架构图 |
-| 索引 | [代码全景索引 (33 文件)](scan_localizer_tutorial/code-index.html) | 3 条阅读路线（3h 速通 / 算法核 / 全栈工程）+ 全符号搜索 |
+| 导读 | [交互式代码思路导读](scan_localizer_tutorial/walkthrough.html) | 3 条执行流程图、UML 类图、可折叠调用链与 12 个函数“从零手写思路” |
+| 索引 | [代码全景索引 (33 文件)](scan_localizer_tutorial/code-index.html) | 3 条阅读路线（3h 速通 / 算法核 / 全栈工程）、全符号搜索与 Windows/WSL VS Code 直开 |
 | Ch01 | [定位与 SE(2) / TF 树](scan_localizer_tutorial/chapters/ch01.html) | 极坐标点云、`map→odom` 合成、PGM Y 轴翻转、倒装雷达演示 |
 | Ch02 | [MapField 与精确 EDT](scan_localizer_tutorial/chapters/ch02.html) | 可手绘画墙的 4 层地图场 + 1D EDT 抛物线下包络步进动画 |
 | Ch03 | [经典匹配器演进](scan_localizer_tutorial/chapters/ch03.html) | Correlative 热力图 vs ICP-P2P 局部极小掉坑 + 2D NDT 椭圆场 |

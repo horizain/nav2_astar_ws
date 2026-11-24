@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>交互式源码思路导读（流程图 · UML 类图 · 调用链 · 手写思路）| scan_localizer</title>
+  <link rel="stylesheet" href="../website/vendor/katex/katex.min.css" />
+  <link rel="stylesheet" href="css/apple.css" />
+  <script>window.TUTORIAL_ROOT = "."; window.PAGE_ID = "walkthrough";</script>
+  <script defer src="../website/vendor/katex/katex.min.js"></script>
+  <script defer src="../website/vendor/katex/contrib/auto-render.min.js"></script>
+  <script defer src="../../slam-mpc-academy/assets/vendor/hljs/highlight.min.js"></script>
+  <script defer src="js/code-manifest.js"></script>
+  <script defer src="js/walkthrough-data.js"></script>
+  <script defer src="js/app.js"></script>
+</head>
+<body>
+  <div id="site-nav"></div>
+
+  <header class="page-header">
+    <div class="container">
+      <div class="crumb"><a href="index.html">概览</a> / 交互式架构与源码思路导读</div>
+      <h1>看懂流程图、类图与手写思路，做到能自己写出来。</h1>
+      <p class="sub">
+        按真实运行时序与工程分层，把 11,904 行代码拆解为 <strong>3 条核心执行流程图</strong>、<strong>10 个类的 UML 所有权图</strong>、<strong>可折叠函数调用树</strong>，以及 <strong>12 个关键函数“从空白文件写起”的步骤骨架</strong>。支持直接在 Windows 侧 VS Code (WSL) 打开定位到目标行。
+      </p>
+      <div class="pill-row">
+        <span class="pill">3 条执行流程图 (支持步进高亮)</span>
+        <span class="pill">UML 类图与指针所有权关系</span>
+        <span class="pill">可折叠 Call Tree 联动剖析</span>
+        <span class="pill">6 步从零手写闯关路线</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="container" style="padding: 40px 24px 88px;">
+
+    <!-- 1. Interactive Execution Flowchart -->
+    <section class="wt-panel-gap">
+      <div style="display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:14px;margin-bottom:14px;">
+        <div>
+          <span class="eyebrow">01 · Execution Flowchart</span>
+          <h2 style="margin:0;font-size:28px;">核心执行流程图（点节点或逐步演示，联动查看函数思路）</h2>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+          <div class="segmented" id="wt-flow-tabs">
+            <button type="button" class="active" data-flow="scan_loop">A · 一帧激光定位</button>
+            <button type="button" data-flow="map_load">B · 建图与热切图</button>
+            <button type="button" data-flow="global_recovery">C · 全局绑架恢复</button>
+          </div>
+          <button type="button" class="btn btn-secondary btn-sm" id="wt-flow-prev">← 上一步</button>
+          <button type="button" class="btn btn-primary btn-sm" id="wt-flow-next">下一步 →</button>
+        </div>
+      </div>
+
+      <div class="card" style="padding:18px 20px;">
+        <div id="wt-flow-desc" style="font-size:14px;color:var(--ink-3);margin-bottom:10px;"></div>
+        <div class="wt-flow-strip" id="wt-flow-strip"></div>
+        <div id="wt-flow-caption" style="margin-top:10px;padding:12px 14px;background:var(--bg-alt);border-radius:12px;font-size:14.5px;color:var(--ink-2);display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;"></div>
+      </div>
+    </section>
+
+    <!-- 2. Interactive UML Class & Ownership Diagram -->
+    <section class="wt-panel-gap">
+      <span class="eyebrow">02 · UML Class &amp; Ownership Architecture</span>
+      <h2 style="margin:0 0 8px;font-size:28px;">类图与所有权关系（点击任意类节点展开设计意图）</h2>
+      <p style="color:var(--ink-3);font-size:15px;margin:0 0 16px;">
+        箭头约定：实线空心三角 <code>◁──</code> 表示继承；实线菱形 <code>◆──</code> 表示独占组合（<code>unique_ptr</code>）；虚线箭头 <code>┄►</code> 表示只读共享依赖（<code>shared_ptr&lt;const&gt;</code>）或回调注入。
+      </p>
+
+      <div class="card" style="padding:18px;overflow-x:auto;">
+        <svg id="wt-uml-svg" viewBox="0 0 1100 370" style="width:100%;min-width:860px;height:auto;font-family:var(--font-sans);">
+          <defs>
+            <marker id="uml-inh" viewBox="0 0 12 12" refX="11" refY="6" markerWidth="9" markerHeight="9" orient="auto">
+              <path d="M1 1L11 6L1 11z" fill="var(--bg-card)" stroke="var(--accent)" stroke-width="1.6"/>
+            </marker>
+            <marker id="uml-dep" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+              <path d="M1 1L9 5L1 9" fill="none" stroke="var(--ink-3)" stroke-width="1.6"/>
+            </marker>
+            <marker id="uml-comp" viewBox="0 0 14 10" refX="1" refY="5" markerWidth="11" markerHeight="8" orient="auto">
+              <path d="M1 5L6 1L12 5L6 9z" fill="var(--indigo)"/>
+            </marker>
+          </defs>
+
+          <!-- Links -->
+          <!-- Correlative / FieldGn / Composed inherit MatcherBase -->
+          <path d="M475 215 L475 182 L365 182 L365 152" fill="none" stroke="var(--accent)" stroke-width="1.5" marker-end="url(#uml-inh)"/>
+          <path d="M475 305 L280 305 L280 182 L365 182 L365 152" fill="none" stroke="var(--accent)" stroke-width="1.5" marker-end="url(#uml-inh)"/>
+          <!-- Dependencies to MapField / Pose2 -->
+          <path d="M225 90 L265 90" fill="none" stroke="var(--ink-3)" stroke-dasharray="4 3" stroke-width="1.4" marker-end="url(#uml-dep)"/>
+          <path d="M195 270 L240 270 L240 125 L265 125" fill="none" stroke="var(--ink-3)" stroke-dasharray="4 3" stroke-width="1.4" marker-end="url(#uml-dep)"/>
+          <!-- LocalizerCore uses MatcherBase & GlobalAndPF -->
+          <path d="M480 96 L565 112" fill="none" stroke="var(--ink-3)" stroke-dasharray="4 3" stroke-width="1.5" marker-end="url(#uml-dep)"/>
+          <path d="M775 245 L720 198" fill="none" stroke="var(--ink-3)" stroke-dasharray="4 3" stroke-width="1.4" marker-end="url(#uml-dep)"/>
+          <!-- LocalizerNode owns unique_ptr<LocalizerCore> and shared_ptr<MapField> -->
+          <path d="M845 126 L790 126" fill="none" stroke="var(--indigo)" stroke-width="1.7" marker-start="url(#uml-comp)" marker-end="url(#uml-dep)"/>
+          <path d="M845 90 L790 50 L225 50" fill="none" stroke="var(--ink-3)" stroke-dasharray="4 3" stroke-width="1.3" marker-end="url(#uml-dep)"/>
+
+          <!-- Class Cards -->
+          <g class="uml-card" data-cls="Pose2">
+            <rect x="20" y="218" width="175" height="106" rx="14" fill="var(--bg-alt)" stroke="var(--hairline-strong)"/>
+            <text x="107" y="242" text-anchor="middle" font-size="13.5" font-weight="700" fill="var(--ink)">Pose2 &amp; Scan</text>
+            <line x1="34" y1="252" x2="181" y2="252" stroke="var(--hairline)"/>
+            <text x="34" y="272" font-size="11.5" font-family="var(--font-mono)" fill="var(--ink-2)">+ x, y, theta</text>
+            <text x="34" y="290" font-size="11.5" font-family="var(--font-mono)" fill="var(--ink-2)">+ operator* / inverse()</text>
+            <text x="34" y="308" font-size="11.5" font-family="var(--font-mono)" fill="var(--accent)">+ transform_scan()</text>
+          </g>
+
+          <g class="uml-card" data-cls="MapIO">
+            <rect x="20" y="34" width="205" height="92" rx="14" fill="var(--bg-alt)" stroke="var(--hairline-strong)"/>
+            <text x="122" y="58" text-anchor="middle" font-size="13.5" font-weight="700" fill="var(--ink)">MapIO &amp; OccupancyGrid</text>
+            <line x1="34" y1="68" x2="211" y2="68" stroke="var(--hairline)"/>
+            <text x="34" y="88" font-size="11.5" font-family="var(--font-mono)" fill="var(--ink-2)">+ load_map_yaml() [Y翻转]</text>
+            <text x="34" y="108" font-size="11.5" font-family="var(--font-mono)" fill="var(--ink-2)">+ worldToGridF() [-0.5]</text>
+          </g>
+
+          <g class="uml-card" data-cls="MapField">
+            <rect x="268" y="34" width="212" height="118" rx="14" fill="var(--bg-card)" stroke="var(--accent)" stroke-width="1.4"/>
+            <text x="374" y="58" text-anchor="middle" font-size="13.5" font-weight="700" fill="var(--ink)">MapField</text>
+            <line x1="282" y1="68" x2="466" y2="68" stroke="var(--hairline)"/>
+            <text x="282" y="88" font-size="11.5" font-family="var(--font-mono)" fill="var(--ink-2)">- shared_ptr&lt;const Grid&gt;</text>
+            <text x="282" y="106" font-size="11.5" font-family="var(--font-mono)" fill="var(--ink-2)">- sdf_cells_, like_, swmax_</text>
+            <text x="282" y="124" font-size="11.5" font-family="var(--font-mono)" fill="var(--accent)">+ build() · sdf(gx,gy,&amp;grad)</text>
+            <text x="282" y="141" font-size="11.5" font-family="var(--font-mono)" fill="var(--ink-3)">+ poolScore(lv, px, py)</text>
+          </g>
+
+          <g class="uml-card" data-cls="MatcherBase">
+            <rect x="268" y="215" width="208" height="114" rx="14" fill="var(--bg-alt)" stroke="var(--hairline-strong)"/>
+            <text x="372" y="239" text-anchor="middle" font-size="13.5" font-weight="700" fill="var(--ink)">Matcher (基类) &amp; 族</text>
+            <line x1="282" y1="249" x2="462" y2="249" stroke="var(--hairline)"/>
+            <text x="282" y="269" font-size="11.5" font-family="var(--font-mono)" fill="var(--ink-2)">+ match(field,prior,scan)=0</text>
+            <text x="282" y="287" font-size="11.5" font-family="var(--font-mono)" fill="var(--ink-2)">├ CorrelativeMatcher</text>
+            <text x="282" y="305" font-size="11.5" font-family="var(--font-mono)" fill="var(--ink-2)">├ IcpP2p / NdtMatcher</text>
+            <text x="282" y="321" font-size="11.5" font-family="var(--font-mono)" fill="var(--accent)">└ ComposedMatcher</text>
+          </g>
+
+          <g class="uml-card" data-cls="FieldGnMatcher">
+            <rect x="502" y="245" width="215" height="96" rx="14" fill="var(--accent-soft)" stroke="var(--accent)"/>
+            <text x="609" y="269" text-anchor="middle" font-size="13.5" font-weight="700" fill="var(--ink)">FieldGnMatcher</text>
+            <line x1="516" y1="279" x2="703" y2="279" stroke="var(--hairline)"/>
+            <text x="516" y="299" font-size="11.5" font-family="var(--font-mono)" fill="var(--ink-2)">+ Huber IRLS + trim_dist</text>
+            <text x="516" y="317" font-size="11.5" font-family="var(--font-mono)" fill="var(--ink-2)">+ best_pose 回滚 + 未阻尼协方差</text>
+          </g>
+
+          <g class="uml-card" data-cls="LocalizerCore">
+            <rect x="565" y="64" width="225" height="134" rx="16" fill="var(--bg-card)" stroke="var(--indigo)" stroke-width="1.6"/>
+            <text x="677" y="88" text-anchor="middle" font-size="14" font-weight="700" fill="var(--ink)">LocalizerCore (纯 C++)</text>
+            <line x1="579" y1="98" x2="776" y2="98" stroke="var(--hairline)"/>
+            <text x="579" y="118" font-size="11.5" font-family="var(--font-mono)" fill="var(--ink-2)">- Pose2 last_pose_; Cov4 P4_</text>
+            <text x="579" y="136" font-size="11.5" font-family="var(--font-mono)" fill="var(--ink-2)">- double gyro_bias_; hypotheses_</text>
+            <text x="579" y="154" font-size="11.5" font-family="var(--font-mono)" fill="var(--indigo)">+ on_odom() / on_imu_*()</text>
+            <text x="579" y="172" font-size="11.5" font-family="var(--font-mono)" fill="var(--indigo)">+ on_scan() / map_to_odom()</text>
+            <text x="579" y="188" font-size="11" fill="var(--ink-3)">GlobalFn 回调解耦 B&amp;B 搜索</text>
+          </g>
+
+          <g class="uml-card" data-cls="GlobalAndPF">
+            <rect x="752" y="245" width="318" height="96" rx="14" fill="var(--bg-alt)" stroke="var(--hairline-strong)"/>
+            <text x="911" y="269" text-anchor="middle" font-size="13.5" font-weight="700" fill="var(--ink)">global_correlative &amp; ParticleFilter</text>
+            <line x1="766" y1="279" x2="1056" y2="279" stroke="var(--hairline)"/>
+            <text x="766" y="299" font-size="11.5" font-family="var(--font-mono)" fill="var(--ink-2)">+ B&amp;B priority_queue + NMS Top-K</text>
+            <text x="766" y="317" font-size="11.5" font-family="var(--font-mono)" fill="var(--ink-2)">+ ParticleFilter (对照组 log-sum-exp)</text>
+          </g>
+
+          <g class="uml-card" data-cls="LocalizerNode">
+            <rect x="845" y="64" width="225" height="134" rx="16" fill="var(--bg-card)" stroke="var(--hairline-strong)" stroke-width="1.5"/>
+            <text x="957" y="88" text-anchor="middle" font-size="14" font-weight="700" fill="var(--ink)">LocalizerNode (ROS 2)</text>
+            <line x1="859" y1="98" x2="1056" y2="98" stroke="var(--hairline)"/>
+            <text x="859" y="118" font-size="11.5" font-family="var(--font-mono)" fill="var(--ink-2)">- mutex state_mtx_; atomic active_</text>
+            <text x="859" y="136" font-size="11.5" font-family="var(--font-mono)" fill="var(--ink-2)">- unique_ptr&lt;LocalizerCore&gt;</text>
+            <text x="859" y="154" font-size="11.5" font-family="var(--font-mono)" fill="var(--accent)">+ on_configure()..on_shutdown()</text>
+            <text x="859" y="172" font-size="11.5" font-family="var(--font-mono)" fill="var(--accent)">+ applyMap() · onScan() · publish()</text>
+            <text x="859" y="188" font-size="11" fill="var(--ink-3)">锁外构建 &amp; 快照发布 · TF2 3D 外参</text>
+          </g>
+        </svg>
+        <div id="wt-uml-detail" style="margin-top:14px;padding:16px 18px;background:var(--bg-alt);border-radius:14px;"></div>
+      </div>
+    </section>
+
+    <!-- 3. Collapsible Call Tree + Write-from-Scratch Function Workbench -->
+    <section class="wt-panel-gap">
+      <div style="display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:14px;margin-bottom:16px;">
+        <div>
+          <span class="eyebrow">03 · Call Chains &amp; Author Mindset</span>
+          <h2 style="margin:0;font-size:28px;">函数调用树 × 「从零手写思路」工作台</h2>
+        </div>
+        <div class="segmented" id="wt-chain-tabs">
+          <button type="button" class="active" data-chain="runtime">高频定位主链</button>
+          <button type="button" data-chain="startup">建图与热切图链</button>
+          <button type="button" data-chain="global">全局恢复链</button>
+        </div>
+      </div>
+
+      <div class="wt-split">
+        <div class="wt-tree-box">
+          <div style="font-size:12px;font-weight:700;color:var(--ink-3);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:10px;" id="wt-chain-title">函数调用链（点击展开/解读）</div>
+          <div id="wt-call-tree"></div>
+        </div>
+        <div class="wt-detail-box" id="wt-fn-detail"></div>
+      </div>
+    </section>
+
+    <!-- 4. Six-Step Build From Scratch Roadmap -->
+    <section>
+      <span class="eyebrow">04 · Build From Scratch</span>
+      <h2 style="margin:0 0 8px;font-size:28px;">照着这个顺序，从空白目录亲手写出一整套系统</h2>
+      <p style="color:var(--ink-3);font-size:15px;margin:0 0 20px;">
+        好工程不是一次性把 11,900 行全写完，而是严格按编译依赖和单元测试逐层点亮绿灯：
+      </p>
+      <div class="bento-3" id="wt-build-grid"></div>
+    </section>
+
+  </main>
+
+  <footer class="site-footer">
+    scan_localizer Interactive Code Walkthrough · Windows/WSL VS Code Ready
+  </footer>
+
+  <script>
+    window.addEventListener("sloc:ready", function () {
+      const W = window.SLOC_WALKTHROUGH;
+      if (!W) return;
+
+      let activeFlow = "scan_loop";
+      let activeFlowIdx = 0;
+      let activeClassKey = "LocalizerCore";
+      let activeChain = "runtime";
+      let activeFnKey = "core_on_scan";
+
+      function esc(s) {
+        return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      }
+
+      // ---- 1. Execution Flowchart ----
+      function renderFlow() {
+        const flow = W.FLOWS[activeFlow];
+        document.getElementById("wt-flow-desc").textContent = flow.desc;
+        const strip = document.getElementById("wt-flow-strip");
+        strip.innerHTML = flow.steps
+          .map((st, idx) => {
+            const cls = idx === activeFlowIdx ? " active" : "";
+            const arrow = idx < flow.steps.length - 1 ? `<div class="wt-flow-arrow">→</div>` : "";
+            return `<button type="button" class="wt-flow-node${cls}" data-fidx="${idx}">
+              <div class="wt-flow-step">STEP ${idx + 1}</div>
+              <div class="wt-flow-title">${esc(st.title.replace(/^\d+\.\s*/, ""))}</div>
+              <div class="wt-flow-sub">${esc(st.sub)}</div>
+            </button>${arrow}`;
+          })
+          .join("");
+
+        const cur = flow.steps[activeFlowIdx];
+        const fn = W.FUNCTIONS[cur.fnKey];
+        const cap = document.getElementById("wt-flow-caption");
+        cap.innerHTML = `
+          <div>
+            <strong style="color:var(--ink);">${esc(cur.title)}：</strong>${esc(cur.desc)}
+          </div>
+          <div style="display:flex;gap:8px;flex-shrink:0;">
+            <button type="button" class="btn btn-secondary btn-sm" data-file="${fn.file}" data-lines="${fn.lines}" data-label="${fn.title}">抽屉看源码</button>
+            <button type="button" class="btn btn-primary btn-sm" id="wt-flow-vsc">VS Code 打开</button>
+          </div>
+        `;
+        document.getElementById("wt-flow-vsc").onclick = () => {
+          const line = parseInt(String(fn.lines).split(/[-–]/)[0], 10) || 1;
+          window.SlocApp.openInVscode(fn.file, line);
+        };
+
+        strip.querySelectorAll(".wt-flow-node").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            activeFlowIdx = parseInt(btn.dataset.fidx, 10);
+            activeFnKey = flow.steps[activeFlowIdx].fnKey;
+            renderFlow();
+            renderFnDetail();
+          });
+        });
+      }
+
+      document.querySelectorAll("#wt-flow-tabs button").forEach((b) => {
+        b.addEventListener("click", () => {
+          document.querySelectorAll("#wt-flow-tabs button").forEach((x) => x.classList.remove("active"));
+          b.classList.add("active");
+          activeFlow = b.dataset.flow;
+          activeFlowIdx = 0;
+          activeFnKey = W.FLOWS[activeFlow].steps[0].fnKey;
+          renderFlow();
+          renderFnDetail();
+        });
+      });
+      document.getElementById("wt-flow-prev").addEventListener("click", () => {
+        const n = W.FLOWS[activeFlow].steps.length;
+        activeFlowIdx = (activeFlowIdx - 1 + n) % n;
+        activeFnKey = W.FLOWS[activeFlow].steps[activeFlowIdx].fnKey;
+        renderFlow();
+        renderFnDetail();
+      });
+      document.getElementById("wt-flow-next").addEventListener("click", () => {
+        const n = W.FLOWS[activeFlow].steps.length;
+        activeFlowIdx = (activeFlowIdx + 1) % n;
+        activeFnKey = W.FLOWS[activeFlow].steps[activeFlowIdx].fnKey;
+        renderFlow();
+        renderFnDetail();
+      });
+
+      // ---- 2. UML Class Diagram ----
+      function renderUmlDetail() {
+        const c = W.CLASSES[activeClassKey];
+        if (!c) return;
+        document.querySelectorAll("#wt-uml-svg .uml-card").forEach((el) => {
+          el.style.opacity = el.dataset.cls === activeClassKey ? "1" : "0.72";
+        });
+        const host = document.getElementById("wt-uml-detail");
+        const startLine = parseInt(String(c.lines).split(/[-–]/)[0], 10) || 1;
+        host.innerHTML = `
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;">
+            <div>
+              <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                <span class="pill" style="color:var(--accent);">${esc(c.layer)}</span>
+                <span class="pill">${esc(c.ownership)}</span>
+                <a class="pill" href="chapters/${c.chapter}.html">精讲：${c.chapter.toUpperCase()} →</a>
+              </div>
+              <h3 style="margin:8px 0 6px;font-size:19px;">${esc(c.name)} <span style="font-family:var(--font-mono);font-size:13px;color:var(--ink-3);">(${esc(c.file)} : L${esc(c.lines)})</span></h3>
+              <p style="margin:0 0 10px;font-size:14.5px;color:var(--ink-2);"><strong>核心设计意图：</strong>${esc(c.intent)}</p>
+              <ul style="margin:0;padding-left:18px;font-size:13.5px;color:var(--ink-2);">
+                ${c.members.map((m) => `<li><code>${esc(m)}</code></li>`).join("")}
+              </ul>
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+              <button type="button" class="btn btn-secondary btn-sm" data-file="${c.file}" data-lines="${c.lines}" data-label="${c.name}">抽屉读类声明</button>
+              <button type="button" class="btn btn-primary btn-sm" id="wt-uml-vsc">VS Code 打开</button>
+            </div>
+          </div>
+        `;
+        document.getElementById("wt-uml-vsc").onclick = () => window.SlocApp.openInVscode(c.file, startLine);
+      }
+
+      document.querySelectorAll("#wt-uml-svg .uml-card").forEach((el) => {
+        el.addEventListener("click", () => {
+          activeClassKey = el.dataset.cls;
+          const clsObj = W.CLASSES[activeClassKey];
+          if (clsObj && clsObj.fnKey) activeFnKey = clsObj.fnKey;
+          renderUmlDetail();
+          renderFnDetail();
+        });
+      });
+
+      // ---- 3. Collapsible Call Chain + Function Deep Guide ----
+      function renderTreeNode(node) {
+        const hasKids = node.children && node.children.length > 0;
+        const active = node.fnKey === activeFnKey ? " active" : "";
+        return `
+          <div class="wt-tree-branch">
+            <button type="button" class="wt-tree-node${active}" data-fnkey="${node.fnKey}">
+              <span class="wt-toggle">${hasKids ? "▾" : "·"}</span>
+              <div>
+                <div class="wt-tree-fn">${esc(node.fn)}</div>
+                <div class="wt-tree-note">${esc(node.note)}</div>
+              </div>
+            </button>
+            ${hasKids ? `<div class="wt-tree-children">${node.children.map(renderTreeNode).join("")}</div>` : ""}
+          </div>
+        `;
+      }
+
+      function renderCallTree() {
+        const chain = W.CALL_CHAINS[activeChain];
+        document.getElementById("wt-chain-title").textContent = chain.name + "（点击节点切换右侧剖析）";
+        const host = document.getElementById("wt-call-tree");
+        host.innerHTML = renderTreeNode(chain.root);
+        host.querySelectorAll(".wt-tree-node").forEach((btn) => {
+          btn.addEventListener("click", (e) => {
+            if (e.target.classList.contains("wt-toggle")) {
+              const kids = btn.parentElement.querySelector(".wt-tree-children");
+              if (kids) {
+                const hidden = kids.style.display === "none";
+                kids.style.display = hidden ? "" : "none";
+                e.target.textContent = hidden ? "▾" : "▸";
+                return;
+              }
+            }
+            activeFnKey = btn.dataset.fnkey;
+            renderCallTree();
+            renderFnDetail();
+          });
+        });
+      }
+
+      function renderFnDetail() {
+        const fn = W.FUNCTIONS[activeFnKey];
+        if (!fn) return;
+        const host = document.getElementById("wt-fn-detail");
+        const startLine = parseInt(String(fn.lines).split(/[-–]/)[0], 10) || 1;
+        host.innerHTML = `
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;margin-bottom:14px;">
+            <div>
+              <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                <span class="pill" style="color:var(--accent);">手写思路剖析</span>
+                <span class="pill">${esc(fn.file)} : L${esc(fn.lines)}</span>
+                <a class="pill" href="chapters/${fn.chapter}.html">配套课程：${fn.chapter.toUpperCase()} →</a>
+              </div>
+              <h3 style="margin:8px 0 4px;font-size:22px;">${esc(fn.title)}</h3>
+              <div style="font-size:14px;color:var(--ink-3);">${esc(fn.contract)}</div>
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+              <button type="button" class="btn btn-secondary btn-sm" data-file="${fn.file}" data-lines="${fn.lines}" data-label="${fn.title}">源码抽屉</button>
+              <button type="button" class="btn btn-primary btn-sm" id="wt-fn-vsc">VS Code 打开</button>
+            </div>
+          </div>
+
+          <h4 style="margin:16px 0 6px;font-size:15px;">从空白文件开始编写的思维步骤</h4>
+          <ol class="wt-step-list">
+            ${fn.thoughtSteps.map((s, i) => `<li><span class="wt-step-idx">0${i + 1}</span><span>${esc(s)}</span></li>`).join("")}
+          </ol>
+
+          <h4 style="margin:18px 0 6px;font-size:15px;">手写骨架（先搭骨架再填细节）</h4>
+          <div class="code-card" style="margin:8px 0 18px;">
+            <div class="code-head"><span class="code-file">C++ 最小核心骨架 · ${esc(fn.file)}</span><button type="button" class="code-btn code-copy-btn">复制</button></div>
+            <pre><code class="language-cpp">${esc(fn.skeleton)}</code></pre>
+          </div>
+
+          <div class="bento-2" style="gap:14px;">
+            <div class="callout callout-syntax" style="margin:0;">
+              <div class="callout-head">关键设计权衡（为何这么写）</div>
+              <ul style="margin:0;padding-left:18px;font-size:13.5px;">
+                ${fn.tradeoffs.map((t) => `<li>${esc(t)}</li>`).join("")}
+              </ul>
+            </div>
+            <div class="callout callout-pitfall" style="margin:0;">
+              <div class="callout-head">手写自查清单（避坑核验）</div>
+              <ul style="margin:0;padding-left:18px;font-size:13.5px;">
+                ${fn.checklist.map((c) => `<li>${esc(c)}</li>`).join("")}
+              </ul>
+            </div>
+          </div>
+        `;
+        document.getElementById("wt-fn-vsc").onclick = () => window.SlocApp.openInVscode(fn.file, startLine);
+        if (window.hljs) host.querySelectorAll("pre code").forEach((el) => window.hljs.highlightElement(el));
+        host.querySelectorAll(".code-copy-btn").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            navigator.clipboard?.writeText(fn.skeleton).catch(() => {});
+            btn.textContent = "已复制";
+            setTimeout(() => { btn.textContent = "复制"; }, 1200);
+          });
+        });
+      }
+
+      document.querySelectorAll("#wt-chain-tabs button").forEach((b) => {
+        b.addEventListener("click", () => {
+          document.querySelectorAll("#wt-chain-tabs button").forEach((x) => x.classList.remove("active"));
+          b.classList.add("active");
+          activeChain = b.dataset.chain;
+          activeFnKey = W.CALL_CHAINS[activeChain].root.fnKey;
+          renderCallTree();
+          renderFnDetail();
+        });
+      });
+
+      // ---- 4. 6-Step Scratch Roadmap ----
+      document.getElementById("wt-build-grid").innerHTML = W.BUILD_STEPS.map((st) => `
+        <div class="card" style="display:flex;flex-direction:column;justify-content:space-between;gap:12px;">
+          <div>
+            <div class="eyebrow">PHASE ${st.step}</div>
+            <h3 style="margin:0 0 8px;font-size:18px;">${esc(st.title)}</h3>
+            <p style="font-size:14px;color:var(--ink-2);margin:0 0 10px;">${esc(st.why)}</p>
+            <div style="display:flex;flex-wrap:wrap;gap:6px;">
+              ${st.files.map((f) => `<button type="button" class="src-jump" style="font-size:11px;padding:4px 9px;" data-file="${f}" data-lines="1-45">${esc(f.split("/").pop())}</button>`).join("")}
+            </div>
+          </div>
+          <div style="font-family:var(--font-mono);font-size:11.5px;color:var(--green);background:var(--green-soft);padding:6px 10px;border-radius:8px;">
+            验收：${esc(st.test)}
+          </div>
+        </div>
+      `).join("");
+
+      renderFlow();
+      renderUmlDetail();
+      renderCallTree();
+      renderFnDetail();
+    });
+  </script>
+</body>
+</html>

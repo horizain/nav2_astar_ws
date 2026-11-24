@@ -6,6 +6,56 @@
   const rootDepth = window.TUTORIAL_ROOT || "."; // "." for top-level, ".." for chapters/
   const pageId = window.PAGE_ID || "home";
   const REPO_ABS = "/home/horizain/ros2_jazzy/nav2_astar_ws/src/scan_localizer/";
+  const VSCODE_MODE_KEY = "sloc_vscode_mode";
+  let wslDistro = "Ubuntu-24.04";
+  let hasCodeCli = false;
+
+  async function detectEnv() {
+    if (window.location.protocol.startsWith("http")) {
+      try {
+        const resp = await fetch("/api/env");
+        if (resp.ok) {
+          const info = await resp.json();
+          if (info.wsl_distro) wslDistro = info.wsl_distro;
+          hasCodeCli = Boolean(info.has_code_cli);
+          syncDrawerVscodeModeUI();
+        }
+      } catch (_) {}
+    }
+  }
+
+  function getVscodeMode() {
+    return localStorage.getItem(VSCODE_MODE_KEY) || "wsl-remote";
+  }
+
+  function buildVscodeUrl(fileRel, startLine, modeOverride) {
+    const line = Math.max(1, parseInt(startLine, 10) || 1);
+    const cleanRel = String(fileRel || "").replace(/^\/+/, "");
+    const absLinux = REPO_ABS + cleanRel;
+    const mode = modeOverride || getVscodeMode();
+    if (mode === "wsl-unc") {
+      return `vscode://file///wsl.localhost/${wslDistro}${absLinux}:${line}:1`;
+    }
+    return `vscode://vscode-remote/wsl+${wslDistro}${absLinux}:${line}:1`;
+  }
+
+  async function openInVscode(fileRel, startLine) {
+    const line = Math.max(1, parseInt(startLine, 10) || 1);
+    const cleanRel = String(fileRel || "").replace(/^\/+/, "");
+    const mode = getVscodeMode();
+    if (mode === "wsl-cli" && window.location.protocol.startsWith("http")) {
+      try {
+        const resp = await fetch("/api/open-vscode", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ file: cleanRel, line }),
+        });
+        if (resp.ok) return true;
+      } catch (_) {}
+    }
+    window.location.href = buildVscodeUrl(cleanRel, line, mode);
+    return true;
+  }
 
   const THEME_KEY = "sloc_tutorial_theme";
   function applyTheme(theme) {
@@ -56,6 +106,7 @@
             <button type="button" class="nav-link${pageId.startsWith("ch") ? " active" : ""}" id="ch-menu-btn">课程目录 ▾</button>
             <div class="chapter-dropdown" id="ch-dropdown">${ddHtml}</div>
           </div>
+          <a class="nav-link${pageId === "walkthrough" ? " active" : ""}" href="${rUrl("walkthrough.html")}">思路导读</a>
           <a class="nav-link${pageId === "code-index" ? " active" : ""}" href="${rUrl("code-index.html")}">代码索引</a>
           <a class="nav-link${pageId === "ch10" ? " active" : ""}" href="${rUrl("chapters/ch10.html")}">语法手册</a>
         </nav>
@@ -155,6 +206,24 @@
   // ---------- Live Source Drawer ----------
   let drawerBackdrop = null;
   let drawerEl = null;
+  let currentDrawerFile = "";
+  let currentDrawerLine = 1;
+
+  function syncDrawerVscodeModeUI() {
+    const sel = document.getElementById("drawer-vscode-mode");
+    const btn = document.getElementById("drawer-vscode-btn");
+    if (sel) {
+      sel.value = getVscodeMode();
+      const cliOpt = sel.querySelector('option[value="wsl-cli"]');
+      if (cliOpt) {
+        cliOpt.disabled = !(hasCodeCli && window.location.protocol.startsWith("http"));
+        cliOpt.textContent = cliOpt.disabled ? "CLI 直开 (需 serve.sh)" : "CLI 直开 (免弹窗)";
+      }
+    }
+    if (btn && currentDrawerFile) {
+      btn.href = buildVscodeUrl(currentDrawerFile, currentDrawerLine);
+    }
+  }
 
   function ensureDrawer() {
     if (drawerEl) return;
@@ -170,6 +239,11 @@
           <div class="drawer-sub" id="drawer-file-sub"></div>
         </div>
         <div class="code-actions">
+          <select id="drawer-vscode-mode" class="code-select" title="选择 Windows 侧 VS Code 打开方式">
+            <option value="wsl-remote">WSL Remote</option>
+            <option value="wsl-unc">WSL UNC 路径</option>
+            <option value="wsl-cli">CLI 直开 (免弹窗)</option>
+          </select>
           <button type="button" class="code-btn" id="drawer-copy-btn">复制路径</button>
           <a class="code-btn" id="drawer-vscode-btn" href="#">VS Code 打开</a>
           <button type="button" class="code-btn" id="drawer-close-btn">关闭</button>
@@ -179,6 +253,20 @@
     `;
     document.body.appendChild(drawerBackdrop);
     document.body.appendChild(drawerEl);
+
+    const modeSel = document.getElementById("drawer-vscode-mode");
+    modeSel.addEventListener("change", () => {
+      localStorage.setItem(VSCODE_MODE_KEY, modeSel.value);
+      syncDrawerVscodeModeUI();
+    });
+    const vscBtn = document.getElementById("drawer-vscode-btn");
+    vscBtn.addEventListener("click", (e) => {
+      if (getVscodeMode() === "wsl-cli" && currentDrawerFile) {
+        e.preventDefault();
+        openInVscode(currentDrawerFile, currentDrawerLine);
+      }
+    });
+    syncDrawerVscodeModeUI();
 
     const close = () => {
       drawerBackdrop.classList.remove("open");
@@ -211,9 +299,11 @@
     ensureDrawer();
     const [startLine, endLine] = parseLineRange(linesRange);
     const absPath = REPO_ABS + fileRel;
+    currentDrawerFile = fileRel;
+    currentDrawerLine = startLine;
     document.getElementById("drawer-file-title").textContent = `src/scan_localizer/${fileRel} : L${startLine}-${endLine}`;
     document.getElementById("drawer-file-sub").textContent = label || "实时源码阅读抽屉";
-    document.getElementById("drawer-vscode-btn").href = `vscode://file/${absPath}:${startLine}`;
+    syncDrawerVscodeModeUI();
     const copyBtn = document.getElementById("drawer-copy-btn");
     copyBtn.onclick = () => {
       navigator.clipboard?.writeText(`src/scan_localizer/${fileRel}:${startLine}-${endLine}`).catch(() => {});
@@ -391,12 +481,15 @@
     initCodeBlocks();
     initKatex();
     initLightbox();
+    detectEnv();
     window.dispatchEvent(new CustomEvent("sloc:ready"));
   });
 
   window.SlocApp = {
     openSourceDrawer,
     openSearch,
+    buildVscodeUrl,
+    openInVscode,
     rUrl,
     isDark: () => document.documentElement.getAttribute("data-theme") === "dark",
     palette: () => {
