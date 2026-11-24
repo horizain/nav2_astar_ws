@@ -11,6 +11,7 @@ const SCREENSHOT_DIR = "/home/horizain/.gemini/antigravity-cli/brain/15f8b0b6-ed
 
 const PAGES = [
   { rel: "index.html", shot: "00_index.png" },
+  { rel: "walkthrough.html", shot: "02_walkthrough.png", testWalkthrough: true },
   { rel: "code-index.html", shot: "01_code_index.png", testDrawer: true },
   { rel: "chapters/ch01.html" },
   { rel: "chapters/ch02.html", shot: "02_ch02.png" },
@@ -106,6 +107,10 @@ async function main() {
   let cdp = null;
   try {
     await waitForHttp(`http://127.0.0.1:${HTTP_PORT}/docs/scan_localizer_tutorial/index.html`);
+    const envResp = await waitForHttp(`http://127.0.0.1:${HTTP_PORT}/api/env`);
+    const envJson = await envResp.json();
+    assert.ok(envJson.wsl_distro && envJson.wsl_distro.length > 0, "Missing wsl_distro from /api/env");
+    console.log(`ENV /api/env -> wsl_distro=${envJson.wsl_distro}, has_code_cli=${envJson.has_code_cli}`);
     const listResp = await waitForHttp(`http://127.0.0.1:${CDP_PORT}/json/list`);
     const targets = await listResp.json();
     const pageTarget = targets.find((t) => t.type === "page") || targets[0];
@@ -173,12 +178,32 @@ async function main() {
           const open = Boolean(d && d.classList.contains('open'));
           const lines = d ? d.querySelectorAll('.src-line').length : 0;
           const hl = d ? d.querySelectorAll('.src-line.hl').length : 0;
+          const vscHref = document.getElementById('drawer-vscode-btn')?.getAttribute('href') || '';
           const close = document.getElementById('drawer-close-btn');
           if (close) close.click();
-          return { open, lines, hl };
+          return { open, lines, hl, vscHref };
         })()`);
-        drawerOk = drawerState.open && drawerState.lines > 10 && drawerState.hl >= 1;
+        const validVsc = drawerState.vscHref.startsWith('vscode://vscode-remote/wsl+');
+        drawerOk = drawerState.open && drawerState.lines > 10 && drawerState.hl >= 1 && validVsc;
         if (!drawerOk) failures.push(`${pg.rel}: drawer failed (${JSON.stringify(drawerState)})`);
+      }
+
+      if (pg.testWalkthrough) {
+        const wtCheck = await cdp.evalJS(`(() => {
+          const umlCards = document.querySelectorAll('#wt-uml-svg .uml-card').length;
+          const flowNodes = document.querySelectorAll('#wt-flow-strip .wt-flow-node').length;
+          const beforeTitle = document.querySelector('#wt-fn-detail h3')?.textContent || '';
+          const secondFlow = document.querySelectorAll('#wt-flow-strip .wt-flow-node')[4];
+          if (secondFlow) secondFlow.click();
+          const afterFlowTitle = document.querySelector('#wt-fn-detail h3')?.textContent || '';
+          const umlCard = document.querySelector('#wt-uml-svg .uml-card[data-cls="MapField"]');
+          if (umlCard) { umlCard.dispatchEvent(new MouseEvent('click', { bubbles: true })); }
+          const afterUmlTitle = document.querySelector('#wt-fn-detail h3')?.textContent || '';
+          return { umlCards, flowNodes, beforeTitle, afterFlowTitle, afterUmlTitle };
+        })()`);
+        if (wtCheck.umlCards < 8 || wtCheck.flowNodes < 7 || wtCheck.beforeTitle === wtCheck.afterFlowTitle || wtCheck.afterFlowTitle === wtCheck.afterUmlTitle) {
+          failures.push(`${pg.rel}: walkthrough interactive switch failed (${JSON.stringify(wtCheck)})`);
+        }
       }
 
       if (pg.shot) {

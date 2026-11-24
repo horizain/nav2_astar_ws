@@ -71,7 +71,17 @@ def main() -> int:
             refs_checked += 1
             check_range(f"manifest:{rel}", rel, rm.group(1), errors)
 
-    # 2. Check all data-file + data-lines references across HTML pages
+    # 2. Check all file + lines references in walkthrough-data.js
+    wt_js = (TUTORIAL_DIR / "js" / "walkthrough-data.js").read_text(encoding="utf-8")
+    for m in re.finditer(r'file:\s*"([^"]+)",\s*lines:\s*"([^"]+)"', wt_js):
+        refs_checked += 1
+        check_range("walkthrough-data.js", m.group(1), m.group(2), errors)
+    for m in re.finditer(r'files:\s*\[([^\]]+)\]', wt_js):
+        for fm in re.finditer(r'"([^"]+)"', m.group(1)):
+            refs_checked += 1
+            check_range("walkthrough-data.js:BUILD_STEPS", fm.group(1), "1-1", errors)
+
+    # 3. Check all data-file + data-lines references across HTML pages
     for html in sorted(list(TUTORIAL_DIR.glob("*.html")) + list((TUTORIAL_DIR / "chapters").glob("*.html"))):
         text = html.read_text(encoding="utf-8")
         for m in re.finditer(r'data-file="([^"]+)"[^>]*data-lines="([^"]+)"', text):

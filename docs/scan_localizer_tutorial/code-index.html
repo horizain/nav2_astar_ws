@@ -35,7 +35,15 @@
   </header>
 
   <main class="container" style="padding: 40px 24px 80px;">
-    <!-- 3 Reading Routes -->
+      <div style="margin-bottom:28px;padding:16px 20px;border-radius:16px;background:var(--accent-soft);border:1px solid rgba(0,113,227,0.22);display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;">
+        <div>
+          <strong style="color:var(--ink);">想看执行流程图、UML 类图、函数调用链和「从零手写思路」？</strong>
+          <div style="font-size:13.5px;color:var(--ink-2);margin-top:2px;">这里保留全部 33 个文件全景索引；若想按调用链路学习编写思路，可切换到新上线的架构思路工作台。</div>
+        </div>
+        <a class="btn btn-primary btn-sm" href="walkthrough.html">打开流程图 / 类图 / 手写思路 →</a>
+      </div>
+
+      <!-- 3 Reading Routes -->
     <section style="margin-bottom: 42px;">
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:16px;">
         <div>
@@ -125,7 +133,10 @@
                 </div>
                 <div style="font-size:14px;color:var(--ink-2);margin-top:6px;">${f.role}</div>
               </div>
-              <button type="button" class="btn btn-secondary btn-sm" data-file="${f.path}" data-lines="1-${Math.min(120, f.lines)}" data-label="${f.path}">打开源码抽屉</button>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                <button type="button" class="btn btn-secondary btn-sm" data-file="${f.path}" data-lines="1-${Math.min(120, f.lines)}" data-label="${f.path}">打开源码抽屉</button>
+                <button type="button" class="btn btn-primary btn-sm code-vsc-btn" data-vsc-file="${f.path}">VS Code 打开</button>
+              </div>
             </div>
             <div class="src-bar" style="margin:12px 0 0;">
               ${f.symbols.map((s) => `
@@ -137,6 +148,9 @@
             </div>
           </div>
         `).join("");
+        host.querySelectorAll(".code-vsc-btn").forEach((btn) => {
+          btn.addEventListener("click", () => window.SlocApp.openInVscode(btn.dataset.vscFile, 1));
+        });
       }
 
       document.querySelectorAll("#route-tabs button").forEach((b) => {

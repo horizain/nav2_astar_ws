@@ -1,22 +1,27 @@
 #!/usr/bin/env python3
 """Read-only Apple-styled tutorial static server for scan_localizer.
 
-Serves only whitelisted directories under the workspace root so that:
-1) Tutorial pages share exact relative URLs between file:// and http://;
-2) The live code drawer can fetch real source files under src/scan_localizer/.
+Serves only whitelisted directories under the workspace root and exposes
+two lightweight local API endpoints for WSL -> Windows VS Code integration:
+1) GET  /api/env         -> WSL distro name, workspace root, code CLI presence
+2) POST /api/open-vscode -> Launch Windows VS Code directly via WSL `code` CLI
 """
 
 import argparse
 import functools
 import http.server
+import json
 import mimetypes
 import os
 import posixpath
+import shutil
 import socketserver
+import subprocess
 import urllib.parse
 from pathlib import Path
 
 WORKSPACE_ROOT = Path(__file__).resolve().parents[2]
+PKG_ROOT = (WORKSPACE_ROOT / "src" / "scan_localizer").resolve()
 ALLOWED_PREFIXES = (
     "/docs/",
     "/slam-mpc-academy/assets/vendor/",
@@ -52,6 +57,14 @@ class TutorialHandler(http.server.SimpleHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         super().end_headers()
 
+    def send_json(self, status: int, payload: dict):
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def guess_type(self, path):
         ext = os.path.splitext(path)[1].lower()
         if ext in EXTRA_MIMES:
@@ -66,6 +79,13 @@ class TutorialHandler(http.server.SimpleHTTPRequestHandler):
             self.send_response(204)
             self.end_headers()
             return
+        if clean_path == "/api/env":
+            self.send_json(200, {
+                "wsl_distro": os.environ.get("WSL_DISTRO_NAME", "Ubuntu-24.04"),
+                "workspace_root": str(WORKSPACE_ROOT),
+                "has_code_cli": bool(shutil.which("code")),
+            })
+            return
         if clean_path in ("/", "/index.html"):
             self.send_response(302)
             self.send_header("Location", "/docs/scan_localizer_tutorial/index.html")
@@ -75,6 +95,63 @@ class TutorialHandler(http.server.SimpleHTTPRequestHandler):
             self.send_error(403, "Forbidden: outside whitelisted tutorial paths")
             return
         super().do_GET()
+
+    def do_POST(self):
+        parsed = urllib.parse.urlsplit(self.path)
+        clean_path = posixpath.normpath(urllib.parse.unquote(parsed.path))
+        if clean_path != "/api/open-vscode":
+            self.send_json(404, {"ok": False, "error": "Unknown API endpoint"})
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            self.send_json(400, {"ok": False, "error": "Invalid Content-Length"})
+            return
+        if length <= 0 or length > 8192:
+            self.send_json(400, {"ok": False, "error": "Invalid payload size"})
+            return
+        try:
+            data = json.loads(self.rfile.read(length).decode("utf-8"))
+        except Exception:
+            self.send_json(400, {"ok": False, "error": "Malformed JSON"})
+            return
+
+        rel = str(data.get("file", "")).lstrip("/")
+        try:
+            line = int(data.get("line", 1))
+        except (TypeError, ValueError):
+            line = 1
+        if line < 1:
+            line = 1
+
+        target = (PKG_ROOT / rel).resolve()
+        try:
+            target.relative_to(PKG_ROOT)
+        except ValueError:
+            self.send_json(403, {"ok": False, "error": "Forbidden path outside src/scan_localizer"})
+            return
+        if not target.is_file():
+            self.send_json(404, {"ok": False, "error": f"File not found: {rel}"})
+            return
+
+        code_bin = shutil.which("code")
+        if not code_bin:
+            self.send_json(503, {"ok": False, "error": "VS Code CLI 'code' not found in PATH"})
+            return
+
+        loc = f"{target}:{line}:1"
+        try:
+            subprocess.Popen(
+                [code_bin, "--reuse-window", "--goto", loc],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except OSError as exc:
+            self.send_json(500, {"ok": False, "error": str(exc)})
+            return
+
+        self.send_json(200, {"ok": True, "target": loc})
 
     def log_message(self, format, *args):  # noqa: A002
         return
