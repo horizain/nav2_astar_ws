@@ -8,6 +8,9 @@
 - `nav2_astar_planner`：把纯 C++ A* 栅格规划器封装成 `nav2_core::GlobalPlanner` 插件；
 - `nav2_controller_lab`：在同一套仿真里实现并比较 PID / Pure Pursuit / Stanley /
   DWB-lite / MPPI-lite / MPC-lite 六种 `nav2_core::Controller` 插件。
+- `scan_localizer`：纯 C++20 + Eigen 的已知地图 2D 激光定位核心，配套 ROS 2 Jazzy
+  Lifecycle 节点、仿真与 E1–E10 基准；[交互式工程课](docs/30_scan_localizer教程导览.md)
+  覆盖从 SE(2)/EDT/Field-GN/4D EKF 到生产节点与公平实验的完整重建路径。
 
 > 代码不是重点，**“怎么从算法走到工程插件”**才是。
 > 如果你没有算法基础，或没写过 ROS 2 / Nav2 插件，从

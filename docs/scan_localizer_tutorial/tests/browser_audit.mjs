@@ -13,16 +13,16 @@ const PAGES = [
   { rel: "index.html", shot: "00_index.png" },
   { rel: "walkthrough.html", shot: "02_walkthrough.png", testWalkthrough: true },
   { rel: "code-index.html", shot: "01_code_index.png", testDrawer: true },
-  { rel: "chapters/ch01.html" },
+  { rel: "chapters/ch01.html", testSe2HandsOn: true },
   { rel: "chapters/ch02.html", shot: "02_ch02.png", testEdtHandsOn: true },
-  { rel: "chapters/ch03.html" },
+  { rel: "chapters/ch03.html", testCorrelativeHandsOn: true },
   { rel: "chapters/ch04.html", shot: "04_ch04.png", testDrawer: true, testHandsOn: true },
-  { rel: "chapters/ch05.html" },
-  { rel: "chapters/ch06.html" },
+  { rel: "chapters/ch05.html", testCovarianceHandsOn: true },
+  { rel: "chapters/ch06.html", testGlobalHandsOn: true },
   { rel: "chapters/ch07.html", shot: "07_ch07.png", testDrawer: true, testEfkHandsOn: true },
-  { rel: "chapters/ch08.html", shot: "08_ch08.png" },
-  { rel: "chapters/ch09.html", shot: "09_ch09.png" },
-  { rel: "chapters/ch10.html" },
+  { rel: "chapters/ch08.html", shot: "08_ch08.png", testNodeHandsOn: true },
+  { rel: "chapters/ch09.html", shot: "09_ch09.png", testBenchmarkHandsOn: true },
+  { rel: "chapters/ch10.html", testSyntaxHandsOn: true },
 ];
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -186,6 +186,200 @@ async function main() {
         const validVsc = drawerState.vscHref.startsWith('vscode://vscode-remote/wsl+');
         drawerOk = drawerState.open && drawerState.lines > 10 && drawerState.hl >= 1 && validVsc;
         if (!drawerOk) failures.push(`${pg.rel}: drawer failed (${JSON.stringify(drawerState)})`);
+      }
+
+      if (pg.testSe2HandsOn) {
+        const se2Check = await cdp.evalJS(`(() => {
+          const before = document.getElementById('ch01-stage-title').textContent;
+          document.getElementById('ch01-stage-next').click();
+          const after = document.getElementById('ch01-stage-title').textContent;
+          const ex1 = document.getElementById('ch01-ex1');
+          ex1.value = '1'; ex1.closest('form').requestSubmit();
+          const ex2 = document.getElementById('ch01-ex2');
+          ex2.value = '-1'; ex2.closest('form').requestSubmit();
+          const ex3 = document.getElementById('ch01-ex3');
+          ex3.value = 'map_to_base * odom_to_base.inverse()'; ex3.closest('form').requestSubmit();
+          return {
+            numericVars: document.querySelectorAll('#ch01-numeric-vars .hands-on-var').length,
+            stageChanged: before !== after,
+            ex1Ok: ex1.closest('form').querySelector('.exercise-feedback').classList.contains('ok'),
+            ex2Ok: ex2.closest('form').querySelector('.exercise-feedback').classList.contains('ok'),
+            ex3Ok: ex3.closest('form').querySelector('.exercise-feedback').classList.contains('ok'),
+          };
+        })()`);
+        if (se2Check.numericVars < 10 || !se2Check.stageChanged || !se2Check.ex1Ok || !se2Check.ex2Ok || !se2Check.ex3Ok) {
+          failures.push(`${pg.rel}: SE2 hands-on interaction failed (${JSON.stringify(se2Check)})`);
+        }
+      }
+
+      if (pg.testCorrelativeHandsOn) {
+        const corrCheck = await cdp.evalJS(`(() => {
+          document.getElementById('ch03-icp-step').click();
+          const before = document.getElementById('ch03-stage-title').textContent;
+          document.getElementById('ch03-stage-next').click();
+          const after = document.getElementById('ch03-stage-title').textContent;
+          const ex1 = document.getElementById('ch03-ex1');
+          ex1.value = '196'; ex1.closest('form').requestSubmit();
+          const ex2 = document.getElementById('ch03-ex2');
+          ex2.value = ex2.closest('form').dataset.answer; ex2.closest('form').requestSubmit();
+          const ex3 = document.getElementById('ch03-ex3');
+          ex3.value = 'correlative'; ex3.closest('form').requestSubmit();
+          return {
+            parity: document.getElementById('ch03-parity').textContent.includes('PASS'),
+            icpSynced: document.getElementById('ch03-animation-vars').textContent.includes('#1'),
+            stageChanged: before !== after,
+            ex1Ok: ex1.closest('form').querySelector('.exercise-feedback').classList.contains('ok'),
+            ex2Ok: ex2.closest('form').querySelector('.exercise-feedback').classList.contains('ok'),
+            ex3Ok: ex3.closest('form').querySelector('.exercise-feedback').classList.contains('ok'),
+          };
+        })()`);
+        if (!corrCheck.parity || !corrCheck.icpSynced || !corrCheck.stageChanged || !corrCheck.ex1Ok || !corrCheck.ex2Ok || !corrCheck.ex3Ok) {
+          failures.push(`${pg.rel}: Correlative hands-on interaction failed (${JSON.stringify(corrCheck)})`);
+        }
+      }
+
+      if (pg.testCovarianceHandsOn) {
+        const covCheck = await cdp.evalJS(`(() => {
+          document.getElementById('ch05-cov-toggle').click();
+          const damped = document.getElementById('ch05-cov-input').textContent.includes('Hd');
+          const before = document.getElementById('ch05-stage-title').textContent;
+          document.getElementById('ch05-stage-next').click();
+          const after = document.getElementById('ch05-stage-title').textContent;
+          const ex1 = document.getElementById('ch05-ex1');
+          ex1.value = '40'; ex1.closest('form').requestSubmit();
+          const ex2 = document.getElementById('ch05-ex2');
+          ex2.value = '0.0001'; ex2.closest('form').requestSubmit();
+          const ex3 = document.getElementById('ch05-ex3');
+          ex3.value = 'H'; ex3.closest('form').requestSubmit();
+          return {
+            numericVars: document.querySelectorAll('#ch05-numeric-vars .hands-on-var').length,
+            damped,
+            stageChanged: before !== after,
+            ex1Ok: ex1.closest('form').querySelector('.exercise-feedback').classList.contains('ok'),
+            ex2Ok: ex2.closest('form').querySelector('.exercise-feedback').classList.contains('ok'),
+            ex3Ok: ex3.closest('form').querySelector('.exercise-feedback').classList.contains('ok'),
+          };
+        })()`);
+        if (covCheck.numericVars < 8 || !covCheck.damped || !covCheck.stageChanged || !covCheck.ex1Ok || !covCheck.ex2Ok || !covCheck.ex3Ok) {
+          failures.push(`${pg.rel}: covariance hands-on interaction failed (${JSON.stringify(covCheck)})`);
+        }
+      }
+
+      if (pg.testGlobalHandsOn) {
+        const globalCheck = await cdp.evalJS(`(() => {
+          document.getElementById('ch06-rerun-btn').click();
+          document.getElementById('ch06-trace-next').click();
+          document.getElementById('ch06-source-pf').click();
+          const before = document.getElementById('ch06-stage-title').textContent;
+          document.getElementById('ch06-stage-next').click();
+          const after = document.getElementById('ch06-stage-title').textContent;
+          const ex1 = document.getElementById('ch06-ex1');
+          ex1.value = '0.73'; ex1.closest('form').requestSubmit();
+          const ex2 = document.getElementById('ch06-ex2');
+          ex2.value = 'prune'; ex2.closest('form').requestSubmit();
+          const ex3 = document.getElementById('ch06-ex3');
+          ex3.value = '1.5151515151515151'; ex3.closest('form').requestSubmit();
+          return {
+            candidates: document.querySelectorAll('#ch06-candidates-body tr').length,
+            traceAdvanced: !document.getElementById('ch06-trace-index').textContent.startsWith('0 /'),
+            stageChanged: before !== after,
+            ex1Ok: ex1.closest('form').querySelector('.exercise-feedback').classList.contains('ok'),
+            ex2Ok: ex2.closest('form').querySelector('.exercise-feedback').classList.contains('ok'),
+            ex3Ok: ex3.closest('form').querySelector('.exercise-feedback').classList.contains('ok'),
+          };
+        })()`);
+        if (globalCheck.candidates < 1 || !globalCheck.traceAdvanced || !globalCheck.stageChanged || !globalCheck.ex1Ok || !globalCheck.ex2Ok || !globalCheck.ex3Ok) {
+          failures.push(`${pg.rel}: global hands-on interaction failed (${JSON.stringify(globalCheck)})`);
+        }
+      }
+
+      if (pg.testNodeHandsOn) {
+        const nodeCheck = await cdp.evalJS(`(() => {
+          document.querySelector('[data-life-action="configure"]').click();
+          document.querySelector('[data-life-action="activate"]').click();
+          const active = document.getElementById('ch08-life-vars').textContent.includes('ACTIVE');
+          document.getElementById('ch08-timeline-next').click();
+          const before = document.getElementById('ch08-stage-title').textContent;
+          document.getElementById('ch08-stage-next').click();
+          const after = document.getElementById('ch08-stage-title').textContent;
+          const ex1 = document.getElementById('ch08-ex1');
+          ex1.value = 'UNCONFIGURED'; ex1.closest('form').requestSubmit();
+          const ex2 = document.getElementById('ch08-ex2');
+          ex2.value = 'old'; ex2.closest('form').requestSubmit();
+          const ex3 = document.getElementById('ch08-ex3');
+          ex3.value = '1.1'; ex3.closest('form').requestSubmit();
+          return {
+            active,
+            timelineAdvanced: document.getElementById('ch08-timeline-meta').textContent.includes('1 /'),
+            stageChanged: before !== after,
+            ex1Ok: ex1.closest('form').querySelector('.exercise-feedback').classList.contains('ok'),
+            ex2Ok: ex2.closest('form').querySelector('.exercise-feedback').classList.contains('ok'),
+            ex3Ok: ex3.closest('form').querySelector('.exercise-feedback').classList.contains('ok'),
+          };
+        })()`);
+        if (!nodeCheck.active || !nodeCheck.timelineAdvanced || !nodeCheck.stageChanged || !nodeCheck.ex1Ok || !nodeCheck.ex2Ok || !nodeCheck.ex3Ok) {
+          failures.push(`${pg.rel}: node hands-on interaction failed (${JSON.stringify(nodeCheck)})`);
+        }
+      }
+
+      if (pg.testBenchmarkHandsOn) {
+        const benchCheck = await cdp.evalJS(`(() => {
+          document.getElementById('ch09-lab-form').requestSubmit();
+          const resultsVisible = !document.getElementById('ch09-results').hidden;
+          const rawRows = document.querySelectorAll('#ch09-raw-preview tr').length;
+          document.getElementById('ch09-recompute').click();
+          const recomputed = document.getElementById('ch09-recompute-status').textContent.includes('复算一致');
+          const before = document.getElementById('ch09-stage-title').textContent;
+          document.getElementById('ch09-stage-next').click();
+          const after = document.getElementById('ch09-stage-title').textContent;
+          const ex1 = document.getElementById('ch09-ex1');
+          ex1.value = 'not_paired'; ex1.closest('form').requestSubmit();
+          const ex2 = document.getElementById('ch09-ex2');
+          ex2.value = 'not_fair'; ex2.closest('form').requestSubmit();
+          const ex3 = document.getElementById('ch09-ex3');
+          ex3.value = 'not_valid'; ex3.closest('form').requestSubmit();
+          return {
+            resultsVisible,
+            rawRows,
+            recomputed,
+            stageChanged: before !== after,
+            ex1Ok: ex1.closest('form').querySelector('.exercise-feedback').classList.contains('ok'),
+            ex2Ok: ex2.closest('form').querySelector('.exercise-feedback').classList.contains('ok'),
+            ex3Ok: ex3.closest('form').querySelector('.exercise-feedback').classList.contains('ok'),
+          };
+        })()`);
+        if (!benchCheck.resultsVisible || benchCheck.rawRows < 1 || !benchCheck.recomputed || !benchCheck.stageChanged || !benchCheck.ex1Ok || !benchCheck.ex2Ok || !benchCheck.ex3Ok) {
+          failures.push(`${pg.rel}: benchmark hands-on interaction failed (${JSON.stringify(benchCheck)})`);
+        }
+      }
+
+      if (pg.testSyntaxHandsOn) {
+        const syntaxCheck = await cdp.evalJS(`(() => {
+          const input = document.getElementById('ch10-rebuild-input');
+          input.value = 'return 0.0;';
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          const firstOk = document.getElementById('ch10-rebuild-feedback').classList.contains('ok');
+          const before = document.getElementById('ch10-rebuild-title').textContent;
+          document.getElementById('ch10-rebuild-next').click();
+          const after = document.getElementById('ch10-rebuild-title').textContent;
+          const ex1 = document.getElementById('ch10-ex1');
+          ex1.value = 'random_access'; ex1.closest('form').requestSubmit();
+          const ex2 = document.getElementById('ch10-ex2');
+          ex2.value = '1e-4,1e-4,1'; ex2.closest('form').requestSubmit();
+          const ex3 = document.getElementById('ch10-ex3');
+          ex3.value = 'B'; ex3.closest('form').requestSubmit();
+          return {
+            firstOk,
+            stageChanged: before !== after,
+            progress: document.getElementById('ch10-rebuild-progress').textContent,
+            ex1Ok: ex1.closest('form').querySelector('.exercise-feedback').classList.contains('ok'),
+            ex2Ok: ex2.closest('form').querySelector('.exercise-feedback').classList.contains('ok'),
+            ex3Ok: ex3.closest('form').querySelector('.exercise-feedback').classList.contains('ok'),
+          };
+        })()`);
+        if (!syntaxCheck.firstOk || !syntaxCheck.stageChanged || !syntaxCheck.progress.includes('1/16') || !syntaxCheck.ex1Ok || !syntaxCheck.ex2Ok || !syntaxCheck.ex3Ok) {
+          failures.push(`${pg.rel}: syntax hands-on interaction failed (${JSON.stringify(syntaxCheck)})`);
+        }
       }
 
       if (pg.testEdtHandsOn) {

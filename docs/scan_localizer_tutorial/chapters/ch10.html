@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>第 10 章 · C++20 × Eigen × ROS 2 语法与工程技巧实战手册 | scan_localizer</title>
+  <title>第 10 章 · 从片段到可写代码：C++20 × Eigen × ROS 2 | scan_localizer</title>
   <link rel="stylesheet" href="../../website/vendor/katex/katex.min.css" />
   <link rel="stylesheet" href="../css/apple.css" />
   <script>window.TUTORIAL_ROOT = ".."; window.PAGE_ID = "ch10";</script>
@@ -12,6 +12,7 @@
   <script defer src="../../../slam-mpc-academy/assets/vendor/hljs/highlight.min.js"></script>
   <script defer src="../js/code-manifest.js"></script>
   <script defer src="../js/app.js"></script>
+  <script defer src="../js/hands-on-ch10.js"></script>
 </head>
 <body>
   <div id="site-nav"></div>
@@ -19,12 +20,135 @@
   <header class="page-header">
     <div class="container">
       <div class="crumb"><a href="../index.html">概览</a> / 第五阶段 · 速查与手册 / 第 10 章</div>
-      <h1>C++20 × Eigen × ROS 2 语法与工程技巧实战手册</h1>
-      <p class="sub">横跨 <code>scan_localizer</code> 全仓库的高频现代 C++20 语法、Eigen 数值稳定技巧、零堆分配优化与 ROS 2 Jazzy 工程铁律。支持按领域标签实时筛选。</p>
+      <h1>从片段到可写代码：C++20 × Eigen × ROS 2</h1>
+      <p class="sub">先遮住生产代码的关键行，按接口与约束主动重建 SE(2)、特征分解、并发快照和 Lifecycle；完成后再用 CARDS 按领域筛选速查。</p>
+      <div class="pill-row">
+        <span class="pill">主动重建：4 个方向 × 4 个片段</span>
+        <span class="pill">真实源码行号步进</span>
+        <span class="pill">即时反馈 + 3 道验收练习</span>
+        <span class="pill">保留 CARDS 筛选手册</span>
+      </div>
     </div>
   </header>
 
   <main class="container" style="padding: 36px 24px 80px;">
+    <h2 id="sec-rebuild"><span class="sec-no">10.1</span>从片段到可写代码：主动重建实验</h2>
+    <p>下面不是“读答案”，而是把生产实现拆成 16 个可验收的小步骤。每个方向都先给出函数签名、类型、锁边界或状态契约，再遮住关键行；你填写后立即得到结构反馈，并能跳到对应真实源码复核。</p>
+
+    <div class="callout callout-syntax">
+      <div class="callout-head">实验规则</div>
+      <ul>
+        <li>每次只填被遮住的一行或一个完整表达式；输入时即时校验，按 <code>Enter</code> 或“检查”提交严格结果。</li>
+        <li>校验忽略空白与末尾分号，但不会接受不存在的 API。接口、变量名和返回类型仍以当前分支源码为准。</li>
+        <li>代码左侧数字是真实 1-based 行号；页面优先读取当前仓库文件，读取失败时退回随页保存的已核对片段。</li>
+        <li>浏览器只做关键行结构校验，不会声称编译整个 ROS 2 包。片段的编译上下文由原函数与类提供。</li>
+      </ul>
+    </div>
+
+    <div class="src-bar">
+      <button type="button" class="src-jump" data-file="CMakeLists.txt" data-lines="4-8"><span class="tag">编译契约</span>CMakeLists.txt : L4-8 (C++20)</button>
+      <button type="button" class="src-jump" data-file="include/scan_localizer/se2.hpp" data-lines="30-46"><span class="tag">SE2</span>se2.hpp : L30-46 (wrap_angle)</button>
+      <button type="button" class="src-jump" data-file="include/scan_localizer/se2.hpp" data-lines="80-93"><span class="tag">C++20</span>se2.hpp : L80-93 (Concept)</button>
+      <button type="button" class="src-jump" data-file="src/matchers.cpp" data-lines="70-98"><span class="tag">Eigen</span>matchers.cpp : L70-98 (cov_from_hessian)</button>
+      <button type="button" class="src-jump" data-file="src/localizer_node.cpp" data-lines="909-963"><span class="tag">锁</span>localizer_node.cpp : L909-963 (applyMap)</button>
+      <button type="button" class="src-jump" data-file="src/localizer_node.cpp" data-lines="1308-1335"><span class="tag">快照</span>localizer_node.cpp : L1308-1335 (onScan)</button>
+      <button type="button" class="src-jump" data-file="src/localizer_node.cpp" data-lines="701-888"><span class="tag">Lifecycle</span>localizer_node.cpp : L701-888 (回调)</button>
+    </div>
+
+    <div style="overflow-x:auto;padding:4px 2px 8px;">
+      <div class="segmented" id="ch10-rebuild-tracks" role="tablist" aria-label="重建方向">
+        <button type="button" role="tab" id="ch10-track-se2" class="active" aria-selected="true" aria-controls="ch10-rebuild-panel" tabindex="0" data-track="se2">SE2 / C++20 · 0/4</button>
+        <button type="button" role="tab" id="ch10-track-eigen" aria-selected="false" aria-controls="ch10-rebuild-panel" tabindex="-1" data-track="eigen">Eigen 特征分解 · 0/4</button>
+        <button type="button" role="tab" id="ch10-track-concurrency" aria-selected="false" aria-controls="ch10-rebuild-panel" tabindex="-1" data-track="concurrency">锁与快照 · 0/4</button>
+        <button type="button" role="tab" id="ch10-track-lifecycle" aria-selected="false" aria-controls="ch10-rebuild-panel" tabindex="-1" data-track="lifecycle">Lifecycle · 0/4</button>
+      </div>
+    </div>
+    <p class="hands-on-note" id="ch10-rebuild-progress" aria-live="polite">关键行 0/16 · 完整方向 0/4 · 练习 0/3</p>
+
+    <div class="hands-on-stepper" id="ch10-rebuild-panel" role="tabpanel" aria-labelledby="ch10-track-se2" tabindex="0">
+      <div class="hands-on-toolbar">
+        <div>
+          <div class="hands-on-stage-title" id="ch10-rebuild-title"></div>
+          <div class="hands-on-stage-meta" id="ch10-rebuild-meta"></div>
+        </div>
+        <div class="exercise-row">
+          <button type="button" class="btn btn-secondary btn-sm" id="ch10-rebuild-prev">← 上一步</button>
+          <span class="ctrl-val" id="ch10-rebuild-index">1 / 4</span>
+          <button type="button" class="btn btn-primary btn-sm" id="ch10-rebuild-next">下一步 →</button>
+          <button type="button" class="btn btn-secondary btn-sm" id="ch10-rebuild-reset">重置进度</button>
+        </div>
+      </div>
+      <div class="hands-on-stage-body">
+        <p class="hands-on-explain" id="ch10-rebuild-explain"></p>
+        <dl class="hands-on-vars" id="ch10-rebuild-contract"></dl>
+        <div class="code-card" style="margin:16px 0;">
+          <div class="code-head">
+            <button type="button" class="src-jump" id="ch10-rebuild-source" data-file="include/scan_localizer/se2.hpp" data-lines="34-39" data-label="Ch10 重建：先截断非有限角度"><span class="tag">真实源码</span><span id="ch10-rebuild-source-label">se2.hpp · L34-39</span></button>
+            <div class="code-actions"><button type="button" class="code-btn" id="ch10-rebuild-copy">复制片段</button></div>
+          </div>
+          <pre><code class="language-cpp" id="ch10-rebuild-code"></code></pre>
+        </div>
+        <p class="hands-on-note" id="ch10-rebuild-source-note" aria-live="polite">正在读取真实源码。</p>
+        <form class="hands-on-exercise" id="ch10-rebuild-form" data-kind="code">
+          <label for="ch10-rebuild-input">重建关键行：只填写上方被遮住的代码，不要粘贴整个函数。</label>
+          <div class="exercise-row">
+            <input class="exercise-input" id="ch10-rebuild-input" name="answer" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="输入一行或一个完整表达式" aria-describedby="ch10-rebuild-contract ch10-rebuild-feedback" />
+            <button class="btn btn-primary btn-sm" type="submit">检查</button>
+            <button class="btn btn-secondary btn-sm" type="button" id="ch10-rebuild-hint">提示</button>
+          </div>
+          <div class="exercise-feedback" id="ch10-rebuild-feedback" aria-live="polite"></div>
+        </form>
+      </div>
+    </div>
+
+    <h2 id="sec-exercise"><span class="sec-no">10.2</span>3 道练习与验收</h2>
+    <p>重建负责恢复代码，练习负责确认你能解释它为什么这样写。以下三题全部通过，并且 16 个关键行全部完成，自动验收才会通过。</p>
+
+    <form class="hands-on-exercise" data-exercise="se2" data-kind="choice" data-answer="random_access" data-success="正确：std::list 迭代器不支持随机访问，reserve 分支应在编译期消失，避免额外 distance 遍历。" data-hint="std::list 不支持 O(1) 随机访问；想想源码用哪个 C++20 concept 限定 reserve。">
+      <label for="ch10-ex1">练习 1（SE2 / C++20）：用 <code>std::list&lt;Eigen::Vector2d&gt;</code> 的迭代器调用 <code>transform_scan</code> 时，哪条 reserve 分支应在编译期消失？填 <code>random_access</code> 或 <code>forward</code>。</label>
+      <div class="exercise-row"><input class="exercise-input" id="ch10-ex1" name="answer" placeholder="输入迭代器类别" /><button class="btn btn-primary btn-sm" type="submit">检查</button></div>
+      <div class="exercise-feedback" aria-live="polite"></div>
+    </form>
+
+    <form class="hands-on-exercise" data-exercise="eigen" data-kind="text" data-answer="1e-4,1e-4,1" data-accepts="0.0001,0.0001,1|1e-04,1e-04,1" data-success="正确：升序特征值 {0, 2e-5, 1} 夹紧后变为 {1e-4, 1e-4, 1}，随后才可逐元素求逆。" data-hint="SelfAdjointEigenSolver 的特征值按升序排列；每个值都对 kMinEig=1e-4 取 max。">
+      <label for="ch10-ex2">练习 2（Eigen）：对称 Hessian 的特征值为 <code>{0, 2e-5, 1}</code>，<code>kMinEig = 1e-4</code>。按升序写出夹紧后 <code>eigs</code> 的三个值，用逗号分隔。</label>
+      <div class="exercise-row"><input class="exercise-input" id="ch10-ex2" name="answer" inputmode="text" placeholder="例如 a,b,c" /><button class="btn btn-primary btn-sm" type="submit">检查</button></div>
+      <div class="exercise-feedback" aria-live="polite"></div>
+    </form>
+
+    <form class="hands-on-exercise" data-exercise="ros2" data-kind="choice" data-answer="B" data-success="正确：重计算锁外做、状态快照锁内做、DDS 发布锁外做；configure 建资源，activate 激活发布者，cleanup 完整回收。" data-hint="把“耗时操作不持锁”“快照值语义”“Lifecycle 回调顺序”三条一起检查。">
+      <label for="ch10-ex3">练习 3（锁、快照与 Lifecycle）：哪一项完整符合生产实现？填 <code>A</code>、<code>B</code>、<code>C</code> 或 <code>D</code>。</label>
+      <ul>
+        <li><strong>A</strong> · <code>on_configure</code> 直接置 <code>active_=true</code> 并开始发布。</li>
+        <li><strong>B</strong> · <code>applyMap</code> 锁外构建、短锁交换；<code>onScan</code> 锁内构造 <code>OutputSnapshot</code>、锁外调用 <code>publishOutputs</code>；<code>on_activate</code> 激活 LifecyclePublisher。</li>
+        <li><strong>C</strong> · <code>on_cleanup</code> 只清 <code>active_</code>，保留 core、field 与订阅，等待下次复用。</li>
+        <li><strong>D</strong> · <code>publishOutputs</code> 全程持有 <code>state_mtx_</code>，用算法锁串行化 DDS I/O。</li>
+      </ul>
+      <div class="exercise-row"><input class="exercise-input" id="ch10-ex3" name="answer" placeholder="输入 A / B / C / D" /><button class="btn btn-primary btn-sm" type="submit">检查</button></div>
+      <div class="exercise-feedback" aria-live="polite"></div>
+    </form>
+
+    <div class="callout callout-tip">
+      <div class="callout-head">验收：代码通过 + 能复述工程边界</div>
+      <dl class="hands-on-vars" id="ch10-acceptance-vars">
+        <div class="hands-on-var"><dt>关键行</dt><dd>0 / 16</dd></div>
+        <div class="hands-on-var"><dt>完整方向</dt><dd>0 / 4</dd></div>
+        <div class="hands-on-var"><dt>练习</dt><dd>0 / 3</dd></div>
+      </dl>
+      <p class="exercise-feedback" id="ch10-acceptance-status" aria-live="polite">尚未通过：还需完成 16 个关键行、3 道练习。</p>
+      <ul>
+        <li><strong>SE2 / C++20</strong>：说清非有限角提前返回、<code>(-π, π]</code> 边界、位姿复合顺序，以及 <code>if constexpr</code> 为何能让 <code>std::random_access_iterator&lt;It&gt;</code> 对非随机访问迭代器为 false。</li>
+        <li><strong>Eigen</strong>：按“对称化 → 求解成功检查 → 特征值夹紧 → Q diag(1/λ) Qᵀ”复述，不把协方差写成无保护的 <code>H.inverse()</code>。</li>
+        <li><strong>锁与快照</strong>：指出 <code>applyMap</code> 的重计算在锁外，<code>onScan</code> 的快照在锁内，<code>publishOutputs</code> 在锁外；快照必须拥有发布所需副本。</li>
+        <li><strong>Lifecycle</strong>：按 <code>configure</code> 建资源、<code>activate</code> 激活发布者并置 <code>active_</code>、<code>deactivate</code> 停用、<code>cleanup</code> 完整回收复述状态契约。</li>
+        <li><strong>仓库回归入口</strong>：可继续核对 <code>Se2Test.WrapAngleEdgeAndNonFiniteCases</code>、<code>Se2Test.TransformScanIteratorsAndBufferReuse</code>、<code>MatchersTest.DegenerateAndMalformedInputsDoNotCrash</code>、<code>LocalizerNodeTest.LifecycleTransitionsAndCleanupSafety</code>。</li>
+      </ul>
+      <p class="hands-on-note">自动验收只证明本章关键行与练习完成，不等同于已经运行完整编译或 ROS 2 回归测试。</p>
+    </div>
+
+    <h2 id="sec-cards"><span class="sec-no">10.3</span>CARDS 筛选手册</h2>
+    <p>保留原有领域标签与关键字筛选。重建完成后，可在这里按 <code>LDLT</code>、<code>Joseph</code>、<code>Lifecycle</code>、<code>if constexpr</code> 等词跳转速查。</p>
+
     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:24px;">
       <div class="segmented" id="ch10-tags">
         <button type="button" class="active" data-tag="all">全部卡片</button>
@@ -53,7 +177,7 @@
         { tag: "cpp20", title: "O(1) 硬件级角度归一化 + NaN 免疫", file: "include/scan_localizer/se2.hpp", lines: "34-46",
           bad: "while (a > M_PI) a -= 2*M_PI; // 遇 inf/NaN 直接死循环卡死线程",
           good: "if (!std::isfinite(a)) return 0.0;\ndouble r = std::remainder(a, kTwoPi);",
-          why: "C++20 std::numbers::pi + std::remainder 一次指令搞定任意数量级大角。" },
+          why: "C++20 std::numbers::pi + std::remainder 用常数次运算完成任意数量级大角的归一化。" },
         { tag: "cpp20", title: "C++20 Concept + if constexpr 编译期特化", file: "include/scan_localizer/se2.hpp", lines: "80-93",
           bad: "out.reserve(scan.size()); // 若传入前向迭代器，distance 是 O(N) 白算两次",
           good: "if constexpr (std::random_access_iterator<It>) {\n  out.reserve(std::distance(begin, end));\n}",
@@ -70,10 +194,10 @@
           bad: "S.inverse(); // 对退化/近奇异 3×3 矩阵直接 inverse() 无法感知数值病态",
           good: "Eigen::LDLT<Cov3> ldlt(S);\nif (ldlt.info() == Eigen::Success && ldlt.isPositive())\n  x = ldlt.solve(innov);",
           why: "线性求解用 LDLT 既快又能验正定性；协方差门控才用 SelfAdjointEigenSolver 查真实特征值。" },
-        { tag: "eigen", title: "Joseph 形式保证 4×4 EKF 协方差永不失正定", file: "src/localizer_core.cpp", lines: "682-686",
+        { tag: "eigen", title: "Joseph 形式有助于保持 4×4 EKF 协方差对称半正定", file: "src/localizer_core.cpp", lines: "682-686",
           bad: "P4_ = (I - K4 * H) * P4_pred; // 高条件数矩阵做减法极易得出负对角元",
           good: "const Matrix4d I_KH = Matrix4d::Identity() - K4 * H;\nP4_ = I_KH * P4_pred * I_KH.transpose() + K4 * R * K4.transpose();",
-          why: "两项各自天然对称半正定，相加在任何条件数下保持稳定正定。" },
+          why: "两项以非负二次型结构相加，降低浮点舍入造成负特征值的风险；仍需输入有限性与门控检查。" },
         { tag: "perf", title: "热循环零分配缓冲复用模式", file: "include/scan_localizer/particle_filter.hpp", lines: "75-78",
           bad: "std::vector<Vec2> sub; // 每帧 40Hz 在 update() 内频繁 malloc/free",
           good: "sub_pts_.clear(); // 类成员复用同一块已扩好容量的堆内存",
@@ -81,7 +205,7 @@
         { tag: "perf", title: "锁外构场 + 原子交换 + 锁外快照发布", file: "src/localizer_node.cpp", lines: "909-953",
           bad: "std::lock_guard<std::mutex> lk(state_mtx_); field->build(...); pub->publish(...);",
           good: "auto field = std::make_shared<MapField>(); field->build(...);\n{ std::lock_guard lk(state_mtx_); field_ = field; }\npublishOutputs(snap, stamp);",
-          why: "绝不持锁做耗时建场或 DDS I/O，确保高频激光/IMU 回调零饥饿与零死锁。" },
+          why: "绝不持锁做耗时建场或 DDS I/O，缩短状态锁占用，降低传感器回调延迟与锁耦合风险。" },
         { tag: "ros2", title: "6×6 协方差下标铁律 kIdx = {0, 1, 5}", file: "src/localizer_node.cpp", lines: "1584-1590",
           bad: "pm.pose.covariance[2 * 6 + 2] = cov(2, 2); // 把航向方差塞进 z 轴了!",
           good: "constexpr int kIdx[3] = {0, 1, 5};\npm.pose.covariance[6 * kIdx[i] + kIdx[j]] = cov(i, j);",
@@ -89,7 +213,7 @@
         { tag: "ros2", title: "SensorDataQoS + 双回调组 + Lifecycle 契约", file: "src/localizer_node.cpp", lines: "64-174",
           bad: "autostart 构造函数直接开跑，忽略 Nav2 lifecycle_manager 状态切换",
           good: "autostart: false;\ncreate_subscription(imu_topic_, rclcpp::SensorDataQoS(), ..., sensor_opt);",
-          why: "BestEffort IMU 对齐、高频传感器与耗时服务线程彻底物理隔离。" },
+          why: "BestEffort IMU 使用匹配 QoS；回调组把高频传感器与耗时工作分开调度，但是否并行仍取决于 executor。" },
       ];
 
       let curTag = "all";

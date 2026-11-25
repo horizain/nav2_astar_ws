@@ -2,7 +2,7 @@
 // - CLASSES: 10 core classes / structs with ownership, members & design intent
 // - FLOWS: 3 step-by-step execution pipelines (Scan frame, Map load/hot-swap, Global recovery)
 // - CALL_CHAINS: 3 interactive collapsible call trees linking directly to function breakdowns
-// - FUNCTIONS: 12 "write-from-scratch" deep guides (contract, thinking steps, skeleton, tradeoffs, checklists)
+// - FUNCTIONS: 14 "write-from-scratch" deep guides (contract, thinking steps, skeleton, tradeoffs, checklists)
 // - BUILD_STEPS: 6-step bottom-up coding roadmap with GTest acceptance commands
 (function (global) {
   "use strict";
@@ -511,7 +511,7 @@ Hd = H + 1e-6 * diag; dp = Hd.ldlt().solve(-b);`,
       file: "src/matchers.cpp",
       lines: "71-98",
       chapter: "ch05",
-      contract: "输入：未阻尼 3×3 Hessian H、残差方差 res_var。输出：保证对称正定的 3×3 位姿协方差 Cov3。",
+      contract: "输入：未阻尼 3×3 Hessian H、残差方差 res_var。输出：经特征值夹紧、对称化与物理下限保护后的 3×3 位姿协方差 Cov3。",
       thoughtSteps: [
         "先显式对称化 Hsym = 0.5*(H + H.transpose())，消除浮点加法带来的微弱不对称。",
         "用 Eigen::SelfAdjointEigenSolver 计算特征值与正交特征向量 Q（Hsym 是实对称矩阵）。",

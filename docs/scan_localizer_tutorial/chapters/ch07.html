@@ -23,7 +23,7 @@
     <div class="container">
       <div class="crumb"><a href="../index.html">概览</a> / 第三阶段 · 滤波与状态机 / 第 7 章</div>
       <h1>从零实现 4D EKF、四门控与五态状态机</h1>
-      <p class="sub"><code>LocalizerCore</code> 是整个定位系统的“中枢大脑”：在线估计 IMU 陀螺零偏 $b_g$、用 Joseph 形式守护协方差数值稳定性、靠四道防线拦截错匹配，并在对称走廊中稳住永不乱跳。</p>
+      <p class="sub"><code>LocalizerCore</code> 是整个定位系统的“中枢大脑”：在线估计 IMU 陀螺零偏 $b_g$、用 Joseph 形式守护协方差数值稳定性、靠四道防线拦截错匹配，并降低对称走廊中的误跳风险。</p>
       <div class="pill-row">
         <span class="pill">预计 55 分钟</span>
         <span class="pill">核心文件：localizer_core.hpp · localizer_core.cpp</span>

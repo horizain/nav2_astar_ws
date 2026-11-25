@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>第 5 章 · 长走廊退化与各向异性协方差 | scan_localizer</title>
+  <title>第 5 章 · 从零实现退化安全的各向异性协方差 | scan_localizer</title>
   <link rel="stylesheet" href="../../website/vendor/katex/katex.min.css" />
   <link rel="stylesheet" href="../css/apple.css" />
   <script>window.TUTORIAL_ROOT = ".."; window.PAGE_ID = "ch05";</script>
@@ -14,6 +14,7 @@
   <script defer src="../js/sim-core.js"></script>
   <script defer src="../js/app.js"></script>
   <script defer src="../js/sim-ch05.js"></script>
+  <script defer src="../js/hands-on-ch05.js"></script>
 </head>
 <body>
   <div id="site-nav"></div>
@@ -21,12 +22,13 @@
   <header class="page-header">
     <div class="container">
       <div class="crumb"><a href="../index.html">概览</a> / 第二阶段 · 扫描匹配演进 / 第 5 章</div>
-      <h1>长走廊退化与各向异性协方差</h1>
-      <p class="sub">机器人走进一条没有任何柱子的 30 米光秃走廊：为什么许多开源定位节点要么直接发散乱跳，要么整帧拒绝？关键就在这一行：<strong>协方差绝不能混入 LM 阻尼！</strong></p>
+      <h1>从零实现退化安全的各向异性协方差</h1>
+      <p class="sub">机器人走进一条没有任何柱子的 30 米光秃走廊：为什么许多开源定位节点要么直接发散乱跳，要么整帧拒绝？从最小特征值夹紧实现出发，亲手区分 <code>H</code> 与 <code>Hd</code>，再用真实匹配数值观察各向异性。<strong>协方差绝不能混入 LM 阻尼！</strong></p>
       <div class="pill-row">
-        <span class="pill">预计 25 分钟</span>
+        <span class="pill">预计 35 分钟</span>
         <span class="pill">核心文件：matchers.cpp (cov_from_hessian)</span>
-        <span class="pill">动画：走廊 120,000× 协方差椭圆实验室</span>
+        <span class="pill">保留：各向异性协方差椭圆动画</span>
+        <span class="pill">动手：最小实现 / 实时特征值 / 源码步进 / 练习</span>
       </div>
     </div>
   </header>
@@ -38,8 +40,8 @@
     </aside>
 
     <article class="article-col">
-      <h2 id="sec-intro"><span class="sec-no">5.1</span>交互实验室：亲眼看透各向异性协方差椭圆</h2>
-      <p>在 30m×3m 的严格走廊中（两端堵墙都在 12m 激光量程之外），上下墙的梯度只有 $y$ 分量，没有 $x$ 分量。因此信息矩阵 $H$ 在 $x$ 方向特征值接近零、在 $y$ 方向巨大——逆协方差应当拉成一根<strong>极扁的水平细长椭圆</strong>（横向紧锁，沿轴极度不确定）。点击对比错误注入 LM 阻尼或切到仓库转角的差异：</p>
+      <h2 id="sec-intro"><span class="sec-no">5.1</span>先观察：亲眼看透各向异性协方差椭圆</h2>
+      <p>在 JS 教学的 30m×5m 走廊中（C++ curated E5 场景为 30m×3m），上下墙的梯度只有 $y$ 分量，没有 $x$ 分量。因此信息矩阵 $H$ 在 $x$ 方向特征值接近零、在 $y$ 方向巨大——逆协方差应当拉成一根<strong>极扁的水平细长椭圆</strong>（横向紧锁，沿轴极度不确定）。点击对比错误注入阻尼或切到仓库转角的差异：</p>
 
       <div class="lab-frame">
         <div class="lab-head">
@@ -62,26 +64,166 @@
           </div>
         </div>
       </div>
+      <p class="hands-on-note">上方错误演示故意给协方差加入 $50I$，用于把阻尼污染夸张地画出来；真实 LM 阻尼只有 $10^{-6}$ 量级，见 5.3 的 <code>Hd</code> 数值对照。两个实验都说明同一件事：<strong>阻尼可以帮助求解，但不能篡改观测信息。</strong></p>
 
-      <h2 id="sec-math"><span class="sec-no">5.2</span>线性代数本质：特征值分解揭露不可观测子空间</h2>
+      <h2 id="sec-minimal"><span class="sec-no">5.2</span>从零写最小 <code>cov_from_hessian</code></h2>
+      <p>正确顺序只有六步：<strong>对称化 → 特征分解 → 特征值夹紧 → 求逆 → 残差缩放 → 物理方差下限</strong>。最关键的是第 3 步必须发生在求逆之前：不可观测方向不是“删掉”，而是变成一个<strong>有界的大方差</strong>。</p>
+
+      <div class="code-card">
+        <div class="code-head"><span class="code-file">教学最小版：保留特征值夹紧，省略可配置参数与详细防御</span><button type="button" class="code-btn code-copy-btn">复制</button></div>
+        <pre><code class="language-cpp">Cov3 cov_from_hessian(
+  const Eigen::Matrix3d &amp; H, double res_var)
+{
+  const Eigen::Matrix3d Hsym = 0.5 * (H + H.transpose());
+  Eigen::SelfAdjointEigenSolver&lt;Eigen::Matrix3d&gt; es(Hsym);
+  if (es.info() != Eigen::Success) { return Cov3::Identity(); }
+
+  constexpr double kMinEig = 1e-4;
+  const Eigen::Vector3d eig =
+    es.eigenvalues().cwiseMax(kMinEig);
+  const Eigen::Matrix3d H_inv =
+    es.eigenvectors() * eig.cwiseInverse().asDiagonal() *
+    es.eigenvectors().transpose();
+
+  const double scale = std::max(res_var, 1e-4) * 2.0;
+  Cov3 cov = scale * H_inv;
+  cov = 0.5 * (cov + cov.transpose()).eval();
+  cov(0, 0) = std::max(cov(0, 0), 1e-4);
+  cov(1, 1) = std::max(cov(1, 1), 1e-4);
+  cov(2, 2) = std::max(cov(2, 2), 1.2e-5);
+  return cov;
+}</code></pre>
+      </div>
+
+      <div class="callout callout-pitfall">
+        <div class="callout-head">“最后把对角线抬到下限”不能替代特征值夹紧</div>
+        <p>若先对含零特征值的 $H$ 求逆，数值上可能直接得到无穷或 NaN；即使某个实现勉强返回有限矩阵，协方差的方向结构也已经被奇异求逆破坏。正确做法是把 $\lambda_j$ 夹到 $10^{-4}$ 后再求逆，最后才分别施加 $10^{-4}\text{ m}^2$ 的平移物理下限与 $1.2\times10^{-5}\text{ rad}^2$ 的转角物理下限。</p>
+      </div>
+
+      <h2 id="sec-live"><span class="sec-no">5.3</span>真实数值实验室：H、Hd 与实时协方差</h2>
+      <p>下面所有矩阵都由现有数学核现场生成：<code>S.createCorridorMap()</code>（或 <code>S.createWarehouseMap()</code>）→ <code>S.makeScan()</code> → <code>S.fieldGnMatch()</code>。面板读取 <code>res.hessian</code> 作为未阻尼 <code>H</code>，按真实源码构造 <code>Hd</code>，再用本章最小实现计算协方差；没有手填矩阵或预录数值。</p>
+
+      <div class="lab-frame">
+        <div class="lab-head">
+          <div class="lab-title"><span>Field-GN 实时 H / Hd / Σ 面板</span><span class="lab-badge">真实数值</span></div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <button type="button" class="btn btn-secondary btn-sm" id="ch05-live-corridor" aria-pressed="true">长走廊</button>
+            <button type="button" class="btn btn-secondary btn-sm" id="ch05-live-warehouse" aria-pressed="false">仓库对照</button>
+            <button type="button" class="btn btn-secondary btn-sm" id="ch05-live-reset">重置</button>
+          </div>
+        </div>
+        <div class="lab-body">
+          <div class="lab-controls">
+            <label class="ctrl-group">先验沿轴偏移 Δx <input type="range" id="ch05-live-x" min="-0.3" max="0.3" step="0.01" value="0.05" /><span class="ctrl-val" id="ch05-live-x-v">+0.05 m</span></label>
+            <label class="ctrl-group">先验横向偏移 Δy <input type="range" id="ch05-live-y" min="-0.2" max="0.2" step="0.01" value="0.04" /><span class="ctrl-val" id="ch05-live-y-v">+0.04 m</span></label>
+            <label class="ctrl-group">先验转角偏移 Δθ <input type="range" id="ch05-live-theta" min="-0.06" max="0.06" step="0.005" value="0.01" /><span class="ctrl-val" id="ch05-live-theta-v">+0.010 rad</span></label>
+          </div>
+          <div class="lab-controls">
+            <button type="button" class="btn btn-secondary btn-sm" id="ch05-cov-toggle" aria-pressed="false">错误实验：改用 Hd</button>
+            <span class="ctrl-val" id="ch05-cov-input">当前协方差实参：H（正确）</span>
+          </div>
+          <div class="telemetry">
+            <div class="tel-cell"><div class="tel-k">λ(H) 原始特征值</div><div class="tel-v" id="ch05-eig-raw">—</div></div>
+            <div class="tel-cell"><div class="tel-k">λ(H) 夹紧后</div><div class="tel-v ok" id="ch05-eig-clamped">—</div></div>
+            <div class="tel-cell"><div class="tel-k">λ(Σ) 协方差特征值</div><div class="tel-v" id="ch05-cov-eigs">—</div></div>
+            <div class="tel-cell"><div class="tel-k">各向异性比 Σxx/Σyy</div><div class="tel-v" id="ch05-live-ratio">—</div></div>
+            <div class="tel-cell"><div class="tel-k">被夹紧的方向</div><div class="tel-v" id="ch05-clamp-count">—</div></div>
+            <div class="tel-cell"><div class="tel-k">本帧匹配</div><div class="tel-v" id="ch05-match-state">等待计算</div></div>
+          </div>
+          <dl class="hands-on-vars" id="ch05-numeric-vars"></dl>
+          <div class="hands-on-note" id="ch05-live-note">等待数学核返回真实匹配结果。</div>
+        </div>
+      </div>
+
+      <div class="callout callout-tip">
+        <div class="callout-head">H 与 Hd 的分工，必须写进数据流</div>
+        <ul>
+          <li><code>H = Σ wᵢJᵢᵀJᵢ</code>：这一帧扫描实际带来的信息。不可观测方向应保持为零或接近零。</li>
+          <li><code>Hd = H + 10⁻⁶ · max(diag(H), 1)</code>：为了 <code>Hd.ldlt().solve(-b)</code> 能稳定求解而添加的数值正则项。</li>
+          <li><code>Σ = cov_from_hessian(best_H, best_var)</code>：滤波测量噪声必须来自<strong>未阻尼</strong>的 <code>best_H</code>，不能来自 <code>Hd</code>。</li>
+        </ul>
+        <p>真实 LM 阻尼很小，且小于 $10^{-4}$ 的方向还会被再次夹紧，因此某些帧的 <code>Σ(H)</code> 与 <code>Σ(Hd)</code> 差异可能不明显。这恰恰说明不能靠“某一帧看起来差不多”证明做法正确；数据流语义才是验收标准。</p>
+      </div>
+
+      <h2 id="sec-math"><span class="sec-no">5.4</span>线性代数本质：特征值分解揭露不可观测子空间</h2>
       <p>在每条平行于 $x$ 轴的走廊墙壁上，$\nabla\text{SDF} = (0, \pm 1)^\top$，即每束点的雅可比 $g_x \approx 0$。于是 Hessian 矩阵为：</p>
       <div class="math-card">
         <div class="math-title">未阻尼 Hessian 求逆与特征值下界夹紧</div>
         $$H = \sum_i w_i \mathbf{J}_i^\top \mathbf{J}_i \approx \begin{bmatrix} \sim 0 &amp; 0 &amp; 0 \\ 0 &amp; \gg 1 &amp; * \\ 0 &amp; * &amp; \gg 1 \end{bmatrix}, \qquad
         H = Q \Lambda Q^\top \implies \Sigma_{\text{match}} = s \cdot Q\,\mathrm{diag}\!\Bigl(\max(\lambda_j, 10^{-4})^{-1}\Bigr) Q^\top$$
       </div>
-      <p>这就是各向异性 EKF 能做到 <strong>横向误差 0.0 mm、沿轴完全信任里程计预测（16/16 全帧采纳）</strong> 的全部秘密：在卡尔曼增益 $K = P_{\text{pred}}(P_{\text{pred}} + R)^{-1}$ 里，横向 $R_{yy} = 0.0001\text{ m}^2 \ll P_{yy}$，所以激光权重接近 100%；而沿轴 $R_{xx} = 12.48\text{ m}^2 \gg P_{xx} = 0.0017\text{ m}^2$，所以激光权重自动趋近于 0，里程计平滑接管！</p>
+      <p>设 $s=\max(\text{res\_var},10^{-4})\times 2$。沿轴零特征值被夹紧后，方差上界为 $s/10^{-4}$；横向的大特征值则得到很小方差，再被物理下限托底。于是各向异性 EKF 在增益 $K=P_{\text{pred}}(P_{\text{pred}}+R)^{-1}$ 中自然表现为：<strong>横向几乎完全信任激光，沿轴把权重交给里程计预测</strong>。5.3 的面板会给出本页 JS 30m×5m 教学场景的即时数值；仓库 C++ curated E5 的 30m×3m 场景记录为 $12.48\text{ m}^2$，对应约 120,000× 各向异性，二者场景与参数不同，不应当手填混用。</p>
 
-      <h2 id="sec-code"><span class="sec-no">5.3</span>源码精读：`cov_from_hessian`</h2>
+      <h2 id="sec-code"><span class="sec-no">5.5</span>源码分段步进：真实 <code>matchers.cpp</code></h2>
+      <p>点击“下一步”逐段对照 <code>src/matchers.cpp:L70-98</code>，再走到 <code>L335-348</code> 与 <code>L384-389</code>。变量面板跟随 5.3 的当前真实匹配结果。</p>
       <div class="src-bar">
-        <button type="button" class="src-jump" data-file="src/matchers.cpp" data-lines="71-98"><span class="tag">源码抽屉</span>matchers.cpp : L71-98 (cov_from_hessian)</button>
-        <button type="button" class="src-jump" data-file="src/matchers.cpp" data-lines="344-348"><span class="tag">源码抽屉</span>matchers.cpp : L344-348 (只给 Hd 加阻尼)</button>
+        <button type="button" class="src-jump" data-file="src/matchers.cpp" data-lines="70-98"><span class="tag">协方差</span>matchers.cpp : L70-98 (cov_from_hessian)</button>
+        <button type="button" class="src-jump" data-file="src/matchers.cpp" data-lines="335-348"><span class="tag">H / Hd</span>matchers.cpp : L335-348 (best_H 与 LM 阻尼)</button>
+        <button type="button" class="src-jump" data-file="src/matchers.cpp" data-lines="384-389"><span class="tag">输出</span>matchers.cpp : L384-389 (只传 best_H)</button>
       </div>
 
-      <h2 id="sec-pitfall"><span class="sec-no">5.4</span>真实踩坑复盘：为什么门控曾误杀退化走廊？</h2>
+      <div class="hands-on-stepper">
+        <div class="hands-on-toolbar">
+          <div>
+            <div class="hands-on-stage-title" id="ch05-stage-title"></div>
+            <div class="hands-on-stage-meta" id="ch05-stage-meta"></div>
+          </div>
+          <div class="exercise-row">
+            <button type="button" class="btn btn-secondary btn-sm" id="ch05-stage-prev">← 上一步</button>
+            <span class="ctrl-val" id="ch05-stage-index">1 / 6</span>
+            <button type="button" class="btn btn-primary btn-sm" id="ch05-stage-next">下一步 →</button>
+          </div>
+        </div>
+        <div class="hands-on-stage-body">
+          <p class="hands-on-explain" id="ch05-stage-explain"></p>
+          <div class="code-card">
+            <div class="code-head">
+              <button type="button" class="src-jump" id="ch05-stage-source"><span class="tag">源码抽屉</span>打开当前实现</button>
+              <button type="button" class="code-btn" id="ch05-stage-copy">复制</button>
+            </div>
+            <pre><code class="language-cpp" id="ch05-stage-code"></code></pre>
+          </div>
+          <div class="hands-on-note" id="ch05-live-iter">等待 5.3 实时面板的匹配结果。</div>
+          <dl class="hands-on-vars" id="ch05-stage-vars"></dl>
+        </div>
+      </div>
+
+      <h2 id="sec-pitfall"><span class="sec-no">5.6</span>真实踩坑复盘：为什么门控曾误杀退化走廊？</h2>
       <div class="callout callout-pitfall">
         <div class="callout-head">Phase 3 修复：<code>max_eig</code> vs <code>min_eig</code>（<code>localizer_core.cpp:L617</code>）</div>
         <p>早期的协方差门控试图检验“最大特征值 <code>&lt; max_cov_eig</code>”，结果恰恰把沿走廊合理膨胀出 $12.48\text{ m}^2$ 的健康退化帧全杀掉了！门控真正该卡的是<strong><code>min_eig &lt; cfg_.max_cov_eig</code></strong>（只要至少在一个方向上定位紧实，帧就绝不是坏帧，退化方向交给各向异性 EKF 自动信任预测）。</p>
+      </div>
+
+      <h2 id="sec-exercise"><span class="sec-no">5.7</span>三道练习与验收</h2>
+      <p>统一使用 $H=\operatorname{diag}(0,100,400)$、$\text{res\_var}=0.002$、$k_{\min}=10^{-4}$、$s=\max(0.002,10^{-4})\times2=0.004$。先区分“特征值夹紧”和“物理方差下限”，再回答最后一题。</p>
+
+      <form class="hands-on-exercise" data-kind="number" data-answer="40" data-tolerance="1e-9" data-hint="先把 λx=0 夹到 1e-4，再算 s/λx；本题尚未施加最终对角线物理下限。" data-success="正确。零信息方向得到 40 m² 的大方差，而不是 0 或无穷。">
+        <label for="ch05-ex1">练习 1：只经过特征值夹紧与缩放，沿轴方差 $s/1e-4$ 是多少（m²）？</label>
+        <div class="exercise-row"><input class="exercise-input" id="ch05-ex1" name="answer" inputmode="decimal" placeholder="输入数值" /><button class="btn btn-primary btn-sm" type="submit">检查</button></div>
+        <div class="exercise-feedback" aria-live="polite"></div>
+      </form>
+
+      <form class="hands-on-exercise" data-kind="number" data-answer="0.0001" data-tolerance="1e-12" data-hint="先算 s/100=4e-5，再与平移物理下限 1e-4 取最大值。" data-success="正确。4e-5 被物理下限托到 1e-4；这与特征值夹紧是两个不同阶段。">
+        <label for="ch05-ex2">练习 2：再施加物理方差下限后，横向方差 $s/100$ 最终是多少（m²）？</label>
+        <div class="exercise-row"><input class="exercise-input" id="ch05-ex2" name="answer" inputmode="decimal" placeholder="输入数值" /><button class="btn btn-primary btn-sm" type="submit">检查</button></div>
+        <div class="exercise-feedback" aria-live="polite"></div>
+      </form>
+
+      <form class="hands-on-exercise" data-kind="choice" data-answer="H" data-hint="Hd 含人为正则项；协方差要描述扫描的真实信息，应使用 best_H。" data-success="正确。生产调用是 cov_from_hessian(best_H, best_var)，不是 cov_from_hessian(Hd, ...)。">
+        <label for="ch05-ex3">练习 3：计算匹配协方差时，应传入未阻尼的 H，还是用于求解的 Hd？</label>
+        <div class="exercise-row"><input class="exercise-input" id="ch05-ex3" name="answer" placeholder="输入 H 或 Hd" /><button class="btn btn-primary btn-sm" type="submit">检查</button></div>
+        <div class="exercise-feedback" aria-live="polite"></div>
+      </form>
+
+      <div class="callout callout-tip">
+        <div class="callout-head">完成标准</div>
+        <ul>
+          <li>能按顺序说出：对称化、特征分解、夹紧、求逆、缩放、物理下限；知道为什么不能先求逆再补对角线。</li>
+          <li>实时走廊面板至少夹紧一个特征值，且 <code>Σxx/Σyy &gt; 1000</code>；仓库面板的未阻尼 H 不应被强行夹紧。</li>
+          <li>源码步进覆盖 <code>L70-98</code>、<code>L335-348</code>、<code>L384-389</code>，能指出最终协方差实参是 <code>best_H</code>。</li>
+          <li><code>node --check docs/scan_localizer_tutorial/js/hands-on-ch05.js</code> 通过；浏览器数学核测试 <code>Corridor FieldGn Hessian yields strongly anisotropic covariance (along &gt;&gt; across)</code> 通过。</li>
+          <li>C++ 回归可运行 <code>MatchersTest.AllFiveMatchersConvergeAndDetectCorridorDegeneracy</code> 与 <code>MatchersTest.FieldGnConsistencyAndRollback</code>。</li>
+        </ul>
       </div>
 
       <nav class="pager">

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>第 9 章 · 仿真实验 E1–E10 与 Intel Lab 真值三方评测 | scan_localizer</title>
+  <title>第 9 章 · 从零设计公平基准：E1–E10 与 Intel Lab | scan_localizer</title>
   <link rel="stylesheet" href="../../website/vendor/katex/katex.min.css" />
   <link rel="stylesheet" href="../css/apple.css" />
   <script>window.TUTORIAL_ROOT = ".."; window.PAGE_ID = "ch09";</script>
@@ -13,6 +13,7 @@
   <script defer src="../js/code-manifest.js"></script>
   <script defer src="../js/app.js"></script>
   <script defer src="../js/sim-ch09.js"></script>
+  <script defer src="../js/hands-on-ch09.js"></script>
 </head>
 <body>
   <div id="site-nav"></div>
@@ -20,12 +21,12 @@
   <header class="page-header">
     <div class="container">
       <div class="crumb"><a href="../index.html">概览</a> / 第四阶段 · 实验与评测 / 第 9 章</div>
-      <h1>实验驱动工程：E1–E10 消融与 Intel Lab 真值三方评测</h1>
-      <p class="sub">工程不是猜出来的，而是测出来的。如何搭建不作弊、不泄密的 E1–E10 消融实验框架，并在 450 组 Kümmerle 手工精校真值上正面比拼 <code>nav2_amcl</code> 与 <code>slam_toolbox</code>？</p>
+      <h1>从零设计不作弊的基准实验</h1>
+      <p class="sub">先写假设与配对协议，再写匹配器。用固定种子、相同输入、统一计时口径和逐行原始数据，把“看起来更快”变成可复算的证据；保留 E1–E10 与 Intel Lab 图表，但把历史声明和本轮复现严格分开。</p>
       <div class="pill-row">
-        <span class="pill">预计 30 分钟</span>
-        <span class="pill">核心文件：sim_world.cpp · benchmark.cpp · test_*.cpp</span>
-        <span class="pill">数据：Intel Lab 450 组真值三方实测</span>
+        <span class="pill">预计 50 分钟</span>
+        <span class="pill">核心文件：benchmark.cpp · sim_world.cpp · test_benchmark_regression.cpp</span>
+        <span class="pill">动手：配置 / 公平性检查 / 原始数据 / 复算 / 源码步进</span>
       </div>
     </div>
   </header>
@@ -37,12 +38,16 @@
     </aside>
 
     <article class="article-col">
-      <h2 id="sec-intro"><span class="sec-no">9.1</span>核心评测结论速览（点击切换指标维度）</h2>
-      <p>下面这张交互图表直接汇总了真实 ROS 2 回放实测（<code>Intel Research Lab, 3000 帧</code>）与 x86 Release 受控消融核心数字。切换顶部分段按钮比较精度、耗时与大误差捕获能力：</p>
+      <h2 id="sec-intro"><span class="sec-no">9.1</span>先划清证据边界：历史结果不是本轮复现</h2>
+      <div class="callout callout-pitfall">
+        <div class="callout-head">本节所有静态数字的定位</div>
+        <p>下列 E1–E10 与 Intel Lab 数字是仓库原有文档中的<strong>已声明结果</strong>，本章保留它们用于讲解实验设计；本章没有重跑 C++ 基准或 ROS 2 回放，因此不能把它们写成本轮复现、独立复核或新证据。交互实验台生成的也是明确标记的<strong>合成协议样本</strong>，不会反算这些静态指标。</p>
+      </div>
+      <p>点击切换维度，比较仓库已声明的 Intel Lab 真值精度、E7 单帧耗时与 E2 大误差捕获结果。读图时同时问：输入是否配对？失败是否计入？计时从哪里开始？这些数字能否从逐行原始数据复算？</p>
 
       <div class="lab-frame">
         <div class="lab-head">
-          <div class="lab-title"><span>核心实验数据对比看板</span><span class="lab-badge">实测数据</span></div>
+          <div class="lab-title"><span>核心实验数据对比看板</span><span class="lab-badge">历史已声明结果</span></div>
           <div class="segmented" id="ch09-metric-tabs">
             <button type="button" class="active" data-metric="gt3">Intel Lab 真值精度</button>
             <button type="button" data-metric="e7">E7 单帧计算耗时</button>
@@ -53,12 +58,14 @@
           <div class="lab-canvas-wrap"><canvas id="ch09-bench-canvas" width="740" height="280"></canvas></div>
         </div>
       </div>
+      <p class="hands-on-note">图表数值与 9.2 表格均为静态声明；切换按钮只改变展示维度，不触发 benchmark.cpp，也不读取 Intel Lab 原始日志。</p>
 
-      <h2 id="sec-gt"><span class="sec-no">9.2</span>Intel Lab 450 组精校真值三方同台评测</h2>
-      <p>在相同 591×580 (0.05m) 静态先验地图上，以 ROS 2 Jazzy <code>use_sim_time:=true</code> 40 Hz 顺序回放 <code>intel.clf</code> 全长 128.42 m 环路（3,000 帧激光），采用 **450 组来自 AIS Freiburg 官方 Kümmerle (ICRA 2009) 的人工精校 SE(2) 真值关系**（含 127 个跨回环约束 `Δt &gt; 20s`）评测三方系统：</p>
+      <h2 id="sec-gt"><span class="sec-no">9.2</span>Intel Lab 450 组精校真值：保留图表，补上审计问题</h2>
+      <p>原有结果声明：在相同 591×580 (0.05m) 静态先验地图上，以 ROS 2 Jazzy <code>use_sim_time:=true</code> 40 Hz 顺序回放 <code>intel.clf</code> 全长 128.42 m 环路（3,000 帧激光），采用 450 组来自 AIS Freiburg 官方 Kümmerle (ICRA 2009) 的人工精校 SE(2) 真值关系（含 127 个跨回环约束 <code>Δt &gt; 20s</code>）评测三方系统。</p>
 
       <div class="table-wrap">
         <table>
+          <caption>仓库原有 Intel Lab 结果声明；本轮未重跑，不新增无法核查的指标。</caption>
           <thead><tr><th>定位方案</th><th>有效更新数</th><th>GT 平移 RPE RMSE</th><th>GT 中位误差</th><th>回环误差 (&gt;20s)</th><th>GT 航向 RMSE</th><th>WallDist 贴墙率 (&lt;10cm)</th><th>总 CPU 占比 / 单帧</th><th>峰值 RSS</th></tr></thead>
           <tbody>
             <tr><td><strong>scan_localizer (Composed)</strong></td><td>3,000</td><td><strong>3.06 cm</strong></td><td><strong>1.57 cm</strong></td><td><strong>2.95 cm</strong></td><td><strong>0.46°</strong></td><td><strong>97.4% (1.75 cm)</strong></td><td>12.07% (3.10 ms)</td><td>46.36 MB</td></tr>
@@ -83,21 +90,304 @@
           <div class="fig-cap">图 3 · CPU 占用、P50/Max 延迟与峰值内存对比。</div>
         </div>
       </div>
+      <p>真正复现这张表，至少还要冻结并随结果导出：数据集与地图摘要、二进制和依赖版本、完整参数、每个系统的原始输出、真值时间对齐规则、有效/拒收帧清单、计时边界与主机配置。仅凭汇总表无法判断 517 次有效更新和 3,000 次有效更新是否使用了相同任务口径。</p>
 
-      <h2 id="sec-code"><span class="sec-no">9.3</span>E1–E10 受控消融基准与“防自欺”方法论</h2>
-      <div class="src-bar">
-        <button type="button" class="src-jump" data-file="include/scan_localizer/sim_world.hpp" data-lines="26-82"><span class="tag">源码抽屉</span>sim_world.hpp : L26-82 (仿真环境接口)</button>
-        <button type="button" class="src-jump" data-file="test/benchmark.cpp" data-lines="193-469"><span class="tag">源码抽屉</span>benchmark.cpp : L193-469 (E9 轨线与 E10 10% 滑移 IMU)</button>
-        <button type="button" class="src-jump" data-file="docs/benchmark_results_x86.txt" data-lines="1-89"><span class="tag">源码抽屉</span>benchmark_results_x86.txt : L1-89 (原始报表)</button>
+      <h2 id="sec-protocol"><span class="sec-no">9.3</span>从零写最小公平基准：先协议，后代码</h2>
+      <p>最小实验不是“跑两个函数看看谁数值小”，而是一条不可回滚的证据链：<strong>假设 → 配对输入 → 固定随机流 → 统一判据 → 逐行原始数据 → 独立复算</strong>。先冻结下面这张实验卡，再看任何输出。</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>实验卡字段</th><th>本章最小约定</th><th>防止哪种自欺</th></tr></thead>
+          <tbody>
+            <tr><td>研究问题与假设</td><td>H1：同一地图、扫描、先验和每次调用预算下，A 的配对平移误差中位数比 B 低至少 5 mm。H0：不满足该阈值。只覆盖声明的仿真场景。</td><td>跑完再挑最好看的指标或最好看的子集。</td></tr>
+            <tr><td>试验单元</td><td>一对共享输入 <code>(map, scan, prior, GT, case_id)</code>；A/B 必须逐项同源。建议至少 20 对，默认教学试验 40 对。</td><td>各自随机生成“差不多”的数据，却称为配对。</td></tr>
+            <tr><td>随机流</td><td>一个基准种子派生 case / role-A / role-B 三条独立流；输入在候选循环外生成；记录解析后的种子。</td><td>只写 <code>seed=42</code>，却让代码顺序隐式消费随机数。</td></tr>
+            <tr><td>执行顺序</td><td>逐对 AB/BA 交替；算法随机流按角色和 case_id 隔离，不依赖执行先后。</td><td>A 永远先跑，缓存、温度或调度只惠及一方。</td></tr>
+            <tr><td>主指标与可靠性护栏</td><td>H1 主指标为配对平移误差中位数差 <code>median(e_Ai-e_Bi)</code>；同时报告任务成功率（<code>e_i &lt; 0.05 m</code> 且 <code>|θ_i| &lt; 1°</code>）、有效输出误差中位数/P90。成功率使用全部调用作分母。</td><td>删除失败、只报成功样本的误差或只报平均数。</td></tr>
+            <tr><td>资源指标</td><td>同一计时边界内记录每次调用延迟；报告全调用中位数/P90，并另列超时失败。预算不等时，不能宣称等资源精度优势。</td><td>A 只计匹配，B 却计初始化、预测和更新。</td></tr>
+            <tr><td>无效输出</td><td>NaN、无穷、非有限位姿或超预算一律保留原始行，计为失败；误差为空，不伪造为 0。</td><td>把坏输出过滤后分母变小，得到虚假的低误差。</td></tr>
+            <tr><td>原始数据</td><td>每次调用一行：case/role 种子、输入摘要、输出、误差分量、延迟、有效性与成功标志；配置与汇总单独保存。</td><td>只有一张汇总表，无法定位错误或复算。</td></tr>
+          </tbody>
+        </table>
       </div>
 
+      <div class="math-card">
+        <div class="math-title">指标必须能从原始行复算</div>
+        $$e_i=\sqrt{(x_i-x_i^{GT})^2+(y_i-y_i^{GT})^2},\qquad
+        a_i=\left|\operatorname{wrap}(\theta_i-\theta_i^{GT})\right|,\qquad
+        s_i=\mathbf{1}[e_i&lt;0.05\land a_i&lt;1^\circ]$$
+        $$\Delta_{\text{paired}}=\operatorname{median}_{i}(e_{A,i}-e_{B,i}),\qquad
+        \text{success rate}=\frac{\sum_i s_i}{N_{\text{all calls}}}$$
+        <p class="hands-on-note">配对差只在双方都有效的配对上计算，同时必须报告完整配对覆盖率；误差中位数/P90只在有效输出上计算，并与失败数并列。不能用空误差替代失败，也不能把条件均值冒充全调用指标。</p>
+      </div>
+
+      <p>下面的教学骨架把“测量一次”和“跑配对试验”分开。它刻意不实现任何定位算法：<code>Algorithm</code> 是待审查的黑盒。核心纪律是<strong>先逐行打印原始记录，再打印汇总</strong>；无效输出也占一行。</p>
+      <div class="code-card">
+        <div class="code-head"><span class="code-file">教学最小版：共享输入 + 角色随机流 + 原始行优先（C++17）</span><button type="button" class="code-btn code-copy-btn">复制</button></div>
+        <pre><code class="language-cpp">#include &lt;algorithm&gt;
+#include &lt;array&gt;
+#include &lt;chrono&gt;
+#include &lt;cmath&gt;
+#include &lt;cstdint&gt;
+#include &lt;functional&gt;
+#include &lt;iostream&gt;
+#include &lt;random&gt;
+#include &lt;string&gt;
+#include &lt;vector&gt;
+
+struct Case {
+  std::uint32_t id;
+  std::array&lt;double, 3&gt; gt, prior;
+  std::vector&lt;double&gt; ranges;
+};
+struct Prediction { bool valid; std::array&lt;double, 3&gt; pose; };
+struct RawRow {
+  std::uint32_t case_id, role_seed;
+  std::string arm;
+  bool valid, success;
+  double pos_err, ang_err_deg, latency_ms;
+};
+using Algorithm = std::function&lt;Prediction(const Case &amp;, std::mt19937 &amp;)&gt;;
+using Clock = std::chrono::steady_clock;
+
+std::uint32_t splitmix32(std::uint32_t x) {
+  x += 0x9e3779b9u;
+  x = (x ^ (x &gt;&gt; 16)) * 0x21f0aaadu;
+  x = (x ^ (x &gt;&gt; 15)) * 0x735a2d97u;
+  return x ^ (x &gt;&gt; 15);
+}
+
+RawRow measure(const Case &amp; c, const std::string &amp; arm,
+               std::uint32_t role_seed, const Algorithm &amp; algorithm) {
+  // 每个 role/case 独立造流；执行顺序不再改变算法随机数。
+  std::seed_seq seq{role_seed, c.id};
+  std::mt19937 rng(seq);
+  const auto t0 = Clock::now();
+  const Prediction p = algorithm(c, rng);
+  const double ms = std::chrono::duration&lt;double, std::milli&gt;(
+    Clock::now() - t0).count();
+
+  const bool finite = p.valid &amp;&amp;
+    std::all_of(p.pose.begin(), p.pose.end(),
+                [](double v) { return std::isfinite(v); });
+  const double e = finite ? std::hypot(
+    p.pose[0] - c.gt[0], p.pose[1] - c.gt[1]) : NAN;
+  const double a = finite ? std::abs(std::remainder(
+    p.pose[2] - c.gt[2], 2.0 * std::acos(-1.0))) : NAN;
+  const bool success = finite &amp;&amp; e &lt; 0.05 &amp;&amp;
+    a * 180.0 / std::acos(-1.0) &lt; 1.0;
+  return {c.id, role_seed, arm, finite, success, e,
+          a * 180.0 / std::acos(-1.0), ms};
+}
+
+void paired_run(const std::vector&lt;Case&gt; &amp; cases,
+                const Algorithm &amp; a, const Algorithm &amp; b,
+                std::uint32_t seed) {
+  const auto seed_a = splitmix32(seed ^ 0xA001u);
+  const auto seed_b = splitmix32(seed ^ 0xB002u);
+  std::vector&lt;RawRow&gt; raw;
+  for (std::size_t i = 0; i &lt; cases.size(); ++i) {
+    const auto &amp; c = cases[i];
+    // 按循环索引 AB/BA 交替；A/B 仍消费各自的 role/case 流。
+    if (i % 2 == 0) {
+      raw.push_back(measure(c, "A", seed_a, a));
+      raw.push_back(measure(c, "B", seed_b, b));
+    } else {
+      raw.push_back(measure(c, "B", seed_b, b));
+      raw.push_back(measure(c, "A", seed_a, a));
+    }
+  }
+
+  // 原始行优先于汇总；真实项目应同时保存 map/scan/config 摘要。
+  std::cout &lt;&lt; "case_id,arm,role_seed,valid,success,pos_err_m,"
+               "ang_err_deg,latency_ms\n";
+  for (const auto &amp; r : raw) {
+    std::cout &lt;&lt; r.case_id &lt;&lt; ',' &lt;&lt; r.arm &lt;&lt; ','
+              &lt;&lt; r.role_seed &lt;&lt; ',' &lt;&lt; r.valid &lt;&lt; ','
+              &lt;&lt; r.success &lt;&lt; ',';
+    if (r.valid) {
+      std::cout &lt;&lt; r.pos_err &lt;&lt; ',' &lt;&lt; r.ang_err_deg;
+    } else {
+      std::cout &lt;&lt; "null,null";  // 失败不伪造为零误差
+    }
+    std::cout &lt;&lt; ',' &lt;&lt; r.latency_ms &lt;&lt; '\n';
+  }
+  // 复算器只读取上面的原始行；不得回读算法内部状态。
+}</code></pre>
+      </div>
+      <div class="callout callout-tip">
+        <div class="callout-head">固定种子不是完整可复现</div>
+        <p>固定种子只固定随机流。跨平台复现还必须记录编译器、标准库、CPU、构建类型、依赖版本和算法参数；同一源码在不同 <code>std::</code> 分布实现上也不保证逐位相同。配对实验降低方差，但不能替代独立重复与不确定性报告。</p>
+      </div>
+
+      <h2 id="sec-lab"><span class="sec-no">9.4</span>交互实验台：配置、公平性检查、原始数据与复算</h2>
+      <p>这是一个<strong>纯浏览器合成协议沙盘</strong>：候选由声明好的教学模型代替，不执行 C++ 匹配器，也不产生 Intel Lab 或 E1–E10 真实性能结论。它让你在安全环境中故意破坏配对、预算、计时或失败处理，观察审计器如何拒绝“看起来很好”的结论。</p>
+
+      <div class="hands-on-stepper">
+        <div class="hands-on-toolbar">
+          <div>
+            <div class="hands-on-stage-title">最小配对实验 · 教学合成数据</div>
+            <div class="hands-on-stage-meta">schema: ch09-synthetic-v1 · 不是 C++ / ROS 2 实测</div>
+          </div>
+          <div class="exercise-row">
+            <button type="button" class="btn btn-secondary btn-sm" id="ch09-check-fairness">只检查公平性</button>
+            <button type="submit" form="ch09-lab-form" class="btn btn-primary btn-sm" id="ch09-run-experiment">运行配对试验</button>
+          </div>
+        </div>
+        <form class="hands-on-stage-body" id="ch09-lab-form">
+          <p class="hands-on-explain">默认配置声明 H1：等输入、等预算下，A 的配对平移误差中位数至少比 B 低 5 mm。点击运行后，即使公平性失败也会生成诊断样本，但结论必须显示“不可判定”。</p>
+          <div class="lab-controls">
+            <label class="ctrl-group">候选 A 名称 <input class="exercise-input" id="ch09-name-a" value="candidate_A" maxlength="40" required /></label>
+            <label class="ctrl-group">候选 B 名称 <input class="exercise-input" id="ch09-name-b" value="candidate_B" maxlength="40" required /></label>
+            <label class="ctrl-group">A 教学模型
+              <select class="exercise-input" id="ch09-model-a"><option value="steady">稳态模型</option><option value="coarse">粗收敛模型</option><option value="stressed">易失败模型</option></select>
+            </label>
+            <label class="ctrl-group">B 教学模型
+              <select class="exercise-input" id="ch09-model-b"><option value="coarse">粗收敛模型</option><option value="steady">稳态模型</option><option value="stressed">易失败模型</option></select>
+            </label>
+            <label class="ctrl-group">配对数 <input class="exercise-input" id="ch09-trials" type="number" min="20" max="200" step="1" value="40" required /></label>
+            <label class="ctrl-group">基准种子 <input class="exercise-input" id="ch09-seed" type="number" min="0" max="4294967295" step="1" value="42" required /></label>
+            <label class="ctrl-group">地图标识 <input class="exercise-input" id="ch09-map-id" value="warehouse-demo-v1" maxlength="80" required /></label>
+            <label class="ctrl-group">激光束数
+              <select class="exercise-input" id="ch09-beams"><option value="180">180</option><option value="360" selected>360</option><option value="720">720</option></select>
+            </label>
+            <label class="ctrl-group">A 预算 ms <input class="exercise-input" id="ch09-budget-a" type="number" min="0.1" max="50" step="0.1" value="5" required /></label>
+            <label class="ctrl-group">B 预算 ms <input class="exercise-input" id="ch09-budget-b" type="number" min="0.1" max="50" step="0.1" value="5" required /></label>
+            <label class="ctrl-group">成功阈值 m <input class="exercise-input" id="ch09-success-pos" type="number" min="0.001" max="1" step="0.001" value="0.05" required /></label>
+            <label class="ctrl-group">成功阈值 deg <input class="exercise-input" id="ch09-success-ang" type="number" min="0.1" max="45" step="0.1" value="1" required /></label>
+            <label class="ctrl-group">预先假设
+              <select class="exercise-input" id="ch09-hypothesis"><option value="a">A 的配对误差更低</option><option value="b">B 的配对误差更低</option><option value="explore">仅探索，不确认</option></select>
+            </label>
+            <label class="ctrl-group">配对差阈值 m（负值） <input class="exercise-input" id="ch09-delta" type="number" min="-1" max="1" step="0.001" value="-0.005" required /></label>
+            <label class="ctrl-group">失败处理
+              <select class="exercise-input" id="ch09-failure-policy"><option value="count">保留并计失败</option><option value="drop">删除失败行（故意作弊）</option></select>
+            </label>
+            <label class="ctrl-group">计时口径
+              <select class="exercise-input" id="ch09-timing"><option value="match">双方仅 match</option><option value="pipeline">双方完整 pipeline</option><option value="asymmetric">A 仅 match / B 完整 pipeline</option></select>
+            </label>
+            <label class="ctrl-group">执行顺序
+              <select class="exercise-input" id="ch09-order"><option value="balanced">AB / BA 交替</option><option value="a_first">每对固定 A 先跑</option><option value="b_first">每对固定 B 先跑</option></select>
+            </label>
+          </div>
+          <div class="exercise-row">
+            <label><input type="checkbox" id="ch09-paired" checked /> 共享同一组 map / scan / prior / GT</label>
+            <label><input type="checkbox" id="ch09-fixed-seed" checked /> 固定种子并按 case / role 分流</label>
+            <label><input type="checkbox" id="ch09-precommit" checked /> 已在看结果前锁定假设、阈值与判据</label>
+          </div>
+          <p class="hands-on-note">沙盘输入由种子确定性生成，模型只用于演示协议。关闭“共享同一组输入”会生成两套 cases；关闭“固定种子”会在运行时解析新种子并写入配置。默认 count 模式导出全部调用；drop 模式会明确记录删除行数，仅用于作弊诊断。</p>
+        </form>
+      </div>
+
+      <div class="callout callout-syntax">
+        <div class="callout-head">公平性检查 <span id="ch09-fairness-score">尚未检查</span></div>
+        <p id="ch09-fairness-status" aria-live="polite">修改配置后点击“只检查公平性”，或直接运行。</p>
+        <div class="table-wrap"><table><thead><tr><th>检查项</th><th>结果</th><th>说明</th></tr></thead><tbody id="ch09-fairness-body"></tbody></table></div>
+      </div>
+
+      <div class="lab-frame" id="ch09-results" hidden>
+        <div class="lab-head">
+          <div class="lab-title"><span>合成试验结果与原始记录</span><span class="lab-badge">非真实算法性能</span></div>
+          <div class="exercise-row">
+            <button type="button" class="btn btn-secondary btn-sm" id="ch09-recompute">从 JSONL 复算</button>
+            <button type="button" class="btn btn-secondary btn-sm" id="ch09-download-jsonl">下载原始 JSONL</button>
+            <button type="button" class="btn btn-secondary btn-sm" id="ch09-download-csv">下载原始 CSV</button>
+            <button type="button" class="btn btn-secondary btn-sm" id="ch09-download-config">下载配置</button>
+          </div>
+        </div>
+        <div class="lab-body">
+          <p id="ch09-run-status" aria-live="polite"></p>
+          <p id="ch09-decision" aria-live="polite"></p>
+          <p id="ch09-recompute-status" aria-live="polite"></p>
+          <dl class="hands-on-vars" id="ch09-summary-vars"></dl>
+          <p class="hands-on-note" id="ch09-raw-count"></p>
+          <div class="table-wrap"><table><thead><tr><th>case</th><th>arm</th><th>order</th><th>valid</th><th>success</th><th>pos err (m)</th><th>ang err (deg)</th><th>latency (ms)</th><th>input digest</th></tr></thead><tbody id="ch09-raw-preview"></tbody></table></div>
+          <p class="hands-on-note">预览只显示前 8 行；JSONL/CSV 下载包含全部导出指标行，完整激光 ranges 保留在 JSONL 的 <code>input</code> 中。复算按钮先序列化再解析 JSONL，从原始 GT 与输出 pose 重算误差、成功标志和汇总指纹，不信任行内预计算值。</p>
+        </div>
+      </div>
+
+      <h2 id="sec-stepper"><span class="sec-no">9.5</span>真实 benchmark.cpp 源码步进：读懂实现，也审计实现</h2>
+      <p>以下片段逐字取自当前分支的 <code>src/scan_localizer/test/benchmark.cpp</code>，并标出真实行号。它们不是理想化重写：尤其注意单一 <code>rng(42)</code>、候选顺序消费随机流，以及 E9 两个架构并不相同的计时边界。点击“下一步”逐段对照实验卡。</p>
+      <div class="src-bar">
+        <button type="button" class="src-jump" data-file="include/scan_localizer/sim_world.hpp" data-lines="26-82"><span class="tag">仿真接口</span>sim_world.hpp : L26-82</button>
+        <button type="button" class="src-jump" data-file="test/benchmark.cpp" data-lines="130-169"><span class="tag">指标循环</span>benchmark.cpp : L130-169 (run_trials)</button>
+        <button type="button" class="src-jump" data-file="test/benchmark.cpp" data-lines="193-469"><span class="tag">轨迹与 IMU</span>benchmark.cpp : L193-469 (E9 / E10)</button>
+        <button type="button" class="src-jump" data-file="test/test_benchmark_regression.cpp" data-lines="54-200"><span class="tag">可运行回归</span>test_benchmark_regression.cpp : L54-200</button>
+      </div>
+      <div class="hands-on-stepper">
+        <div class="hands-on-toolbar">
+          <div>
+            <div class="hands-on-stage-title" id="ch09-stage-title"></div>
+            <div class="hands-on-stage-meta" id="ch09-stage-meta"></div>
+          </div>
+          <div class="exercise-row">
+            <button type="button" class="btn btn-secondary btn-sm" id="ch09-stage-prev">← 上一步</button>
+            <span class="ctrl-val" id="ch09-stage-index">1 / 10</span>
+            <button type="button" class="btn btn-primary btn-sm" id="ch09-stage-next">下一步 →</button>
+          </div>
+        </div>
+        <div class="hands-on-stage-body">
+          <p class="hands-on-explain" id="ch09-stage-explain"></p>
+          <div class="code-card">
+            <div class="code-head">
+              <button type="button" class="src-jump" id="ch09-stage-source"><span class="tag">源码抽屉</span>打开当前实现</button>
+              <button type="button" class="code-btn" id="ch09-stage-copy">复制</button>
+            </div>
+            <pre><code class="language-cpp" id="ch09-stage-code"></code></pre>
+          </div>
+          <dl class="hands-on-vars" id="ch09-stage-vars"></dl>
+        </div>
+      </div>
       <div class="callout callout-pitfall">
-        <div class="callout-head">Phase 5 在基准代码里抓出的三大“自欺欺人”陷阱</div>
+        <div class="callout-head">源码存在 ≠ 比较已经公平</div>
         <ul>
-          <li><strong>陷阱 1：<code>rng() % N</code> 把 <code>mt19937</code> 无符号随机数传给浮点分支导致 0 动态障碍</strong>：修复前 E4 表面测动态鲁棒性，实际注入箱数接近 0，修复后强制验证最小注入 200 箱才可过审。</li>
-          <li><strong>陷阱 2：激光点云离散重分箱引入 <code>-0.25°</code> 偏置</strong>：新写 <code>make_laser_ranges</code> 直接按原生光束角 <code>angle_min + i * angle_increment</code> 求交（<code>sim_world.cpp:L198</code>）。</li>
-          <li><strong>陷阱 3：用“有误差的真值泄露”当 E6 基准先验</strong>：严格在配对试验（paired trials）下锁定同一套真值点云与同一张 <code>MapField</code> 评测所有匹配器。</li>
+          <li><code>rng(42)</code> 能固定一条全局随机流，却不能自动保证“改代码顺序仍同输入”。E1/E2 的输入在候选循环前生成，是配对的基础；更严格的教学协议会按 case/role 分流并导出每条输入。</li>
+          <li>E4 当前代码检查 <code>min_boxes_per_trial &lt;= 0</code> 时直接失败；正常运行 <code>N1=100</code>、每轮尝试注入 2 箱，因此预期累计 200 箱且每轮至少 1 箱。准确说法是“校验实际注入”，不是代码里写了固定 200 箱门限。</li>
+          <li>E9 架构 A 的 <code>cpu_ms_sum</code> 包含每个 <code>on_odom</code> 与扫描帧；架构 B 只在扫描帧计时 <code>predict/update/estimate</code>，累计增量的合成在计时外。两侧输入虽配对，当前 CPU 数字却不能直接当同口径性能对比。</li>
+          <li>E10 在当前打滑档位内预生成配对 odom/gyro，再切换 IMU 开关，变量隔离比 E9 清晰；但跨档位仍消费同一全局 RNG，复现时应保存全部种子与配置。</li>
         </ul>
+      </div>
+      <p>仓库还提供可运行的 <code>BenchmarkRegression</code> 回归（E1/E4/E5/E8）。它们适合守定量不变量，不等于完整独立复现。实际复核命令：</p>
+      <div class="code-card">
+        <div class="code-head"><span class="code-file">终端：构建并运行基准与回归</span><button type="button" class="code-btn code-copy-btn">复制</button></div>
+        <pre><code class="language-bash">source /opt/ros/jazzy/setup.bash
+source ../../install/setup.bash
+colcon build --packages-select scan_localizer --cmake-args -DCMAKE_BUILD_TYPE=Release
+./install/scan_localizer/lib/scan_localizer/scan_localizer_benchmark
+colcon test --packages-select scan_localizer
+colcon test-result --verbose</code></pre>
+      </div>
+
+      <h2 id="sec-exercise"><span class="sec-no">9.6</span>识别自欺实验：三道验收题</h2>
+      <p>每题都给出一份“看起来很合理”的实验声明。先指出它是否支持结论，再提交；验收要求三题全部通过，并能在实验台复现对应陷阱。</p>
+
+      <form class="hands-on-exercise" data-exercise="pairing" data-kind="choice" data-answer="not_paired" data-success="正确：同一种子只说明随机流规则相同，各自生成的 case 仍不是同一试验单元，不能计算配对差。" data-hint="检查每一对 A/B 的 map、scan、prior 和 GT 是否逐项相同；种子相同不等于输入相同。">
+        <label for="ch09-ex1">练习 1：A 用种子 42 生成 50 个 case，B 也用种子 42 单独生成 50 个 case，随后 A 声称自己的中位误差更低。这能称为 paired 吗？填 <code>paired</code> 或 <code>not_paired</code>。</label>
+        <div class="exercise-row"><input class="exercise-input" id="ch09-ex1" name="answer" placeholder="paired / not_paired" required /><button class="btn btn-primary btn-sm" type="submit">检查</button></div>
+        <div class="exercise-feedback" aria-live="polite"></div>
+      </form>
+
+      <form class="hands-on-exercise" data-exercise="timing" data-kind="choice" data-answer="not_fair" data-success="正确：E9 的输入配对并不等于计时配对。A 包含所有 on_odom 与扫描帧，B 只计扫描帧内的 predict/update/estimate，当前 CPU 数字不能直接比较。" data-hint="回到源码步进第 7、8 步，分别圈出 Clock::now() 与 ms_of() 的位置。">
+        <label for="ch09-ex2">练习 2：E9 的 A/B 共享轨迹、扫描和初值，但 A 的 CPU 计时包含所有 <code>on_odom</code> 与扫描帧，B 只计扫描帧。可以直接宣布 B 更省 CPU 吗？填 <code>fair</code> 或 <code>not_fair</code>。</label>
+        <div class="exercise-row"><input class="exercise-input" id="ch09-ex2" name="answer" placeholder="fair / not_fair" required /><button class="btn btn-primary btn-sm" type="submit">检查</button></div>
+        <div class="exercise-feedback" aria-live="polite"></div>
+      </form>
+
+      <form class="hands-on-exercise" data-exercise="failure" data-kind="choice" data-answer="not_valid" data-success="正确：删除失败会改变任务难度和分母。必须保留全部调用、把无效输出计为失败，并同时报告有效数与失败数。" data-hint="如果 B 的 5 次失败恰好都是困难 case，过滤后当然会更好看；这违反了预先声明的全体调用口径。">
+        <label for="ch09-ex3">练习 3：A 有 50/50 成功；B 有 45/50 成功，但报告时删掉 5 个 NaN/超时行，只展示 45 行的低误差中位数。这个“B 精度更高”的结论有效吗？填 <code>valid</code> 或 <code>not_valid</code>。</label>
+        <div class="exercise-row"><input class="exercise-input" id="ch09-ex3" name="answer" placeholder="valid / not_valid" required /><button class="btn btn-primary btn-sm" type="submit">检查</button></div>
+        <div class="exercise-feedback" aria-live="polite"></div>
+      </form>
+
+      <div class="callout callout-tip">
+        <div class="callout-head">完成标准 <span id="ch09-exercise-score">（0 / 3）</span></div>
+        <ul>
+          <li>能写出一条可证伪的 H1，并明确场景、样本单元、主指标与最小增益。</li>
+          <li>能解释配对输入、角色随机流、AB/BA 顺序与统一预算分别控制什么。</li>
+          <li>能从原始行复算成功率、误差中位数/P90、配对差，并保留失败分母。</li>
+          <li>能指出 E4 实际注入校验、E9 计时边界与 E10 配对消融的差异。</li>
+          <li>三题全部通过，且能说明为什么 Intel Lab 静态表不是本轮复现。</li>
+        </ul>
+        <p id="ch09-acceptance" aria-live="polite">练习验收尚未完成。</p>
+        <button type="button" class="btn btn-secondary btn-sm" id="ch09-reset-exercises">重置练习</button>
       </div>
 
       <nav class="pager">
