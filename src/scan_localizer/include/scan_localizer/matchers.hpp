@@ -50,6 +50,7 @@ struct MatchOptions
   double window_ang{0.10};      // ± rad
   double step_lin{0.03};        // 粗搜步长
   double step_ang{0.02};        // 粗搜角步长
+  bool correlative_two_stage{true};  // 仅需要粗捕获再接 GN 精修时可设为 false 跳过细轮 SDF+exp
     // 精修通用
   int max_iterations{20};
   double converg_t{1e-4};       // m

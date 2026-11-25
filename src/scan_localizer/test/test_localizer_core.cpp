@@ -813,4 +813,118 @@ TEST(LocalizerCoreTest, SetOptionsHotSwapAndNonFiniteInputSafety)
   EXPECT_TRUE(out.covariance.allFinite());
 }
 
+TEST(LocalizerCoreTest, InPlaceRotationWithLateralSkewSurvivesMahalGate)
+{
+  const auto & wf = shared_warehouse();
+  auto sm = std::make_shared<ScriptedMatcher>();
+
+  sloc::CoreConfig cfg;
+  cfg.odom_trans_var_per_m = 1e-3;
+  cfg.odom_trans_var_per_rad = 1.5e-2;
+  cfg.odom_rot_var_per_rad = 1.5e-2;
+  cfg.min_score = 0.35;
+  cfg.min_inlier_ratio = 0.45;
+  cfg.mahal_gate = 9.0;
+  sloc::LocalizerCore core(cfg);
+  core.set_map(wf.field);
+  core.set_matcher(sm);
+
+  sloc::Pose2 odom(0.0, 0.0, 0.0);
+  const sloc::Pose2 p0(5.0, 5.0, 0.0);
+  core.on_odom(odom);
+  core.set_initial_pose(p0, sloc::Cov3::Identity() * 1e-4);
+
+  const sloc::Scan dummy = make_dummy_scan();
+  for (int i = 0; i < 6; ++i) {
+    odom = odom * sloc::Pose2(0.0, 0.0, -0.11);
+    core.on_odom(odom);
+    const sloc::Pose2 pred(p0.x, p0.y, sloc::wrap_angle(-0.11 * (i + 1)));
+    sm->next_result.valid = true;
+    // Simulate real-device 10cm lateral shift seen during ~60 deg/s in-place spin
+    sm->next_result.pose = sloc::Pose2(pred.x, pred.y + 0.10, pred.theta - 0.01);
+    sm->next_result.score = 0.75;
+    sm->next_result.inlier_ratio = 0.75;
+    sm->next_result.covariance = sloc::Cov3::Zero();
+    sm->next_result.covariance(0, 0) = 6.25e-4;
+    sm->next_result.covariance(1, 1) = 6.25e-4;
+    sm->next_result.covariance(2, 2) = 4.0e-4;
+
+    const auto out = core.on_scan(dummy);
+    EXPECT_TRUE(out.accepted) << "step " << i;
+    EXPECT_EQ(out.state, sloc::LocState::TRACKING);
+  }
+}
+
+TEST(LocalizerCoreTest, HypothesisPromotionHysteresisPreventsWeakCandidateSteal)
+{
+  class CompetingHypMatcher : public sloc::Matcher {
+  public:
+    double leader_score{0.80};
+    double leader_inlier{0.85};
+    double runner_score{0.52};
+    double runner_inlier{0.62};
+
+    sloc::MatchResult match(
+      const sloc::MapField &, const sloc::Pose2 & prior,
+      const sloc::Scan &, const sloc::MatchOptions &) const override
+    {
+      sloc::MatchResult r;
+      r.valid = true;
+      r.pose = prior;
+      r.covariance = sloc::Cov3::Identity() * 1e-3;
+      if (prior.x < 8.0) {
+        r.score = leader_score;
+        r.inlier_ratio = leader_inlier;
+      } else {
+        r.score = runner_score;
+        r.inlier_ratio = runner_inlier;
+      }
+      return r;
+    }
+  };
+
+  const auto & wf = shared_warehouse();
+  auto hm = std::make_shared<CompetingHypMatcher>();
+  const sloc::Scan dummy = make_dummy_scan();
+
+  sloc::CoreConfig cfg;
+  cfg.min_score = 0.35;
+  cfg.min_inlier_ratio = 0.45;
+  cfg.hyp_confirm_frames = 2;
+  cfg.hyp_min_score = 0.45;
+  cfg.hyp_min_inlier = 0.50;
+  cfg.anomaly_window = 0;
+  sloc::LocalizerCore core(cfg);
+  core.set_map(wf.field);
+  core.set_matcher(hm);
+
+  core.on_odom(sloc::Pose2(0.0, 0.0, 0.0));
+  core.set_initial_pose(sloc::Pose2(0.0, 0.0, 0.0));
+  ASSERT_TRUE(core.request_global());
+  const sloc::Pose2 leader(5.0, 5.0, 0.0);
+  const sloc::Pose2 runner(12.0, 12.0, 0.0);
+  core.add_hypotheses({leader, runner});
+
+  // Frame 1: both pass (confirm=1,1) -> not yet promoted
+  EXPECT_FALSE(core.on_scan(dummy).accepted);
+
+  // Frame 2: leader still leads on score (0.65 >= 0.52 + 0.08) though slightly below
+  // hyp_min_inlier, while runner hits confirm=2 at 0.52 -> runner must NOT steal!
+  hm->leader_score = 0.65;
+  hm->leader_inlier = 0.48;
+  auto out = core.on_scan(dummy);
+  EXPECT_FALSE(out.accepted);
+  EXPECT_EQ(core.state(), sloc::LocState::GLOBAL);
+
+  // Frame 3: leader recovers -> hysteresis decremented 1->0 then +1? Wait: if hysteresis kept >0 or
+  // needs one more frame, either way leader (x ~ 5.0) must win, never runner (x ~ 12.0).
+  hm->leader_score = 0.80;
+  hm->leader_inlier = 0.85;
+  for (int i = 0; i < 2 && !out.accepted; ++i) {
+    out = core.on_scan(dummy);
+  }
+  EXPECT_TRUE(out.accepted);
+  EXPECT_NEAR(out.pose.x, leader.x, 1e-6);
+}
+
 }  // namespace

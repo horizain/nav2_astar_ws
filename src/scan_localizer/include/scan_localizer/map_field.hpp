@@ -83,13 +83,14 @@ struct OccupancyGrid
 // ---------- 带符号距离场 + 似然场 + 金字塔 ----------
 class MapField {
 public:
-  // sigma_m: 似然场平滑尺度(m)；支持自定义占据/自由阈值与最大金字塔层数
+  // sigma_m: 似然场平滑尺度(m)；支持自定义占据/自由阈值、最大金字塔层数与可选跳过逆向 EDT
   bool build(
     std::shared_ptr<const OccupancyGrid> grid,
     double sigma_m = 0.20,
     int occupied_thresh = 65,
     int free_thresh = 25,
-    int max_pool_levels = 16);
+    int max_pool_levels = 16,
+    bool compute_free_edt = true);
 
   // 便捷重载：复制一份共享所有权，避免调用方局部变量析构导致悬空指针
   bool build(
@@ -97,7 +98,8 @@ public:
     double sigma_m = 0.20,
     int occupied_thresh = 65,
     int free_thresh = 25,
-    int max_pool_levels = 16);
+    int max_pool_levels = 16,
+    bool compute_free_edt = true);
 
   bool valid() const {return valid_ && grid_ != nullptr;}
   const OccupancyGrid & grid() const {return *grid_;}
@@ -107,17 +109,13 @@ public:
   // grad: 插值解析梯度（指向 SDF 增大方向，单位 m/m）
   double sdf(double gx, double gy, Eigen::Vector2d * grad = nullptr) const;
 
-  // 似然打分：点(栅格系) → [0,1]
+  // 似然打分：点(栅格系) → [0,1]（build 时未知/灰区已写入 unknown_score_，单次查表）
   inline double likelihood(int ix, int iy) const
   {
     if (!valid_ || !grid_->inside(ix, iy)) {return 0.0;}
     const std::size_t idx =
       static_cast<std::size_t>(iy) * static_cast<std::size_t>(grid_->width) +
       static_cast<std::size_t>(ix);
-    const int8_t c = grid_->cells[idx];
-    if (c < 0 || (c > free_thresh_ && c <= occupied_thresh_)) {
-      return unknown_score_;
-    }
     return like_[idx];
   }
   double likelihoodAtF(double gx, double gy) const

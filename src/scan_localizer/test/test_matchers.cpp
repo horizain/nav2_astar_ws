@@ -110,6 +110,14 @@ TEST(MatchersTest, CorrelativeConvergesWithoutDoubleOffset)
     EXPECT_LT(err_th, 1.0 * kDeg);
     expect_valid_non_identity_spd_cov(res.covariance);
   }
+
+  sloc::MatchOptions coarse_only = opt;
+  coarse_only.correlative_two_stage = false;
+  const sloc::Pose2 prior(gt.x + 0.12, gt.y - 0.10, gt.theta + 4.0 * kDeg);
+  const auto coarse_res = matcher.match(field, prior, scan, coarse_only);
+  ASSERT_TRUE(coarse_res.valid);
+  EXPECT_LT(std::hypot(coarse_res.pose.x - gt.x, coarse_res.pose.y - gt.y), 0.08);
+  EXPECT_LT(std::abs(sloc::wrap_angle(coarse_res.pose.theta - gt.theta)), 3.0 * kDeg);
 }
 
 TEST(MatchersTest, IcpP2pRotationalConvergenceAndEarlyExitCov)

@@ -139,16 +139,18 @@ void edt1d(
 
 bool MapField::build(
   const OccupancyGrid & grid, double sigma_m,
-  int occupied_thresh, int free_thresh, int max_pool_levels)
+  int occupied_thresh, int free_thresh, int max_pool_levels,
+  bool compute_free_edt)
 {
   return build(
     std::make_shared<OccupancyGrid>(grid), sigma_m,
-    occupied_thresh, free_thresh, max_pool_levels);
+    occupied_thresh, free_thresh, max_pool_levels, compute_free_edt);
 }
 
 bool MapField::build(
   std::shared_ptr<const OccupancyGrid> grid, double sigma_m,
-  int occupied_thresh, int free_thresh, int max_pool_levels)
+  int occupied_thresh, int free_thresh, int max_pool_levels,
+  bool compute_free_edt)
 {
   valid_ = false;
   grid_.reset();
@@ -196,9 +198,10 @@ bool MapField::build(
   if (has_occ) {
     edt2d(grid_->width, grid_->height, occ_seeds, d_occ);
   }
-  if (has_free) {
+  if (compute_free_edt && has_free) {
     edt2d(grid_->width, grid_->height, free_seeds, d_free);
   }
+  const bool use_free_edt = compute_free_edt && has_free;
 
   // 2) SDF：自由 >0（距墙），障碍表面 =0，障碍内部 <0，未知区给有界负值（非 0）
   sdf_cells_.resize(n);
@@ -214,9 +217,9 @@ bool MapField::build(
     const int8_t c = grid_->cells[i];
     if (c > occupied_thresh_) {
       // 紧邻自由空间的障碍格 d_free==1 → sdf==0（表面），厚墙内部 d_free>1 → sdf<0
-      const double sdf_m = has_free ?
+      const double sdf_m = use_free_edt ?
         -(std::sqrt(d_free[i]) - 1.0) * res :
-        -max_dist_m;
+        (compute_free_edt ? -max_dist_m : 0.0);
       sdf_cells_[i] = static_cast<float>(sdf_m);
       like_[i] = static_cast<float>(std::exp(-sdf_m * sdf_m / s2));
     } else if (c >= 0 && c <= free_thresh_) {
@@ -227,7 +230,7 @@ bool MapField::build(
       like_[i] = static_cast<float>(std::exp(-sdf_m * sdf_m / s2));
     } else {
       // 未知区：绝不产生正 SDF，全未知图也不为 0；似然给低背景值
-      const double sdf_m = has_free ?
+      const double sdf_m = use_free_edt ?
         -std::min(std::sqrt(d_free[i]) * res, unknown_sdf_bound) :
         -unknown_sdf_bound;
       sdf_cells_[i] = static_cast<float>(sdf_m);

@@ -139,7 +139,8 @@ MatchResult CorrelativeMatcher::match(
   const double max_gx = static_cast<double>(grid->width - 1);
   const double max_gy = static_cast<double>(grid->height - 1);
 
-  for (int round = 0; round < 2; ++round) {
+  const int max_rounds = opt.correlative_two_stage ? 2 : 1;
+  for (int round = 0; round < max_rounds; ++round) {
     if (round == 1) {
       best_s = -1.0;  // 细轮用连续 SDF 似然重评分，消除栅格量化平顶
     }
@@ -323,6 +324,7 @@ MatchResult FieldGnMatcher::match(
   Pose2 best_pose = p;
   Eigen::Matrix3d best_H = Eigen::Matrix3d::Zero();
   double best_var = 1e-6;
+  int best_used = 0;
 
   for (int it = 0; it < opt.max_iterations; ++it) {
     Eigen::Matrix3d H;
@@ -339,6 +341,7 @@ MatchResult FieldGnMatcher::match(
       best_pose = p;
       best_H = H;
       best_var = std::max(ravg, 1e-6);
+      best_used = used;
     }
 
       // LM 阻尼只用于解步；协方差用未阻尼 Hessian（退化方向如实膨胀）
@@ -378,11 +381,14 @@ MatchResult FieldGnMatcher::match(
       best_pose = p;
       best_H = H_end;
       best_var = std::max(ravg_end, 1e-6);
+      best_used = used_end;
     }
   }
 
   res.pose = best_pose;
-  res.covariance = cov_from_hessian(best_H, best_var);
+  // 相邻激光点沿墙面高度空间相关，按约 24 个有效独立观测聚类缩放，防 N 点叠加过度自信
+  const double eff_scale = std::max(1.0, static_cast<double>(best_used) / 24.0);
+  res.covariance = cov_from_hessian(best_H, best_var * eff_scale);
   eval_stats(field, res.pose, scan, opt.inlier_gate, res.score,
     res.inlier_ratio);
   res.valid = true;
@@ -854,17 +860,20 @@ GlobalResult global_correlative(
       return dist_m < kNmsLinM && dang < kNmsAngRad;
     };
 
-  auto update_worst_kept = [&]()
+  auto update_bounds = [&]()
     {
+      double w = hyps.empty() ? 0.0 : hyps[0].score;
+      double b = 0.0;
+      for (const auto & h : hyps) {
+        w = std::min(w, h.score);
+        b = std::max(b, h.score);
+      }
+      const double rel_floor = (b > 0.35) ? (b - 0.25) : 0.0;
       if (static_cast<int>(hyps.size()) < topk) {
-        worst_kept = 0.0;
-        return;
+        worst_kept = rel_floor;
+      } else {
+        worst_kept = std::max(w, rel_floor);
       }
-      double w = hyps[0].score;
-      for (std::size_t i = 1; i < hyps.size(); ++i) {
-        w = std::min(w, hyps[i].score);
-      }
-      worst_kept = w;
     };
 
     // B&B 主循环
@@ -872,8 +881,8 @@ GlobalResult global_correlative(
   while (!pq.empty()) {
     const Node nd = pq.top();
     pq.pop();
-    if (static_cast<int>(hyps.size()) >= topk && nd.bound <= worst_kept) {
-      break;        // 剪枝：所有剩余节点上界均不超过当前第 K 优假设
+    if (nd.bound <= worst_kept) {
+      break;        // 剪枝：所有剩余节点上界均不超过当前第 K 优下界或最优峰-裕度阈值
     }
     const auto & A = ang[static_cast<std::size_t>(nd.aidx)];
     if (nd.level == 0) {
@@ -888,7 +897,7 @@ GlobalResult global_correlative(
         sc += field.likelihood(c.x() + nd.bx, c.y() + nd.by);
       }
       sc /= n;
-      if (sc > 0.10) {
+      if (sc > 0.10 && sc > worst_kept) {
         const Hyp cand{sc, nd.bx, nd.by, nd.aidx};
         bool merged = false;
         for (auto & h : hyps) {
@@ -910,7 +919,7 @@ GlobalResult global_correlative(
             }
           }
         }
-        update_worst_kept();
+        update_bounds();
       }
       continue;
     }
@@ -926,9 +935,7 @@ GlobalResult global_correlative(
           continue;
         }
         const double sc = eval_block_bound(nd.level - 1, bx, by, A);
-        if (sc > 0.05 &&
-          (static_cast<int>(hyps.size()) < topk || sc > worst_kept))
-        {
+        if (sc > 0.05 && sc > worst_kept) {
           pq.push({sc, nd.level - 1, bx, by, nd.aidx});
         }
         ++expanded;

@@ -319,14 +319,19 @@ bool LocalizerCore::try_promote_hypotheses(const Scan & scan, CoreOutput & out)
   int best_idx = -1;
   double best_score = -1.0;
   MatchResult best_mr;
+  double frame_best_score = -1.0;
 
   for (std::size_t i = 0; i < hypotheses_.size(); ++i) {
     auto & h = hypotheses_[i];
     const MatchResult mr = matcher_->match(*field_, h.pose, scan, cfg_.match_opt);
-    const bool ok = mr.valid &&
+    const bool valid_match = mr.valid &&
       is_finite_pose(mr.pose) &&
       std::isfinite(mr.score) &&
-      std::isfinite(mr.inlier_ratio) &&
+      std::isfinite(mr.inlier_ratio);
+    if (valid_match && mr.inlier_ratio >= cfg_.min_inlier_ratio) {
+      frame_best_score = std::max(frame_best_score, mr.score);
+    }
+    const bool ok = valid_match &&
       mr.score >= cfg_.hyp_min_score &&
       mr.inlier_ratio >= cfg_.hyp_min_inlier;
     if (ok) {
@@ -339,11 +344,16 @@ bool LocalizerCore::try_promote_hypotheses(const Scan & scan, CoreOutput & out)
         best_mr = mr;
       }
     } else {
-      h.confirm_count = 0;
+      // 滞回退火：单帧偶发遮挡不直接清零，防低分次优对称峰趁虚抢先晋升
+      h.confirm_count = std::max(0, h.confirm_count - 1);
     }
   }
 
-  if (best_idx < 0) {
+  // 多峰竞争保护：若当前帧存在显著更高分的另一竞争假设（差值 >= 0.08），
+  // 则暂缓低分假设抢跑晋升，继续观察确认。
+  if (best_idx < 0 ||
+    (hypotheses_.size() > 1 && frame_best_score >= best_score + 0.08))
+  {
     return false;
   }
 
@@ -560,9 +570,10 @@ CoreOutput LocalizerCore::on_scan(const Scan & scan)
   double q_rot = 0.0;
   if (has_odom_) {
     const double dtrans = std::hypot(delta.x, delta.y);
-    q_trans = dtrans * cfg_.odom_trans_var_per_m;
+    const double drot = std::abs(delta.theta);
+    q_trans = dtrans * cfg_.odom_trans_var_per_m + drot * cfg_.odom_trans_var_per_rad;
     q_rot = dtrans * cfg_.odom_rot_var_per_m +
-      std::abs(delta.theta) * (imu_used ? cfg_.imu_rot_var_per_rad : cfg_.odom_rot_var_per_rad);
+      drot * (imu_used ? cfg_.imu_rot_var_per_rad : cfg_.odom_rot_var_per_rad);
     if (imu_used && dt_imu > 0.0) {
       q_rot += dt_imu * cfg_.imu_rot_var_per_rad;
     }
