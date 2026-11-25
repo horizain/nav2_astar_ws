@@ -16,7 +16,7 @@ const PAGES = [
   { rel: "chapters/ch01.html" },
   { rel: "chapters/ch02.html", shot: "02_ch02.png" },
   { rel: "chapters/ch03.html" },
-  { rel: "chapters/ch04.html", shot: "04_ch04.png", testDrawer: true },
+  { rel: "chapters/ch04.html", shot: "04_ch04.png", testDrawer: true, testHandsOn: true },
   { rel: "chapters/ch05.html" },
   { rel: "chapters/ch06.html" },
   { rel: "chapters/ch07.html", shot: "07_ch07.png", testDrawer: true },
@@ -186,6 +186,30 @@ async function main() {
         const validVsc = drawerState.vscHref.startsWith('vscode://vscode-remote/wsl+');
         drawerOk = drawerState.open && drawerState.lines > 10 && drawerState.hl >= 1 && validVsc;
         if (!drawerOk) failures.push(`${pg.rel}: drawer failed (${JSON.stringify(drawerState)})`);
+      }
+
+      if (pg.testHandsOn) {
+        await cdp.evalJS(`document.getElementById('ch04-step').click()`);
+        await sleep(250);
+        const handsOnCheck = await cdp.evalJS(`(() => {
+          const before = document.getElementById('ch04-stage-title').textContent;
+          document.getElementById('ch04-stage-next').click();
+          const after = document.getElementById('ch04-stage-title').textContent;
+          const input = document.getElementById('ch04-ex1');
+          input.value = '0.5';
+          input.closest('form').requestSubmit();
+          return {
+            exampleVars: document.querySelectorAll('#ch04-example-vars .hands-on-var').length,
+            liveVars: document.querySelectorAll('#ch04-live-vars .hands-on-var').length,
+            liveIter: document.getElementById('ch04-live-iter').textContent,
+            stageChanged: before !== after,
+            exerciseOk: input.closest('form').querySelector('.exercise-feedback').classList.contains('ok'),
+          };
+        })()`);
+        if (handsOnCheck.exampleVars < 8 || handsOnCheck.liveVars < 3 ||
+            !handsOnCheck.liveIter.includes('#1') || !handsOnCheck.stageChanged || !handsOnCheck.exerciseOk) {
+          failures.push(`${pg.rel}: hands-on interaction failed (${JSON.stringify(handsOnCheck)})`);
+        }
       }
 
       if (pg.testWalkthrough) {

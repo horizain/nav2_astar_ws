@@ -15,6 +15,10 @@
     let iter = 0;
     let curPose = { x: gt.x + 0.32, y: gt.y - 0.25, theta: gt.theta + 0.16 };
     let forces = [];
+    let lastStep = null;
+    let bestRavg = Infinity;
+    let bestPose = { ...curPose };
+    let bestH = null;
     let scanPts = S.makeScan(grid, gt, { beams: 160, maxRange: 10 });
 
     function rebuildScan() {
@@ -28,18 +32,34 @@
       curPose = { x: gt.x + 0.32, y: gt.y - 0.25, theta: gt.theta + 0.16 };
       iter = 0;
       forces = [];
+      lastStep = null;
+      bestRavg = Infinity;
+      bestPose = { ...curPose };
+      bestH = null;
       rebuildScan();
       render();
+      window.dispatchEvent(new CustomEvent("ch04:reset"));
     }
 
     function stepOnce() {
       const st = S.fieldGnStep(field, curPose, scanPts, { useHuber, huberDelta: 0.08, trimDist: hasPedestrian ? 0.35 : 0.65 });
+      lastStep = st;
+      let updatedBest = false;
       if (st.ok) {
+        if (st.ravg < bestRavg) {
+          bestRavg = st.ravg;
+          bestPose = { ...curPose };
+          bestH = st.H.slice();
+          updatedBest = true;
+        }
         curPose = st.nextPose;
         forces = st.forces;
         iter++;
       }
       render();
+      window.dispatchEvent(new CustomEvent("ch04:step", {
+        detail: { iteration: iter, pose: { ...curPose }, step: st, bestRavg, bestPose: { ...bestPose }, bestH, updatedBest },
+      }));
     }
 
     function render() {
@@ -115,6 +135,9 @@
       setT("ch04-pos-err", `${errCm.toFixed(1)} cm`);
       setT("ch04-ang-err", `${angErr.toFixed(2)}°`);
       setT("ch04-mode-v", `${useHuber ? "Huber+Trim" : "纯 L2 平方"} / ${hasPedestrian ? "含2动态障碍" : "干净环境"}`);
+      setT("ch04-used-v", lastStep ? `${lastStep.used}` : "—");
+      setT("ch04-ravg-v", lastStep && Number.isFinite(lastStep.ravg) ? lastStep.ravg.toExponential(2) : "—");
+      setT("ch04-stepnorm-v", lastStep && lastStep.ok ? `${(lastStep.stepNorm * 100).toFixed(2)} cm` : "—");
     }
 
     document.getElementById("ch04-step")?.addEventListener("click", stepOnce);

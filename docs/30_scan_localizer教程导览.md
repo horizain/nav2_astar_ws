@@ -28,7 +28,7 @@ cd ~/ros2_ws/src/nav2_astar_ws
 | Ch01 | [定位与 SE(2) / TF 树](scan_localizer_tutorial/chapters/ch01.html) | 极坐标点云、`map→odom` 合成、PGM Y 轴翻转、倒装雷达演示 |
 | Ch02 | [MapField 与精确 EDT](scan_localizer_tutorial/chapters/ch02.html) | 可手绘画墙的 4 层地图场 + 1D EDT 抛物线下包络步进动画 |
 | Ch03 | [经典匹配器演进](scan_localizer_tutorial/chapters/ch03.html) | Correlative 热力图 vs ICP-P2P 局部极小掉坑 + 2D NDT 椭圆场 |
-| Ch04 | [Field-GN 与两级组合](scan_localizer_tutorial/chapters/ch04.html) | SDF 解析雅可比（点-线等价）+ 投放行人对比 L2 vs Huber |
+| Ch04 | [从零写出 Field-GN 与两级组合](scan_localizer_tutorial/chapters/ch04.html) | 最小可运行内核 + 一轮 H/b/dp 手算 + 7 段源码步进 + 填空练习与验收 |
 | Ch05 | [长走廊退化与各向异性](scan_localizer_tutorial/chapters/ch05.html) | 未阻尼 Hessian 求逆、120,000× 协方差椭圆实验室 |
 | Ch06 | [B&B 全局定位 vs 粒子滤波](scan_localizer_tutorial/chapters/ch06.html) | `swmax_` 分支定界剪枝 vs 400 粒子滤波，一键随机绑架 |
 | Ch07 | [4D EKF、四门控与状态机](scan_localizer_tutorial/chapters/ch07.html) | 在线陀螺零偏估计、Joseph 更新、`98fcd28` 对称走廊跳变复盘 |
@@ -43,7 +43,7 @@ cd ~/ros2_ws/src/nav2_astar_ws
 每次修改教程 JS 数学核或调整源码行号后，可在仓库根目录运行以下验证：
 
 ```bash
-node docs/scan_localizer_tutorial/tests/test_sim_core.mjs       # 12 项算法与数学一致单测
+node docs/scan_localizer_tutorial/tests/test_sim_core.mjs       # 13 项算法与数学一致单测
 python3 docs/scan_localizer_tutorial/tests/check_code_refs.py   # 33 文件覆盖率与行号越界检查
 python3 docs/tools/check_tutorial_links.py                      # 全仓 Markdown 本地链接检查
 ```

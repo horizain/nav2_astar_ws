@@ -534,6 +534,7 @@
     const b = [0, 0, 0];
     const grad = { x: 0, y: 0 };
     let rsum = 0, rw = 0, used = 0;
+    let samplePoint = null;
     const forces = [];
     for (let i = 0; i < pts.length; i++) {
       const wx = pose.x + c * pts[i].x - s * pts[i].y;
@@ -545,6 +546,7 @@
       const w = useHuber ? (ar <= huberDelta ? 1.0 : huberDelta / Math.max(ar, 1e-9)) : 1.0;
       const jth = grad.x * (-(wy - pose.y)) + grad.y * (wx - pose.x);
       const J = [grad.x, grad.y, jth];
+      if (!samplePoint) samplePoint = { wx, wy, r, w, J: J.slice() };
       for (let r0 = 0; r0 < 3; r0++) {
         b[r0] += w * J[r0] * r;
         for (let c0 = 0; c0 < 3; c0++) H[r0 * 3 + c0] += w * J[r0] * J[c0];
@@ -554,14 +556,14 @@
       used++;
       if (i % 4 === 0) forces.push({ wx, wy, r, w, gx: grad.x, gy: grad.y });
     }
-    if (used < 5) return { ok: false, nextPose: pose, H, ravg: Infinity, used, forces };
+    if (used < 5) return { ok: false, nextPose: pose, H, b, ravg: Infinity, used, forces, samplePoint };
     const ravg = rsum / Math.max(rw, 1e-9);
     const Hd = H.slice();
     Hd[0] += 1e-6 * Math.max(H[0], 1.0);
     Hd[4] += 1e-6 * Math.max(H[4], 1.0);
     Hd[8] += 1e-6 * Math.max(H[8], 1.0);
     const dp = solve3x3(Hd, [-b[0], -b[1], -b[2]]);
-    if (!dp) return { ok: false, nextPose: pose, H, ravg, used, forces };
+    if (!dp) return { ok: false, nextPose: pose, H, b, Hd, ravg, used, forces, samplePoint };
     const nl = Math.hypot(dp[0], dp[1]);
     const clip = Math.min(1.0, Math.min(0.2 / Math.max(nl, 1e-9), 0.1 / Math.max(Math.abs(dp[2]), 1e-9)));
     const nextPose = {
@@ -573,12 +575,17 @@
       ok: true,
       nextPose,
       H,
+      b,
+      Hd,
+      dp,
+      clip,
       ravg,
       rmse: Math.sqrt(ravg),
       used,
       stepNorm: nl * clip,
       stepAng: Math.abs(dp[2]) * clip,
       forces,
+      samplePoint,
     };
   }
 
@@ -622,6 +629,19 @@
       rmse: Math.sqrt(bestRavg),
       history,
     };
+  }
+
+  // 可直接手算的 Field-GN 一轮迭代：竖直墙 + 5 个对称点。
+  // 页面数值表与自动化测试共用同一实例，避免教学数字与仿真核漂移。
+  function createFieldGnTeachingExample() {
+    const grid = new OccupancyGrid(80, 60, 0.1, -4.0, -3.0);
+    grid.cells.fill(0);
+    for (let y = 0; y < grid.height; y++) grid.cells[y * grid.width + 40] = 100;
+    const field = new MapField(grid, 0.2);
+    const pose = { x: -0.15, y: 0, theta: 0 };
+    const points = [-2, -1, 0, 1, 2].map((y) => ({ x: 0, y }));
+    const options = { useHuber: true, huberDelta: 0.1, trimDist: 0.65 };
+    return { grid, field, pose, points, options, step: fieldGnStep(field, pose, points, options) };
   }
 
   function icpP2pStep(field, pose, pts, opt = {}) {
@@ -1184,6 +1204,7 @@
     correlativeMatch,
     fieldGnStep,
     fieldGnMatch,
+    createFieldGnTeachingExample,
     icpP2pStep,
     ndtBuild,
     globalCorrelativeBnB,
