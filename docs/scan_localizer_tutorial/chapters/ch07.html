@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>第 7 章 · 4D 各向异性 EKF、四道门控与五态状态机 | scan_localizer</title>
+  <title>第 7 章 · 从零实现 4D EKF、四门控与五态状态机 | scan_localizer</title>
   <link rel="stylesheet" href="../../website/vendor/katex/katex.min.css" />
   <link rel="stylesheet" href="../css/apple.css" />
   <script>window.TUTORIAL_ROOT = ".."; window.PAGE_ID = "ch07";</script>
@@ -14,6 +14,7 @@
   <script defer src="../js/sim-core.js"></script>
   <script defer src="../js/app.js"></script>
   <script defer src="../js/sim-ch07.js"></script>
+  <script defer src="../js/hands-on-ch07.js"></script>
 </head>
 <body>
   <div id="site-nav"></div>
@@ -21,12 +22,13 @@
   <header class="page-header">
     <div class="container">
       <div class="crumb"><a href="../index.html">概览</a> / 第三阶段 · 滤波与状态机 / 第 7 章</div>
-      <h1>4D 各向异性 EKF、四道门控与五态状态机</h1>
-      <p class="sub"><code>LocalizerCore</code> 是整个定位系统的“中枢大脑”：在线估计 IMU 陀螺零偏 $b_g$、用 Joseph 形式守护协方差正定性、靠四道防线拦截错匹配，并在对称走廊中稳住永不乱跳。</p>
+      <h1>从零实现 4D EKF、四门控与五态状态机</h1>
+      <p class="sub"><code>LocalizerCore</code> 是整个定位系统的“中枢大脑”：在线估计 IMU 陀螺零偏 $b_g$、用 Joseph 形式守护协方差数值稳定性、靠四道防线拦截错匹配，并在对称走廊中稳住永不乱跳。</p>
       <div class="pill-row">
-        <span class="pill">预计 40 分钟</span>
+        <span class="pill">预计 55 分钟</span>
         <span class="pill">核心文件：localizer_core.hpp · localizer_core.cpp</span>
         <span class="pill">动画：4D EKF 零偏收敛 + 四门控沙盘</span>
+        <span class="pill">动手：最小内核 / 决策表 / 源码步进 / 实时 trace</span>
       </div>
     </div>
   </header>
@@ -39,7 +41,7 @@
 
     <article class="article-col">
       <h2 id="sec-intro"><span class="sec-no">7.1</span>交互实验室：在线辨识陀螺零偏 $b_g$ 与门控沙盘</h2>
-      <p>就算 IMU 存在 $+0.04\text{ rad/s}$ 的常值零偏漂移（不校正的话 100 秒偏转 229°），4D EKF 也能在激光匹配中把角度残差反推给第 4 维状态 $b_g$，约 15 帧内自动把零偏咬死到真值（绿虚线）。试试“全遮挡异常”触发 <code>DEGRADED → GLOBAL</code>，或测试“静止马氏锁死”的自我解锁机制！</p>
+      <p>就算 IMU 存在 $+0.04\text{ rad/s}$ 的常值零偏漂移（不校正的话 100 秒偏转 229°），4D EKF 也能在激光匹配中把角度残差反推给第 4 维状态 $b_g$，约 15 帧内明显收敛到真值附近（绿虚线）。试试“全遮挡异常”触发 <code>DEGRADED → GLOBAL</code>，或测试“静止马氏锁死”的自我解锁机制！</p>
 
       <div class="lab-frame">
         <div class="lab-head">
@@ -68,39 +70,325 @@
           <div class="telemetry">
             <div class="tel-cell"><div class="tel-k">1. Score 门限</div><div class="tel-v ok" id="ch07-g-score">-</div></div>
             <div class="tel-cell"><div class="tel-k">2. Inlier 门限</div><div class="tel-v ok" id="ch07-g-inl">-</div></div>
-            <div class="tel-cell"><div class="tel-k">3. χ²(3) 马氏距离</div><div class="tel-v ok" id="ch07-g-mahal">-</div></div>
-            <div class="tel-cell"><div class="tel-k">4. MinEig 门限</div><div class="tel-v ok" id="ch07-g-eig">-</div></div>
+            <div class="tel-cell"><div class="tel-k">3. 马氏距离 d² &lt; 9.0</div><div class="tel-v ok" id="ch07-g-mahal">-</div></div>
+            <div class="tel-cell"><div class="tel-k">4. 0 &lt; λmin(R) &lt; max</div><div class="tel-v ok" id="ch07-g-eig">-</div></div>
             <div class="tel-cell"><div class="tel-k">当前状态</div><div class="tel-v ok" id="ch07-state-v">TRACKING</div></div>
           </div>
         </div>
       </div>
 
-      <h2 id="sec-math"><span class="sec-no">7.2</span>公式推导：4 状态 SE(2)+Bias EKF 与 Joseph 更新</h2>
-      <p>状态向量增广至四维：$\mathbf{x}_k = [x_k,\; y_k,\; \theta_k,\; b_{g,k}]^\top$。预测时用扣除零偏后的角速度积分 $\Delta\theta = \Delta\theta_{\text{raw}} - b_g \Delta t$，状态转移雅可比矩阵 $F_4$ 严格刻画了“零偏误差会先传进航向，航向误差再耦合到平动 $(x,y)$”：</p>
+      <h2 id="sec-math"><span class="sec-no">7.2</span>先分流，再推公式：正常跟踪路径</h2>
+      <p>不要把五态都塞进同一套 EKF 公式。<code>on_scan()</code> 首先按入口状态分流：<strong>TRACKING 与 DEGRADED</strong> 继续走本章的预测—匹配—门控—更新路径；<strong>UNINIT、LOST、GLOBAL</strong> 在 <code>L431-526</code> 先尝试多假设验证或全局重定位，成功时重置滤波器并提前返回。恢复成功不是“正常测量更新”，因此实时面板不能假设它一定携带正常路径的 <code>trace</code>。</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>入口状态</th><th>本帧走向</th><th>关键行为</th><th>真实源码</th></tr></thead>
+          <tbody>
+            <tr><td><code>TRACKING</code></td><td>正常 EKF 路径</td><td>四门全过则 Joseph 更新；拒绝则纯预测并累计拒收。</td><td><code>L528-757</code></td></tr>
+            <tr><td><code>DEGRADED</code></td><td>仍走正常 EKF 路径</td><td>匹配恢复即可回到 TRACKING；持续拒绝可升级为 LOST。</td><td><code>L528-729</code></td></tr>
+            <tr><td><code>UNINIT / LOST / GLOBAL</code></td><td>恢复旁路</td><td>传播并验证假设，或调用 <code>global_fn_</code>；远距离跳变受安全门保护。</td><td><code>L431-526</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>状态向量增广至四维：$\mathbf{x}_k = [x_k,\; y_k,\; \theta_k,\; b_{g,k}]^\top$。<code>compute_motion_delta()</code> 先取两帧里程计之间的 SE(2) 增量；若有新 IMU 积分，则用扣除零偏后的角速度积分替换航向增量：</p>
       <div class="math-card">
-        <div class="math-title">4×4 雅可比矩阵 F4 与 Joseph 形式协方差更新</div>
+        <div class="math-title">运动增量、4×4 雅可比 F4 与过程噪声 Q4</div>
+        $$\Delta\theta = \operatorname{wrap}(\Delta\theta_{\text{raw}} - b_g\Delta t), \qquad
+        \mathbf{p}^{-} = \begin{bmatrix} x + c\Delta x - s\Delta y \\ y + s\Delta x + c\Delta y \\ \operatorname{wrap}(\theta + \Delta\theta) \end{bmatrix}$$
         $$F_4 = \begin{bmatrix} 1 &amp; 0 &amp; -(\Delta x\sin\theta + \Delta y\cos\theta) &amp; 0 \\ 0 &amp; 1 &amp; \Delta x\cos\theta - \Delta y\sin\theta &amp; 0 \\ 0 &amp; 0 &amp; 1 &amp; -\Delta t \\ 0 &amp; 0 &amp; 0 &amp; 1 \end{bmatrix}, \qquad
-        H = \begin{bmatrix} I_3 &amp; \mathbf{0}_{3\times 1} \end{bmatrix}$$
-        $$S = H P_{k|k-1} H^\top + R, \quad
-        d^2 = \boldsymbol{\nu}^\top S^{-1}\boldsymbol{\nu} &lt; \chi^2_{3,0.99}(9.0), \quad
-        P_{k|k} = (I - K H) P_{k|k-1} (I - K H)^\top + K R K^\top$$
+        Q_4 = \begin{bmatrix} G Q_{\text{body}} G^\top &amp; 0 \\ 0 &amp; q_b \end{bmatrix}$$
+        $$P_{k|k-1} = F_4 P_{k-1|k-1} F_4^\top + Q_4, \qquad
+        P_{k|k-1} \leftarrow \operatorname{sym}(P_{k|k-1})$$
       </div>
-      <p>工程上选用 <strong>Joseph 形式</strong> $(I-KH)P(I-KH)^\top + KRK^\top$ 而非简化的 $(I-KH)P$，因为当某轴高度病态（如长走廊 120,000× 特征比）时，减法简化式可能因浮点舍入算成非正定负方差矩阵从而崩掉整个滤波器。</p>
+      <p>这里 $P_{k-1|k-1}$ 表示上一帧滤波协方差，$G$ 只旋转平动噪声，$Q_{\text{body}}=\operatorname{diag}(q_{\text{trans}},q_{\text{trans}},q_{\text{rot}})$；使用 IMU 时 $F_4(2,3)=-\Delta t$，零偏随机游走写入 $Q_4(3,3)$。预测结束后才调用 <code>matcher_-&gt;match(field, pred, scan, opt)</code>。</p>
 
-      <h2 id="sec-code"><span class="sec-no">7.3</span>核心源码精读</h2>
+      <div class="math-card">
+        <div class="math-title">四门控、创新与各向异性 Joseph 更新</div>
+        $$H = \begin{bmatrix} I_3 &amp; \mathbf{0}_{3\times1} \end{bmatrix}, \qquad
+        R = \operatorname{sym}(P_{\text{match}}), \qquad
+        S = \operatorname{sym}(\left(P_{k|k-1}\right)_{3\times3} + R) + 10^{-9}I_3$$
+        $$\boldsymbol{\nu} = \begin{bmatrix} p_{\text{match},x}-p^-_x \\ p_{\text{match},y}-p^-_y \\ \operatorname{wrap}(\theta_{\text{match}}-\theta^-) \end{bmatrix}, \qquad
+        d^2 = \boldsymbol{\nu}^\top S^{-1}\boldsymbol{\nu}$$
+        $$\text{accept} = \underbrace{mr_{\text{finite}}}_{\text{总前提}} \land
+        \underbrace{score \ge min\_score}_{\text{门 1}} \land
+        \underbrace{inlier \ge min\_inlier}_{\text{门 2}} \land
+        \underbrace{0 \le d^2 &lt; mahal\_gate}_{\text{门 3}} \land
+        \underbrace{0 &lt; \lambda_{\min}(R) &lt; max\_cov\_eig}_{\text{门 4}}$$
+        $$K_4 = P_{k|k-1}H^\top S^{-1}, \qquad \Delta\mathbf{x}=K_4\boldsymbol{\nu}, \qquad
+        P_{k|k} = (I-K_4H)P_{k|k-1}(I-K_4H)^\top + K_4RK_4^\top$$
+      </div>
+      <div class="callout callout-pitfall">
+        <div class="callout-head">严格按代码理解两个边界</div>
+        <ul>
+          <li><code>mahal_gate</code> 默认配置为 <strong>9.0</strong>；对当前配置它是一个固定阈值，判断为 <code>mahal &gt;= 0.0 &amp;&amp; mahal &lt; cfg_.mahal_gate</code>。代码没有在运行时计算卡方分位数；不要把 9.0 当成分位函数的输入，也不要写成动态卡方阈值。等于 9.0 同样拒绝。</li>
+          <li>第四门是匹配协方差 <code>R</code> 的特征值门：<strong>有限且 <code>0 &lt; λmin(R) &lt; max_cov_eig</code></strong>。它不是检查预测协方差或创新协方差 <code>S</code> 的最大特征值。</li>
+          <li><code>mr_finite</code> 要求匹配有效、位姿有限、score/inlier 有限且整个匹配协方差有限。它是四门的总前提，不是额外的“第五门”。</li>
+        </ul>
+      </div>
+      <p>源码在 <code>L611-621</code> 先分解 <code>R</code> 并算第四门，因为随后构造 $S$ 必须使用有效的 $R$；这不改变“Score / Inlier / Mahal / MinEig”的四门定义。创新 $\boldsymbol{\nu}$ 与 $S$ 是第三门内部的诊断量，<code>K4</code> 与状态修正只在四门全过后计算。</p>
+
+      <h2 id="sec-code"><span class="sec-no">7.3</span>从零实现：最小 EKF 更新内核</h2>
+      <p>下面只保留正常跟踪的数学主干：运动增量 → F4/Q4/Ppred → matcher → 四门 → K4/innov → Joseph。为便于阅读，假设已经有里程计与初始位姿，并省略生产代码的输入过滤、传感器时间锚、<code>first_fix_</code>、可选修正限幅、异常窗口、状态降级和恢复旁路。它用于理解，不可直接替换生产实现。</p>
+      <div class="code-card">
+        <div class="code-head"><span class="code-file">教学最小版：一次正常跟踪帧（C++，刻意省略生产防御）</span><button type="button" class="code-btn code-copy-btn">复制</button></div>
+        <pre><code class="language-cpp">struct MinimalMotion {
+  Pose2 delta{};
+  bool imu_used = false;
+  double dt_imu = 0.0;
+};
+
+// 对应 compute_motion_delta()：has_imu 表示本帧有尚未消费的 IMU 积分。
+MinimalMotion compute_motion_delta_minimal(
+  const Pose2 &amp; odom_prev, const Pose2 &amp; odom_now,
+  bool has_imu, double imu_prev, double imu_now,
+  double imu_dt, double gyro_bias)
+{
+  MinimalMotion m;
+  m.delta = odom_prev.inverse() * odom_now;
+  if (has_imu) {
+    const double dth_raw = wrap_angle(imu_now - imu_prev);
+    m.delta.theta = imu_dt &gt; 0.0
+      ? wrap_angle(dth_raw - gyro_bias * imu_dt) : dth_raw;
+    m.imu_used = true;
+    m.dt_imu = imu_dt;
+  }
+  return m;
+}
+
+bool ekf_tracking_minimal(
+  const Pose2 &amp; prior, double gyro_bias, const Cov4 &amp; P,
+  const MinimalMotion &amp; motion, const MapField &amp; field,
+  const Scan &amp; scan, const Matcher &amp; matcher,
+  const CoreConfig &amp; cfg, Pose2 &amp; pose_out,
+  double &amp; bias_out, Cov4 &amp; P_out)
+{
+  const double th = prior.theta;
+  const double c = std::cos(th), s = std::sin(th);
+  const Pose2 pred(
+    prior.x + c * motion.delta.x - s * motion.delta.y,
+    prior.y + s * motion.delta.x + c * motion.delta.y,
+    wrap_angle(th + motion.delta.theta));
+
+  Eigen::Matrix4d F4 = Eigen::Matrix4d::Identity();
+  F4(0, 2) = -(motion.delta.x * s + motion.delta.y * c);
+  F4(1, 2) = motion.delta.x * c - motion.delta.y * s;
+  if (motion.imu_used &amp;&amp; motion.dt_imu &gt; 0.0) {
+    F4(2, 3) = -motion.dt_imu;
+  }
+
+  // 最小版只演示有里程计时的过程噪声；无 odom 分支见 L569-574。
+  const double dtrans = std::hypot(motion.delta.x, motion.delta.y);
+  const double q_trans = dtrans * cfg.odom_trans_var_per_m;
+  double q_rot = dtrans * cfg.odom_rot_var_per_m +
+    std::abs(motion.delta.theta) *
+      (motion.imu_used ? cfg.imu_rot_var_per_rad
+                       : cfg.odom_rot_var_per_rad);
+  if (motion.imu_used &amp;&amp; motion.dt_imu &gt; 0.0) {
+    q_rot += motion.dt_imu * cfg.imu_rot_var_per_rad;
+  }
+  Eigen::Matrix3d G = Eigen::Matrix3d::Identity();
+  G(0, 0) = c; G(0, 1) = -s;
+  G(1, 0) = s; G(1, 1) = c;
+  Eigen::Matrix3d Q_body = Eigen::Matrix3d::Zero();
+  Q_body(0, 0) = q_trans;
+  Q_body(1, 1) = q_trans;
+  Q_body(2, 2) = q_rot;
+  Eigen::Matrix4d Q4 = Eigen::Matrix4d::Zero();
+  Q4.topLeftCorner&lt;3, 3&gt;() = G * Q_body * G.transpose();
+  if (motion.imu_used &amp;&amp; motion.dt_imu &gt; 0.0) {
+    Q4(3, 3) = cfg.gyro_bias_rw_var_per_s * motion.dt_imu;
+  }
+  Cov4 Ppred = F4 * P * F4.transpose() + Q4;
+  Ppred = 0.5 * (Ppred + Ppred.transpose());
+
+  const MatchResult mr = matcher.match(field, pred, scan, cfg.match_opt);
+  const bool mr_finite = mr.valid &amp;&amp;
+    std::isfinite(mr.pose.x) &amp;&amp; std::isfinite(mr.pose.y) &amp;&amp;
+    std::isfinite(mr.pose.theta) &amp;&amp; std::isfinite(mr.score) &amp;&amp;
+    std::isfinite(mr.inlier_ratio) &amp;&amp; mr.covariance.allFinite();
+  const bool gate_score = mr_finite &amp;&amp; mr.score &gt;= cfg.min_score;
+  const bool gate_inlier = mr_finite &amp;&amp;
+    mr.inlier_ratio &gt;= cfg.min_inlier_ratio;
+
+  Cov3 R = Cov3::Identity();
+  bool gate_cov = false;
+  if (mr_finite) {
+    R = 0.5 * (mr.covariance + mr.covariance.transpose());
+    Eigen::SelfAdjointEigenSolver&lt;Cov3&gt; es(R);
+    if (es.info() == Eigen::Success) {
+      const double min_eig = es.eigenvalues().minCoeff();
+      gate_cov = std::isfinite(min_eig) &amp;&amp; min_eig &gt; 0.0 &amp;&amp;
+        min_eig &lt; cfg.max_cov_eig;
+    }
+  }
+
+  Eigen::Vector3d innov = Eigen::Vector3d::Zero();
+  Cov3 S = Cov3::Identity();
+  Eigen::LDLT&lt;Cov3&gt; ldlt;
+  bool gate_mahal = false;
+  if (mr_finite) {
+    innov = Eigen::Vector3d(
+      mr.pose.x - pred.x, mr.pose.y - pred.y,
+      wrap_angle(mr.pose.theta - pred.theta));
+    const Cov3 S_raw = Ppred.topLeftCorner&lt;3, 3&gt;() + R;
+    S = 0.5 * (S_raw + S_raw.transpose());
+    S += Cov3::Identity() * 1e-9;
+    ldlt.compute(S);
+    if (ldlt.info() == Eigen::Success &amp;&amp; ldlt.isPositive()) {
+      const Eigen::Vector3d v = ldlt.solve(innov);
+      if (ldlt.info() == Eigen::Success &amp;&amp; v.allFinite()) {
+        const double mahal = innov.dot(v);
+        gate_mahal = std::isfinite(mahal) &amp;&amp;
+          mahal &gt;= 0.0 &amp;&amp; mahal &lt; cfg.mahal_gate;
+      }
+    }
+  }
+
+  // 拒绝时只保留预测，不把坏测量融合进状态。
+  pose_out = pred;
+  bias_out = gyro_bias;
+  P_out = Ppred;
+  if (!(mr_finite &amp;&amp; gate_score &amp;&amp; gate_inlier &amp;&amp;
+        gate_mahal &amp;&amp; gate_cov)) {
+    return false;
+  }
+
+  const Eigen::Matrix&lt;double, 3, 4&gt; S_inv_HP =
+    ldlt.solve(Ppred.topRows&lt;3&gt;());
+  if (ldlt.info() != Eigen::Success ||
+      !S_inv_HP.allFinite()) { return false; }
+  const Eigen::Matrix&lt;double, 4, 3&gt; K4 = S_inv_HP.transpose();
+  const Eigen::Vector4d dx = K4 * innov;
+  pose_out = Pose2(pred.x + dx(0), pred.y + dx(1),
+                   wrap_angle(pred.theta + dx(2)));
+  const double max_b = std::max(0.0, cfg.max_gyro_bias);
+  bias_out = std::clamp(gyro_bias + dx(3), -max_b, max_b);
+
+  Eigen::Matrix&lt;double, 3, 4&gt; H =
+    Eigen::Matrix&lt;double, 3, 4&gt;::Zero();
+  H.leftCols&lt;3&gt;() = Eigen::Matrix3d::Identity();
+  const Eigen::Matrix4d I_KH = Eigen::Matrix4d::Identity() - K4 * H;
+  P_out = I_KH * Ppred * I_KH.transpose() + K4 * R * K4.transpose();
+  P_out = 0.5 * (P_out + P_out.transpose());
+  return true;
+}</code></pre>
+      </div>
+      <p>读懂这段代码的关键是：<code>Ppred</code> 在匹配之前已经确定；拒绝分支输出 <code>pred / Ppred</code>；只有 accept 之后才出现 <code>K4 / dx</code> 与 Joseph 第二项。生产代码另在 <code>L663-673</code> 做可选平移/转角修正限幅，在 <code>L711-716</code> 为“高分高内点、仅马氏拒绝”做温和协方差松弛。</p>
+
+      <h2 id="sec-decision"><span class="sec-no">7.4</span>逐步决策表：每一帧到底算了什么</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>步骤</th><th>输入 → 输出</th><th>通过条件 / 决策</th><th>真实源码</th></tr></thead>
+          <tbody>
+            <tr><td>0 · 入口分流</td><td>状态 + 扫描</td><td>TRACKING/DEGRADED 继续；UNINIT/LOST/GLOBAL 走恢复旁路并可能提前返回。</td><td><code>L431-526</code></td></tr>
+            <tr><td>1 · 运动增量</td><td>odom 双锚 + IMU 积分 → <code>delta</code></td><td>平移取 odom 相对增量；IMU 航向减去 <code>gyro_bias × dt</code>。</td><td><code>compute_motion_delta L277-304</code>；调用 <code>L528-532</code></td></tr>
+            <tr><td>2 · 预测位姿与 F4</td><td><code>last_pose_ + delta</code> → <code>pred / F4</code></td><td>SE(2) 旋转平移；航向误差耦合到 x/y，零偏误差耦合到 θ。</td><td><code>L538-556</code></td></tr>
+            <tr><td>3 · Q4 与 Ppred</td><td>F4、旧 P4、过程噪声 → <code>P4_pred</code></td><td>体噪声经 G 转到 map 系；IMU 使用时加入零偏随机游走；结果对称化。</td><td><code>L558-593</code></td></tr>
+            <tr><td>4 · matcher</td><td><code>pred + scan</code> → <code>mr</code></td><td>先建立 <code>mr_finite</code>：有效位姿、有限 score/inlier、有限整个协方差。</td><td><code>L595-605</code></td></tr>
+            <tr><td>5 · 门 1 / 门 2</td><td><code>mr.score / inlier_ratio</code></td><td>分别达到 <code>min_score</code> 与 <code>min_inlier_ratio</code>；两者都暗含 <code>mr_finite</code>。</td><td><code>L607-609</code></td></tr>
+            <tr><td>6 · 门 3：马氏</td><td><code>innov / R / Ppred → S → d²</code></td><td>角度残差先 wrap；LDLT 成功且 S 正定；解有限；<code>0 ≤ d² &lt; mahal_gate</code>，默认固定 9.0。</td><td><code>L623-643</code></td></tr>
+            <tr><td>7 · 门 4：MinEig</td><td>对称化后的匹配协方差 R</td><td>特征值求解成功，且 <code>0 &lt; λmin(R) &lt; max_cov_eig</code>。源码为准备 S，先于门 3 计算它。</td><td><code>L611-621</code></td></tr>
+            <tr><td>8 · 总决策</td><td>四个 gate + <code>mr_finite</code></td><td>全真才 accept。高分高内点但仅马氏失败，不记绑架异常。</td><td><code>L645-653</code></td></tr>
+            <tr><td>9 · K4 / dx</td><td><code>Ppred / S / innov</code> → 4×3 K4、4 维 dx</td><td>只在 accept 后求解；修正位姿和零偏，可选限幅只改状态修正 dx。</td><td><code>L655-680</code></td></tr>
+            <tr><td>10 · Joseph</td><td><code>Ppred / K4 / R</code> → 新 P4</td><td>写入两项非负二次型结构，再对称化；清拒收计数并回到 TRACKING。</td><td><code>L682-702</code></td></tr>
+            <tr><td>11 · 拒绝</td><td><code>pred / P4_pred</code> → 输出</td><td>纯预测，不计算 K4/Joseph；仅马氏拒绝可松弛 P；累计拒收并降级。</td><td><code>L706-757</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2 id="sec-reject"><span class="sec-no">7.5</span>三个“为什么”：拒绝、绑架与 Joseph</h2>
+      <div class="callout callout-pitfall">
+        <div class="callout-head">为什么高分、高内点、仅马氏拒绝不能记为绑架？</div>
+        <p>高分与高内点说明扫描和局部地图的几何形状仍然吻合；马氏拒绝只说明“这个修正相对当前先验太 surprising”。静止或原地转弯时过程噪声很小，先验可能过紧，几厘米的局部抖动就足以让 $d^2$ 越过门限。把它升级成绑架，会让对称走廊里的错误全局候选获得可乘之机。</p>
+        <p>真实异常判定因此写成 <code>!accept &amp;&amp; (!mr_finite || score &lt; anomaly_low_score || (!gate_inlier &amp;&amp; !gate_score))</code>。在高分、高内点、协方差有效、仅马氏失败时，该式为假；同时 <code>L711-716</code> 温和松弛先验，帮助后续帧恢复，而不是立即触发 GLOBAL。</p>
+      </div>
+      <div class="callout callout-tip">
+        <div class="callout-head">为什么用 Joseph 形式，而不是看起来更短的 (I-KH)P？</div>
+        <p>在精确线性 Kalman 增益下，两种写法代数等价；工程差异来自浮点误差、各向异性与近似。<code>(I-KH)P(I-KH)ᵀ</code> 与 <code>KRKᵀ</code> 都以非负二次型形式出现，当 Ppred、R 为半正定时更容易保住对称性与半正定性，降低长走廊中负特征值风险。代码最后还做一次对称化。Joseph 不是万能保险：它不能替代输入门控、R 的最小特征值检查与有限性检查。</p>
+      </div>
+      <div class="callout callout-syntax">
+        <div class="callout-head">为什么拒绝时要“纯预测”？</div>
+        <p>门控拒绝意味着本帧测量没有被信任，此时若仍执行 <code>K4 × innov</code>，就等于把同一个坏修正塞回状态，逻辑自相矛盾。因此 <code>L707-708</code> 只提交 <code>last_pose_ = pred</code> 与 <code>P4_ = P4_pred</code>，不写测量更新。静止解锁时的 1.5 倍协方差松弛是主动增大不确定性，不是融合测量；状态仍保持预测值，<code>out.accepted</code> 仍为 false。</p>
+      </div>
+
+      <h2 id="sec-stepper"><span class="sec-no">7.6</span>源码分段步进：跟着真实 trace 读 L528-757</h2>
+      <p>点击“下一步”逐段阅读生产实现。每推进上方动画一帧，面板读取共享模拟器广播的 <code>ch07:step</code>；正常路径展示 <code>out.trace</code>，恢复分支或旧版模拟器没有 trace 时显示明确提示。矩阵同时兼容嵌套数组与按行展开的扁平数组。</p>
       <div class="src-bar">
-        <button type="button" class="src-jump" data-file="include/scan_localizer/localizer_core.hpp" data-lines="43-185"><span class="tag">源码抽屉</span>localizer_core.hpp : L43-185 (状态与配置)</button>
-        <button type="button" class="src-jump" data-file="src/localizer_core.cpp" data-lines="548-704"><span class="tag">源码抽屉</span>localizer_core.cpp : L548-704 (4D F4/Q4、4 门控与 Joseph)</button>
-        <button type="button" class="src-jump" data-file="src/localizer_core.cpp" data-lines="452-492"><span class="tag">源码抽屉</span>localizer_core.cpp : L452-492 (远距离跳变安全保护)</button>
+        <button type="button" class="src-jump" data-file="src/localizer_core.cpp" data-lines="398-526"><span class="tag">入口与恢复</span>localizer_core.cpp : L398-526</button>
+        <button type="button" class="src-jump" data-file="src/localizer_core.cpp" data-lines="528-757"><span class="tag">正常跟踪</span>localizer_core.cpp : L528-757 (预测 / 四门 / Joseph / 拒绝)</button>
+        <button type="button" class="src-jump" data-file="src/localizer_core.cpp" data-lines="277-304"><span class="tag">运动增量</span>localizer_core.cpp : L277-304 (compute_motion_delta)</button>
+      </div>
+      <div class="hands-on-stepper">
+        <div class="hands-on-toolbar">
+          <div>
+            <div class="hands-on-stage-title" id="ch07-stage-title"></div>
+            <div class="hands-on-stage-meta" id="ch07-stage-meta"></div>
+          </div>
+          <div class="exercise-row">
+            <button type="button" class="btn btn-secondary btn-sm" id="ch07-stage-prev">← 上一步</button>
+            <span class="ctrl-val" id="ch07-stage-index">1 / 10</span>
+            <button type="button" class="btn btn-primary btn-sm" id="ch07-stage-next">下一步 →</button>
+          </div>
+        </div>
+        <div class="hands-on-stage-body">
+          <p class="hands-on-explain" id="ch07-stage-explain"></p>
+          <div class="code-card">
+            <div class="code-head">
+              <button type="button" class="src-jump" id="ch07-stage-source"><span class="tag">源码抽屉</span>打开当前实现</button>
+              <button type="button" class="code-btn" id="ch07-stage-copy">复制</button>
+            </div>
+            <pre><code class="language-cpp" id="ch07-stage-code"></code></pre>
+          </div>
+          <div class="hands-on-note" id="ch07-live-iter" aria-live="polite">尚未运行动画帧</div>
+          <dl class="hands-on-vars" id="ch07-live-vars"></dl>
+        </div>
+      </div>
+      <div class="callout callout-tip">
+        <div class="callout-head">面板阅读顺序</div>
+        <p>先看 <code>state / accepted</code>，再看当前阶段的变量。接受帧应出现 <code>K4</code>（4×3）、<code>dx</code>（4 维）与 Joseph 后的 <code>P4_after</code>；拒绝帧没有可用的 K4/dx，位姿保持预测。若一帧从正常路径连续拒收后升级成 GLOBAL，只要它确实有 trace，面板仍按正常路径展示，不会仅凭输出状态误判为恢复帧。</p>
       </div>
 
-      <h2 id="sec-pitfall"><span class="sec-no">7.4</span>真实故障深度复盘：Intel Lab 两次 20 米神秘跳变是如何修掉的？</h2>
+      <h2 id="sec-pitfall"><span class="sec-no">7.7</span>真实故障深度复盘：Intel Lab 两次 20 米神秘跳变是如何修掉的？</h2>
       <div class="callout callout-pitfall">
         <div class="callout-head">提交 <code>98fcd28</code> 全程复盘：从 42 次误触发 GLOBAL 降至 0 次</div>
         <ol>
-          <li><strong>病因 1（静止马氏锁死）</strong>：机器人在走廊原地停留或微转时，里程计位移 $\Delta s \approx 0$，导致预测方差膨胀量 $q_{\text{trans}}\approx 0$。当激光因局部噪声只偏 2cm 但 $P_{\text{pred}}$ 小到 $10^{-5}$ 时，$d^2 = \nu^\top S^{-1}\nu &gt; 9.0$ 拒绝更新；越拒绝就越进纯预测，先验不动、次帧继续拒收，形成死锁！<br /><strong>修复</strong>：在拒绝分支检查 <code>gate_inlier &amp;&amp; gate_score &amp;&amp; gate_cov &amp;&amp; !gate_mahal</code>，适度按 1.5 倍松弛 $P_{3\times 3}$（<code>L711-716</code>），一两帧即可和平解锁。</li>
-          <li><strong>病因 2（对称走廊触发虚假绑架与跳变）</strong>：原 <code>is_anomaly</code> 把纯粹因为马氏门控拒绝的高分高内点帧误记为“遭到绑架”（触发了 42 次 <code>GLOBAL</code>），接着长相似走廊的外部/全局候选乘机把定位瞬移到 20m 外的对称通道。<br /><strong>修复</strong>：① <code>is_anomaly</code> 严格剔除高分高内点帧（<code>L650-652</code>）；② 自动 <code>GLOBAL</code> 加上“远距离跳变保护”：距离超过 <code>global_jump_min_dist (1.0m)</code> 且非手动触发时，候选全局得分必须严格高于局部匹配 <code>local_mr.score + 0.15</code>，否则拒绝瞬移并只加入多假设队列观察（<code>L455-492</code>）。实测修复后 Intel Lab <code>GLOBAL</code> 次数 42→0，ATE RMSE 2.11m→0.56m。</li>
+          <li><strong>病因 1（静止马氏锁死）</strong>：机器人在走廊原地停留或微转时，里程计位移 $\Delta s \approx 0$，导致预测方差膨胀量 $q_{\text{trans}}\approx 0$。当激光因局部噪声只偏几厘米但 $P_{\text{pred}}$ 很小时，$d^2 = \nu^\top S^{-1}\nu &gt; 9.0$ 拒绝更新；越拒绝就越进纯预测，先验不动、次帧继续拒收，形成死锁！<br /><strong>修复</strong>：在拒绝分支检查 <code>gate_inlier &amp;&amp; gate_score &amp;&amp; gate_cov &amp;&amp; !gate_mahal</code>，适度按 1.5 倍松弛 $P_{3\times 3}$，再加对角微小增量并设置上限（<code>L711-716</code>），为后续帧和平解锁创造条件。</li>
+          <li><strong>病因 2（对称走廊触发虚假绑架与跳变）</strong>：原 <code>is_anomaly</code> 把纯粹因为马氏门控拒绝的高分高内点帧误记为“遭到绑架”（触发了 42 次 <code>GLOBAL</code>），接着长相似走廊的外部/全局候选乘机把定位瞬移到 20m 外的对称通道。<br /><strong>修复</strong>：① <code>is_anomaly</code> 严格剔除高分高内点帧（<code>L650-652</code>）；② 自动 <code>GLOBAL</code> 加上“远距离跳变保护”：只有已经有过有效定位（<code>first_fix_</code>）、非手动触发、跳变距离超过 <code>global_jump_min_dist (1.0m)</code>，且当前局部匹配健康（<code>local_healthy</code>）时，才应用“候选全局得分低于 <code>local_mr.score + 0.15</code> 则拒绝瞬移并加入多假设队列”的规则（等于该裕度时允许，<code>L455-492</code>）。</li>
         </ol>
+        <p>这里只复述提交 <code>98fcd28</code> 已记录的两项 Intel Lab 结果：3,000 帧实测 <code>GLOBAL</code> 误触发 42→0，ATE RMSE 2.11m→0.56m；不额外引入无法核查的性能指标。对应回归为 <code>HighScoreMahalRejectionDoesNotTriggerSpuriousGlobal</code> 与 <code>AutomaticGlobalJumpGuardProtectsHealthyTracking</code>，可直接运行复核。</p>
+      </div>
+
+      <h2 id="sec-exercise"><span class="sec-no">7.8</span>填空练习与验收</h2>
+      <p>不要只看答案。先按公式写出数值或分支，再提交检查。</p>
+
+      <form class="hands-on-exercise" data-kind="number" data-answer="9" data-tolerance="1e-9" data-success="正确：d²=9.0。门限是严格小于，因此边界值仍被拒绝。" data-hint="先算 νᵀS⁻¹ν=(0.06)²/0.0004，再注意代码使用严格小于。">
+        <label for="ch07-ex1">练习 1：$\boldsymbol{\nu}=(0.06,0,0)^\top$，$S=\operatorname{diag}(0.0004,0.0004,0.0004)$，马氏距离 $d^2$ 是多少？</label>
+        <div class="exercise-row"><input class="exercise-input" id="ch07-ex1" name="answer" inputmode="decimal" placeholder="输入数值" /><button class="btn btn-primary btn-sm" type="submit">检查</button></div>
+        <div class="exercise-feedback" aria-live="polite"></div>
+      </form>
+
+      <form class="hands-on-exercise" data-kind="choice" data-answer="Joseph" data-success="正确：两项二次型结构更有利于保住对称性与半正定性。" data-hint="想想 (I-KH)P(I-KH)ᵀ + KRKᵀ 的名字；它不是简单的单项相减。">
+        <label for="ch07-ex2">练习 2：生产代码用 ______ 形式更新协方差，以保留两项非负二次型结构。填 <code>Joseph</code> 或 <code>subtract</code>。</label>
+        <div class="exercise-row"><input class="exercise-input" id="ch07-ex2" name="answer" placeholder="输入 Joseph 或 subtract" /><button class="btn btn-primary btn-sm" type="submit">检查</button></div>
+        <div class="exercise-feedback" aria-live="polite"></div>
+      </form>
+
+      <form class="hands-on-exercise" data-kind="choice" data-answer="prediction" data-success="正确：位姿保持预测，P4 从 Ppred 开始；本例仅马氏拒绝时还会按生产代码松弛协方差，不能继续做 K4 + Joseph 测量更新。" data-hint="门控已经拒绝测量；若仍乘 K4，就会把未被信任的修正塞回状态。">
+        <label for="ch07-ex3">练习 3：高分、高内点、R 有效，但 $d^2=12&gt;9.0$。本帧应执行 <code>K4 + Joseph</code> 更新，还是 <code>prediction</code>？</label>
+        <div class="exercise-row"><input class="exercise-input" id="ch07-ex3" name="answer" placeholder="输入 K4 + Joseph 或 prediction" /><button class="btn btn-primary btn-sm" type="submit">检查</button></div>
+        <div class="exercise-feedback" aria-live="polite"></div>
+      </form>
+
+      <div class="callout callout-tip">
+        <div class="callout-head">完成标准</div>
+        <ul>
+          <li>能徒手画出入口分流：TRACKING/DEGRADED 走 EKF；UNINIT/LOST/GLOBAL 走恢复旁路，不硬套正常公式。</li>
+          <li>能按顺序说出 <code>delta → F4/Q4/Ppred → matcher → 四门 → K4/dx → Joseph</code>，并指出马氏门内部需要先算 innov 与 S。</li>
+          <li>能解释固定 <code>mahal_gate=9.0</code> 的严格边界、第四门 <code>0&lt;λmin(R)&lt;max_cov_eig</code>、<code>mr_finite</code> 总前提。</li>
+          <li>能在实时面板辨认接受帧与拒绝帧；恢复帧无 trace 时不会把提示误读成数值零。</li>
+          <li>能解释“高分仅马氏拒绝不是绑架”“Joseph 的数值动机”“拒绝时纯预测”三个工程决策。</li>
+          <li>C++ 回归可运行 <code>LocalizerCoreTest.FourDimEkfGyroBiasConverges</code>、<code>LocalizerCoreTest.HighScoreMahalRejectionDoesNotTriggerSpuriousGlobal</code> 与 <code>LocalizerCoreTest.AutomaticGlobalJumpGuardProtectsHealthyTracking</code>。</li>
+        </ul>
       </div>
 
       <nav class="pager">

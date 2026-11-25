@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>第 2 章 · 一张地图喂饱所有算法：MapField | scan_localizer</title>
+  <title>第 2 章 · 从零写出精确 EDT：MapField | scan_localizer</title>
   <link rel="stylesheet" href="../../website/vendor/katex/katex.min.css" />
   <link rel="stylesheet" href="../css/apple.css" />
   <script>window.TUTORIAL_ROOT = ".."; window.PAGE_ID = "ch02";</script>
@@ -14,6 +14,7 @@
   <script defer src="../js/sim-core.js"></script>
   <script defer src="../js/app.js"></script>
   <script defer src="../js/sim-ch02.js"></script>
+  <script defer src="../js/hands-on-ch02.js"></script>
 </head>
 <body>
   <div id="site-nav"></div>
@@ -21,12 +22,12 @@
   <header class="page-header">
     <div class="container">
       <div class="crumb"><a href="../index.html">概览</a> / 第一阶段 · 入门与底座 / 第 2 章</div>
-      <h1>一张地图喂饱所有算法：MapField</h1>
-      <p class="sub">只需在启动或切图时预计算 27.7 ms，就把静态的黑白占据栅格升级为四层连续数学场：精确欧氏距离（EDT）、带符号距离场（SDF）、高斯似然场与 Cartographer 滑窗最大值金字塔。</p>
+      <h1>从零写出精确 EDT：一张地图喂饱所有算法</h1>
+      <p class="sub">保留可画墙的四层 MapField 与 1D 包络动画，再把算法真正拆开：从空白文件写出最小 <code>edt1d</code>，手算 <code>[9, 100, 4]</code>，最后逐段对上生产源码的顶点栈、分界栈与查询过程。</p>
       <div class="pill-row">
-        <span class="pill">预计 35 分钟</span>
+        <span class="pill">预计 50 分钟</span>
         <span class="pill">核心文件：map_field.hpp · map_field.cpp</span>
-        <span class="pill">动画：可画墙四层场切换 + 1D 抛物线包络</span>
+        <span class="pill">主动重建：最小实现 / 数值演算 / 真实 trace / 源码步进 / 填空验收</span>
       </div>
     </div>
   </header>
@@ -95,14 +96,191 @@
         </div>
       </div>
 
-      <h2 id="sec-sdf"><span class="sec-no">2.3</span>双向 EDT → SDF、双线性解析梯度与 swmax_ 金字塔</h2>
+      <div class="callout callout-tip">
+        <div class="callout-head">先分清：1D 平方距离不是 2D 欧氏距离</div>
+        <p><code>edt1d</code> 回答的是一维问题：<code>out[q] = minₚ((q-p)² + f[p])</code>。它的输入 <code>f[p]</code> 可以是一维种子代价，也可以是二维列扫描后保留下来的纵向代价平方；输出始终以<strong>格子单位的平方距离</strong>计。</p>
+        <p>真正的 2D EDT 分两遍：先逐列求最近种子的曼哈顿步数 $g(y,x)$，再对每一行构造 $f(x)=g(y,x)^2$ 并调用 <code>edt1d</code>。于是 $(x-p_x)^2$ 与 $(y-p_y)^2$ 精确相加，得到 $D^2(x,y)$；只有随后开平方并乘地图分辨率 $r$，才变成米制欧氏距离。</p>
+      </div>
+
+      <h2 id="sec-minimal"><span class="sec-no">2.3</span>从空白文件开始：先写一个能跑的精确 edt1d</h2>
+      <p>第一版只守住四个契约：输入输出长度一致；空输入直接返回；交点负数必须向下取整；平方与下标使用 <code>int64_t</code>。我们直接实现线性下包络，不先用 $O(N^2)$ 暴力版替代它。</p>
+
+      <div class="callout callout-syntax">
+        <div class="callout-head">动手顺序</div>
+        <ol>
+          <li>新建 <code>edt1d_min.cpp</code>，先写 <code>floor_div</code> 并用 <code>floor_div(-1, 4) == -1</code> 自检。</li>
+          <li>实现“建栈”和“查询”两个独立循环；不要一边构建一边用尚未完整的包络输出。</li>
+          <li>最后运行 <code>f = {9, 100, 4}</code>，确认终端输出 <code>8 5 4</code>。</li>
+        </ol>
+      </div>
+
+      <div class="code-card">
+        <div class="code-head"><span class="code-file">教学最小版：可独立编译的 edt1d_min.cpp</span><button type="button" class="code-btn code-copy-btn">复制</button></div>
+        <pre><code class="language-cpp">#include &lt;cstddef&gt;
+#include &lt;cstdint&gt;
+#include &lt;iostream&gt;
+#include &lt;vector&gt;
+
+std::int64_t floor_div(std::int64_t num, std::int64_t den) {
+  std::int64_t q = num / den;
+  const std::int64_t r = num % den;
+  if (r != 0 &amp;&amp; ((r &lt; 0) != (den &lt; 0))) { --q; }
+  return q;
+}
+
+void edt1d(const std::vector&lt;std::int64_t&gt; &amp; f,
+           std::vector&lt;std::int64_t&gt; &amp; out) {
+  const std::size_t n = f.size();
+  out.assign(n, 0);
+  if (n == 0) { return; }
+
+  constexpr std::int64_t kZNeg = -(std::int64_t{1} &lt;&lt; 60);
+  constexpr std::int64_t kZPos = +(std::int64_t{1} &lt;&lt; 60);
+  std::vector&lt;std::int64_t&gt; v(n, 0), z(n + 1, 0);
+  std::int64_t k = 0;
+  v[0] = 0;
+  z[0] = kZNeg;
+  z[1] = kZPos;
+
+  // 第一遍：构建整数轴上的抛物线下包络。
+  for (std::size_t qi = 1; qi &lt; n; ++qi) {
+    const std::int64_t q = static_cast&lt;std::int64_t&gt;(qi);
+    std::int64_t p = v[static_cast&lt;std::size_t&gt;(k)];
+    std::int64_t s = floor_div(
+      (f[qi] + q * q) - (f[static_cast&lt;std::size_t&gt;(p)] + p * p),
+      2 * (q - p));
+    while (s &lt;= z[static_cast&lt;std::size_t&gt;(k)]) {
+      --k;
+      p = v[static_cast&lt;std::size_t&gt;(k)];
+      s = floor_div(
+        (f[qi] + q * q) - (f[static_cast&lt;std::size_t&gt;(p)] + p * p),
+        2 * (q - p));
+    }
+    ++k;
+    v[static_cast&lt;std::size_t&gt;(k)] = q;
+    z[static_cast&lt;std::size_t&gt;(k)] = s;
+    z[static_cast&lt;std::size_t&gt;(k + 1)] = kZPos;
+  }
+
+  // 第二遍：沿分界指针向右查询每条抛物线。
+  k = 0;
+  for (std::size_t qi = 0; qi &lt; n; ++qi) {
+    const std::int64_t q = static_cast&lt;std::int64_t&gt;(qi);
+    while (z[static_cast&lt;std::size_t&gt;(k + 1)] &lt; q) { ++k; }
+    const std::int64_t p = v[static_cast&lt;std::size_t&gt;(k)];
+    const std::int64_t d = q - p;
+    out[qi] = d * d + f[static_cast&lt;std::size_t&gt;(p)];
+  }
+}
+
+int main() {
+  const std::vector&lt;std::int64_t&gt; f = {9, 100, 4};
+  std::vector&lt;std::int64_t&gt; out;
+  edt1d(f, out);
+  for (std::size_t i = 0; i &lt; out.size(); ++i) {
+    if (i != 0) { std::cout &lt;&lt; ' '; }
+    std::cout &lt;&lt; out[i];
+  }
+  std::cout &lt;&lt; '\n';
+  return 0;
+}</code></pre>
+      </div>
+
+      <p>这已经是一个完整的精确 1D EDT。生产实现额外承担命名空间可见性、头文件声明、2D 行列扫描与防御性检查，但核心循环与这里一致。下一步先手算，再看浏览器里的真实栈状态。</p>
+
+      <h2 id="sec-numeric"><span class="sec-no">2.4</span>把 f = [9, 100, 4] 逐步算到 [8, 5, 4]</h2>
+      <p>令 $P_p(x)=(x-p)^2+f[p]$。本例专门暴露负数交点：如果使用 C++ 原生整数除法，最后会把第一格错算成 9。</p>
+      <ol>
+        <li><strong>初始化 $q=0$</strong>：只有顶点 $p=0$，所以 <code>v=[0]</code>、<code>z=[-∞,+∞]</code>，尚无需计算 $s$。</li>
+        <li><strong>扫描 $q=1$</strong>：与 $p=0$ 的交点 $s=\left\lfloor\frac{(100+1)-(9+0)}{2(1-0)}\right\rfloor=46$。因为 $46\le z[0]=-\infty$ 不成立，保留 0 并压入 1，得到 <code>v=[0,1]</code>、<code>z=[-∞,46,+∞]</code>。</li>
+        <li><strong>扫描 $q=2$，第一次比较 $p=1$</strong>：$s=\left\lfloor\frac{(4+4)-(100+1)}{2(2-1)}\right\rfloor=\left\lfloor-93/2\right\rfloor=-47$。因为 $-47\le z[1]=46$，弹出顶点 1。</li>
+        <li><strong>弹栈后比较 $p=0$</strong>：$s=\left\lfloor\frac{(4+4)-(9+0)}{2(2-0)}\right\rfloor=\left\lfloor-1/4\right\rfloor=-1$。因为 $-1\le z[0]=-\infty$ 不成立，保留 0 并压入 2，最终 <code>v=[0,2]</code>、<code>z=[-∞,-1,+∞]</code>。</li>
+        <li><strong>查询输出</strong>：$q=0$ 已满足 $z[1]=-1&lt;0$，因此选 $p=2$，得 $(-2)^2+4=8$；$q=1$ 同样选 $p=2$，得 $(-1)^2+4=5$；$q=2$ 选 $p=2$，得 $0^2+4=4$。</li>
+      </ol>
+
+      <div class="math-card">
+        <div class="math-title">负分子修正与最终结果</div>
+        $$\lfloor -1/4 \rfloor = -1,\qquad \operatorname{trunc}(-1/4)=0$$
+        $$\operatorname{edt1d}([9,100,4])=[8,5,4],\qquad v=[0,2],\qquad z=[-\infty,-1,+\infty]$$
+      </div>
+
+      <dl class="hands-on-vars" id="ch02-numeric-vars"></dl>
+      <div class="callout callout-pitfall">
+        <div class="callout-head">为什么错用除法会稳定得到 [9, 5, 4]？</div>
+        <p>把第 4 步的 $s=-1$ 错写为 0 后，分界变成 <code>z=[-∞,0,+∞]</code>。查询 $q=0$ 时条件 <code>z[1] &lt; q</code> 不成立，仍选 $p=0$，于是输出 9；$q=1,2$ 仍选 $p=2$。这不是随机误差，而是负交点被向右推了一格。</p>
+      </div>
+
+      <h2 id="sec-trace"><span class="sec-no">2.5</span>真实栈状态步进器：v、z、popped 与 s</h2>
+      <p>下方不运行另一份算法：每一步都直接读取 <code>S.edt1dWithTrace([9, 100, 4]).steps</code>。<code>popped</code> 是该次扫描实际弹出的顶点；面板中的 <code>s</code> 显示弹栈结束后<strong>最终接受</strong>的交点，也就是新栈顶对应的 <code>z[k]</code>。</p>
+
+      <div class="hands-on-stepper">
+        <div class="hands-on-toolbar">
+          <div>
+            <div class="hands-on-stage-title" id="ch02-trace-title"></div>
+            <div class="hands-on-stage-meta" id="ch02-trace-meta"></div>
+          </div>
+          <div class="exercise-row">
+            <button type="button" class="btn btn-secondary btn-sm" id="ch02-trace-reset">重置</button>
+            <button type="button" class="btn btn-secondary btn-sm" id="ch02-trace-prev">← 上一步</button>
+            <span class="ctrl-val" id="ch02-trace-index">1 / 3</span>
+            <button type="button" class="btn btn-primary btn-sm" id="ch02-trace-next">下一步 →</button>
+          </div>
+        </div>
+        <div class="hands-on-stage-body">
+          <p class="hands-on-explain" id="ch02-trace-explain"></p>
+          <dl class="hands-on-vars" id="ch02-trace-vars"></dl>
+        </div>
+      </div>
+
+      <div class="callout callout-tip">
+        <div class="callout-head">每一步都要守住的不变量</div>
+        <ul>
+          <li><strong><code>v[]</code> 是顶点下标栈</strong>：<code>v[k]=p</code> 表示抛物线 $P_p(x)=(x-p)^2+f[p]$ 仍在当前下包络上；它不是函数值栈。</li>
+          <li><strong><code>z[]</code> 是相邻顶点的整数分界栈</strong>：<code>z[k]</code> 分隔 <code>v[k-1]</code> 与 <code>v[k]</code>，两端用哨兵覆盖 $(-\infty,+\infty)$；查询时用 <code>z[k+1] &lt; q</code> 右移。</li>
+          <li><strong>弹栈条件必须是 <code>s &lt;= z[k]</code></strong>：等号也不能保留旧顶点，因为整数定义域里它已经没有任何独占采样点。<code>popped</code> 只是被遮蔽的顶点，不是被删除的输入。</li>
+          <li><strong><code>s</code> 必须向下取整</strong>：真实分界取决于满足 $P_q\le P_p$ 的最小整数 $q$；<code>floor_div</code> 保证负分子不会向零截断。</li>
+          <li><strong>严格 $O(N)$</strong>：每条抛物线至多入栈一次、出栈一次，构建的比较均摊常数；查询指针只从左向右移动一次。没有嵌套的正向搜索。</li>
+        </ul>
+      </div>
+
+      <h2 id="sec-source"><span class="sec-no">2.6</span>源码分段步进：对照 map_field.cpp:L35-138</h2>
+      <p>先看二维入口如何拆成两遍，再进入真正的 <code>edt1d</code>。每段都标注仓库真实行号，并可通过“源码抽屉”打开当前实现。</p>
+      <div class="src-bar">
+        <button type="button" class="src-jump" data-file="src/map_field.cpp" data-lines="35-138"><span class="tag">完整源码</span>map_field.cpp : L35-138 (floor_div / edt2d / edt1d)</button>
+      </div>
+
+      <div class="hands-on-stepper">
+        <div class="hands-on-toolbar">
+          <div>
+            <div class="hands-on-stage-title" id="ch02-stage-title"></div>
+            <div class="hands-on-stage-meta" id="ch02-stage-meta"></div>
+          </div>
+          <div class="exercise-row">
+            <button type="button" class="btn btn-secondary btn-sm" id="ch02-stage-prev">← 上一步</button>
+            <span class="ctrl-val" id="ch02-stage-index">1 / 7</span>
+            <button type="button" class="btn btn-primary btn-sm" id="ch02-stage-next">下一步 →</button>
+          </div>
+        </div>
+        <div class="hands-on-stage-body">
+          <p class="hands-on-explain" id="ch02-stage-explain"></p>
+          <div class="code-card">
+            <div class="code-head">
+              <button type="button" class="src-jump" id="ch02-stage-source"><span class="tag">源码抽屉</span>打开当前实现</button>
+              <button type="button" class="code-btn" id="ch02-stage-copy">复制</button>
+            </div>
+            <pre><code class="language-cpp" id="ch02-stage-code"></code></pre>
+          </div>
+        </div>
+      </div>
+
+      <h2 id="sec-sdf"><span class="sec-no">2.7</span>双向 EDT → SDF、双线性解析梯度与 swmax_ 金字塔</h2>
       <ul>
         <li><strong>双向 EDT 构 SDF</strong>：分别对占据格做一次 EDT 得 $d_{\text{occ}}$、对自由格做一次 EDT 得 $d_{\text{free}}$。自由空间 $\text{SDF} = +\sqrt{d_{\text{occ}}}\cdot r &gt; 0$，墙体表面 $=0$，墙体内部深度为负值 $&lt;0$。</li>
         <li><strong>双线性插值与解析梯度</strong>：在相邻四个格心 $(v_{00}, v_{10}, v_{01}, v_{11})$ 上做双线性插值，$x$ 方向偏导 $\frac{\partial \text{SDF}}{\partial x}$ 就是水平差分插值再除以分辨率 $r$！</li>
         <li><strong>滑窗最大值栈 <code>swmax_</code></strong>：第 $k$ 层的每个像素记录以它为锚点的 $2^k \times 2^k$ 窗口内似然场的最大值：<code>dst[y][x] = max(src[y][x], src[y][x+h], src[y+h][x], src[y+h][x+h])</code>，第 6 章的 B&amp;B 全局搜全靠它给出不漏解的紧致上界。</li>
       </ul>
 
-      <h2 id="sec-code"><span class="sec-no">2.4</span>核心源码逐行剖析</h2>
+      <h2 id="sec-code"><span class="sec-no">2.8</span>核心源码逐行剖析</h2>
       <div class="src-bar">
         <button type="button" class="src-jump" data-file="src/map_field.cpp" data-lines="35-138"><span class="tag">源码抽屉</span>map_field.cpp : L35-138 (floor_div / edt2d / edt1d)</button>
         <button type="button" class="src-jump" data-file="src/map_field.cpp" data-lines="149-279"><span class="tag">源码抽屉</span>map_field.cpp : L149-279 (MapField::build)</button>
@@ -133,17 +311,50 @@ for (int y = 0; y &lt; grid_-&gt;height; ++y) {
 }</code></pre>
       </div>
 
-      <h2 id="sec-pitfall"><span class="sec-no">2.5</span>工程技巧与踩坑复盘</h2>
+      <h2 id="sec-pitfall"><span class="sec-no">2.9</span>工程技巧与踩坑复盘</h2>
       <div class="callout callout-pitfall">
         <div class="callout-head">为什么 <code>edt1d([9, 100, 4])</code> 曾算出错误的 9？</div>
-        <p>当 $p=0, q=2, f=[9, 100, 4]$ 时，交点分子为 $(4+4)-(9+0) = -1$，分母为 $4$。数学向下取整 $\lfloor -1/4 \rfloor = -1$，而 C++ 原生整数除法 <code>(-1)/4 = 0</code>（向零截断）。在 $q=1$ 被提前错误判定或分段边界上产生 1 格错位，把真实结果 $[8, 5, 4]$ 算成了 $[9, 5, 4]$。使用 <code>int64_t</code> 配合 <code>floor_div</code> 才彻底修复该 Bug（<code>test_map_field.cpp</code> 有专项回归测试）。</p>
+        <p>当 $p=0, q=2, f=[9, 100, 4]$ 时，交点分子为 $(4+4)-(9+0) = -1$，分母为 $4$。数学向下取整 $\lfloor -1/4 \rfloor = -1$，而 C++ 原生整数除法 <code>(-1)/4 = 0</code>（向零截断）。这会把最终分界从 <code>z[1]=-1</code> 错写为 0，使查询 $q=0$ 时仍选顶点 0，于是真实结果 $[8, 5, 4]$ 被算成 $[9, 5, 4]$。使用 <code>int64_t</code> 配合 <code>floor_div</code> 才彻底修复该 Bug（<code>test_map_field.cpp</code> 有专项回归测试）。</p>
       </div>
       <div class="callout callout-syntax">
         <div class="callout-head">共享只读所有权消除 UAF</div>
         <p>早期版本 <code>MapField</code> 持有原始指针 <code>const OccupancyGrid * grid_</code>，一旦调用方栈上局部 <code>grid</code> 析构便触发 Use-After-Free。重构后统一改为私有 <code>std::shared_ptr&lt;const OccupancyGrid&gt; grid_</code>（<code>map_field.hpp:L162</code>），即使热切图期间后台仍在读取旧地图也绝对安全。</p>
       </div>
 
-      <h2 id="sec-quiz"><span class="sec-no">2.6</span>思考题与自检</h2>
+      <h2 id="sec-exercise"><span class="sec-no">2.10</span>填空练习与验收</h2>
+      <p>先遮住上方答案独立完成，再提交检查。第二题的期望向量由页面直接读取 <code>S.edt1d([9, 100, 4])</code>，不是另存的演示常量。</p>
+
+      <form class="hands-on-exercise" data-kind="number" data-answer="-1" data-tolerance="0" data-hint="分子是负数且不能整除时，floor 要比向零截断再小 1。" data-success="正确。-1/4 向下取整是 -1，这正是避免首格错位的边界。">
+        <label for="ch02-ex1">练习 1：填写 <code>floor_div(-1, 4)</code> 的结果。</label>
+        <div class="exercise-row"><input class="exercise-input" id="ch02-ex1" name="answer" inputmode="numeric" placeholder="输入整数" /><button class="btn btn-primary btn-sm" type="submit">检查</button></div>
+        <div class="exercise-feedback" aria-live="polite"></div>
+      </form>
+
+      <form class="hands-on-exercise" data-kind="vector" data-hint="q=1 已经越过分界 z[1]=-1，应选择顶点 p=2，而不是 p=0。" data-success="正确。真实数学核返回 [8, 5, 4]，与手算及 C++ 回归用例一致。">
+        <label for="ch02-ex2">练习 2：填写完整的 <code>edt1d([9, 100, 4])</code> 输出向量。</label>
+        <div class="exercise-row"><input class="exercise-input" id="ch02-ex2" name="answer" placeholder="例如：8,5,4" /><button class="btn btn-primary btn-sm" type="submit">检查</button></div>
+        <div class="exercise-feedback" aria-live="polite"></div>
+      </form>
+
+      <form class="hands-on-exercise" data-kind="choice" data-answer="s&lt;=z[k]" data-hint="整数定义域上，等号也意味着旧顶点被完全覆盖，必须弹出。" data-success="正确。条件是 s <= z[k]；漏掉等号会保留没有整数采样点的旧顶点。">
+        <label for="ch02-ex3">练习 3：填写构建下包络时，继续弹栈的 <code>while</code> 条件。</label>
+        <div class="exercise-row"><input class="exercise-input" id="ch02-ex3" name="answer" placeholder="填写含 s、z[k] 的不等式" /><button class="btn btn-primary btn-sm" type="submit">检查</button></div>
+        <div class="exercise-feedback" aria-live="polite"></div>
+      </form>
+
+      <div class="callout callout-tip">
+        <div class="callout-head">完成标准</div>
+        <ul>
+          <li>能从空白文件实现 <code>floor_div</code>、建栈、查询与空输入处理，并对 <code>[9, 100, 4]</code> 输出 <code>[8, 5, 4]</code>。</li>
+          <li>能解释 <code>v[]</code> 为什么存顶点下标、<code>z[]</code> 为什么存分界，以及 <code>popped</code> 为什么不等于最终输出。</li>
+          <li>能手算 $s=\lfloor-1/4\rfloor=-1$，并说明弹栈条件中的等号、查询条件中的 <code>&lt;</code> 各自为何正确。</li>
+          <li>能说明每条抛物线入栈、出栈各至多一次，查询指针只右移一次，因此总复杂度严格为 $O(N)$。</li>
+          <li>能区分 1D 平方距离与 2D 行列可分离：2D 先列扫描得到 $g$，再逐行以 $g^2$ 为 <code>f</code>；米制距离需开平方并乘分辨率。</li>
+          <li>浏览器控制台的 <code>S.edt1dWithTrace([9, 100, 4])</code> 应给出最终 <code>v=[0,2]</code>、<code>z=[-∞,-1,+∞]</code>；C++ 回归可运行 <code>MapFieldTest.Edt1dNegativeNumeratorCounterexample</code> 与 <code>MapFieldTest.Edt1dLargeInt64NoOverflow</code>。</li>
+        </ul>
+      </div>
+
+      <h2 id="sec-quiz"><span class="sec-no">2.11</span>思考题与自检</h2>
       <details class="quiz-item">
         <summary>1. 未知栅格（<code>c = -1</code>）应该赋予正 SDF、零 SDF 还是负 SDF？</summary>
         <div class="quiz-ans">必须赋予<strong>有界负值（非 0）</strong>，似然打分为低背景值 <code>unknown_score_ = 0.10</code>。若未知区给 SDF=0，相当于把没探明的地方都当成“墙表面”，匹配器会把扫描点吸进未知黑洞里！</div>

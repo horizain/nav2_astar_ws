@@ -25,6 +25,7 @@
       biasHist.length = 0;
       biasHist.push({ k: 0, est: 0, gt: trueBias, varB: core.P4[3][3] });
       render();
+      window.dispatchEvent(new CustomEvent("ch07:reset"));
     }
 
     function advance(nSteps = 1) {
@@ -44,11 +45,25 @@
         } else {
           scan = S.makeScan(grid, gt, { beams: 140 });
         }
+        const poseBefore = { ...core.pose };
+        const Pbefore = core.P4.map((row) => row.slice());
+        const stateBefore = core.state;
         const out = core.step({ x: dtrans, y: 0, theta: dth }, scan, { wz: rawWz, dt });
         stepNum++;
         biasHist.push({ k: stepNum, est: out.gyroBias, gt: trueBias, varB: core.P4[3][3] });
         if (biasHist.length > 80) biasHist.shift();
         updateGatesUI(out);
+        window.dispatchEvent(new CustomEvent("ch07:step", {
+          detail: {
+            iteration: stepNum,
+            out,
+            stateBefore,
+            poseBefore,
+            Pbefore,
+            poseAfter: { ...core.pose },
+            Pafter: core.P4.map((row) => row.slice()),
+          },
+        }));
       }
       render();
     }

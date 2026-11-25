@@ -14,12 +14,12 @@ const PAGES = [
   { rel: "walkthrough.html", shot: "02_walkthrough.png", testWalkthrough: true },
   { rel: "code-index.html", shot: "01_code_index.png", testDrawer: true },
   { rel: "chapters/ch01.html" },
-  { rel: "chapters/ch02.html", shot: "02_ch02.png" },
+  { rel: "chapters/ch02.html", shot: "02_ch02.png", testEdtHandsOn: true },
   { rel: "chapters/ch03.html" },
   { rel: "chapters/ch04.html", shot: "04_ch04.png", testDrawer: true, testHandsOn: true },
   { rel: "chapters/ch05.html" },
   { rel: "chapters/ch06.html" },
-  { rel: "chapters/ch07.html", shot: "07_ch07.png", testDrawer: true },
+  { rel: "chapters/ch07.html", shot: "07_ch07.png", testDrawer: true, testEfkHandsOn: true },
   { rel: "chapters/ch08.html", shot: "08_ch08.png" },
   { rel: "chapters/ch09.html", shot: "09_ch09.png" },
   { rel: "chapters/ch10.html" },
@@ -186,6 +186,76 @@ async function main() {
         const validVsc = drawerState.vscHref.startsWith('vscode://vscode-remote/wsl+');
         drawerOk = drawerState.open && drawerState.lines > 10 && drawerState.hl >= 1 && validVsc;
         if (!drawerOk) failures.push(`${pg.rel}: drawer failed (${JSON.stringify(drawerState)})`);
+      }
+
+      if (pg.testEdtHandsOn) {
+        const edtCheck = await cdp.evalJS(`(() => {
+          document.getElementById('ch02-trace-next').click();
+          document.getElementById('ch02-trace-next').click();
+          const traceTitle = document.getElementById('ch02-trace-title').textContent;
+          const before = document.getElementById('ch02-stage-title').textContent;
+          document.getElementById('ch02-stage-next').click();
+          const after = document.getElementById('ch02-stage-title').textContent;
+          const ex1 = document.getElementById('ch02-ex1');
+          ex1.value = '-1';
+          ex1.closest('form').requestSubmit();
+          const ex2 = document.getElementById('ch02-ex2');
+          ex2.value = '8,5,4';
+          ex2.closest('form').requestSubmit();
+          const ex3 = document.getElementById('ch02-ex3');
+          ex3.value = 's<=z[k]';
+          ex3.closest('form').requestSubmit();
+          return {
+            numericVars: document.querySelectorAll('#ch02-numeric-vars .hands-on-var').length,
+            traceVars: document.querySelectorAll('#ch02-trace-vars .hands-on-var').length,
+            traceAtQ2: traceTitle.includes('q=2'),
+            stageChanged: before !== after,
+            ex1Ok: ex1.closest('form').querySelector('.exercise-feedback').classList.contains('ok'),
+            ex2Ok: ex2.closest('form').querySelector('.exercise-feedback').classList.contains('ok'),
+            ex3Ok: ex3.closest('form').querySelector('.exercise-feedback').classList.contains('ok'),
+          };
+        })()`);
+        if (edtCheck.numericVars < 8 || edtCheck.traceVars < 8 || !edtCheck.traceAtQ2 ||
+            !edtCheck.stageChanged || !edtCheck.ex1Ok || !edtCheck.ex2Ok || !edtCheck.ex3Ok) {
+          failures.push(`${pg.rel}: EDT hands-on interaction failed (${JSON.stringify(edtCheck)})`);
+        }
+      }
+
+      if (pg.testEfkHandsOn) {
+        await cdp.evalJS(`document.getElementById('ch07-step-1').click()`);
+        await sleep(250);
+        const efkCheck = await cdp.evalJS(`(() => {
+          const before = document.getElementById('ch07-stage-title').textContent;
+          document.getElementById('ch07-stage-next').click();
+          const after = document.getElementById('ch07-stage-title').textContent;
+          const ex1 = document.getElementById('ch07-ex1');
+          ex1.value = '9';
+          ex1.closest('form').requestSubmit();
+          const ex3 = document.getElementById('ch07-ex3');
+          ex3.value = 'prediction';
+          ex3.closest('form').requestSubmit();
+          document.getElementById('ch07-step-10').click();
+          const iterAfter15 = document.getElementById('ch07-live-iter').textContent;
+          document.getElementById('ch07-occ-btn').click();
+          document.getElementById('ch07-step-1').click();
+          const rejectionUi = document.getElementById('ch07-g-score').textContent.includes('FAIL');
+          const rejectedTrace = document.getElementById('ch07-live-vars').textContent.includes('false');
+          return {
+            liveVars: document.querySelectorAll('#ch07-live-vars .hands-on-var').length,
+            liveIter: document.getElementById('ch07-live-iter').textContent,
+            stageChanged: before !== after,
+            ex1Ok: ex1.closest('form').querySelector('.exercise-feedback').classList.contains('ok'),
+            ex3Ok: ex3.closest('form').querySelector('.exercise-feedback').classList.contains('ok'),
+            iterAfter15,
+            rejectionUi,
+            rejectedTrace,
+          };
+        })()`);
+        if (efkCheck.liveVars < 8 || !efkCheck.liveIter.includes('#1') ||
+            !efkCheck.stageChanged || !efkCheck.ex1Ok || !efkCheck.ex3Ok ||
+            !efkCheck.iterAfter15.includes('#16') || !efkCheck.rejectionUi || !efkCheck.rejectedTrace) {
+          failures.push(`${pg.rel}: EKF hands-on interaction failed (${JSON.stringify(efkCheck)})`);
+        }
       }
 
       if (pg.testHandsOn) {

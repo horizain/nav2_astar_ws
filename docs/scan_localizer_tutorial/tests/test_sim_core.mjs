@@ -190,4 +190,83 @@ test("FieldGn teaching example exposes hand-checkable H, b and dp", () => {
   assert.ok(Math.abs(st.nextPose.x - 0.05) < 1e-5);
 });
 
+// 14. Ch07 hands-on inspector can rely on a complete, boolean-valued EKF frame trace
+test("LocalizerCore4D exposes per-frame prediction, gates and Joseph update trace", () => {
+  const g = S.createWarehouseMap(0.1);
+  const f = new S.MapField(g, 0.2);
+  const core = new S.LocalizerCore4D(f, { autoGlobalRecover: false });
+  let gt = { x: 4.0, y: 8.0, theta: 0.0 };
+  core.reset(gt);
+  gt = S.poseMul(gt, { x: 0.12, y: 0, theta: 0.03 });
+  const scan = S.makeScan(g, gt, { beams: 180 });
+  const out = core.step({ x: 0.12, y: 0, theta: 0.03 }, scan, { wz: 0.19, dt: 0.2 });
+  assert.equal(typeof out.accepted, "boolean");
+  assert.equal(out.trace.accepted, out.accepted);
+  assert.equal(out.trace.F4.length, 4);
+  assert.equal(out.trace.Ppred.length, 4);
+  assert.equal(out.trace.R.length, 9);
+  assert.equal(out.trace.innov.length, 3);
+  assert.equal(out.trace.Ppost.length, 4);
+  if (out.accepted) {
+    assert.equal(out.trace.K4.length, 4);
+    assert.equal(out.trace.K4[0].length, 3);
+    assert.equal(out.trace.dx.length, 4);
+  }
+
+  const badScan = Array.from({ length: 20 }, (_, i) => ({ x: 40 + i, y: 40 }));
+  const rejected = core.step({ x: 0, y: 0, theta: 0 }, badScan, { wz: 0.2, dt: 0.2 });
+  assert.equal(rejected.accepted, false);
+  assert.equal(rejected.trace.accepted, false);
+  assert.equal(rejected.trace.K4, null);
+  assert.equal(rejected.trace.dx, null);
+  assert.equal(rejected.trace.Ppost.length, 4);
+});
+
+// 15. Ch02 hands-on stepper exposes the exact lower-envelope stack transitions
+test("edt1d trace records the [9,100,4] pop and negative floor boundary", () => {
+  const tr = S.edt1dWithTrace([9, 100, 4]);
+  assert.deepEqual(tr.out, [8, 5, 4]);
+  assert.deepEqual(tr.steps[1].v, [0, 1]);
+  assert.equal(tr.steps[1].z[1], 46);
+  assert.deepEqual(tr.steps[2].v, [0, 2]);
+  assert.deepEqual(tr.steps[2].popped, [1]);
+  assert.equal(tr.steps[2].z[1], -1);
+  const noTrace = S.edt1dWithTrace([9, 100, 4], false);
+  assert.deepEqual(noTrace.out, tr.out);
+  assert.equal(noTrace.steps.length, 0);
+});
+
+// 16. Mahalanobis-only rejection must not mutate the predicted covariance trace
+test("LocalizerCore4D keeps Ppred immutable during stationary lockout relaxation", () => {
+  const g = S.createWarehouseMap(0.12);
+  const f = new S.MapField(g, 0.22);
+  const core = new S.LocalizerCore4D(f, {
+    degradedAfter: 3, lostAfter: 12, anomalyWindow: 6, anomalyThreshold: 5, autoGlobalRecover: false,
+  });
+  let gt = { x: 4.5, y: 8.0, theta: 0.0 };
+  core.reset(gt);
+  let rejected = null;
+  for (let frame = 1; frame <= 40 && !rejected; frame++) {
+    const dt = 0.2, dtrans = 0.14, dth = 0.03;
+    const rawWz = dth / dt + 0.04;
+    gt = S.poseMul(gt, { x: dtrans, y: 0, theta: dth });
+    const scan = S.makeScan(g, gt, { beams: 140 });
+    const out = core.step({ x: dtrans, y: 0, theta: dth }, scan, { wz: rawWz, dt });
+    if (out.trace && out.gates.score && out.gates.inlier && out.gates.cov && !out.gates.mahal) {
+      rejected = out;
+    }
+  }
+  assert.ok(rejected, "expected a healthy-match Mahalanobis-only rejection");
+  assert.equal(rejected.accepted, false);
+  assert.equal(rejected.trace.K4, null);
+  for (let i = 0; i < 9; i++) {
+    const row = Math.floor(i / 3), col = i % 3;
+    const expected = rejected.trace.S[i] - rejected.trace.R[i] - (row === col ? 1e-9 : 0);
+    assert.ok(Math.abs(rejected.trace.Ppred[row][col] - expected) < 1e-12,
+      `Ppred alias mismatch at ${row},${col}`);
+  }
+  assert.ok(rejected.trace.Ppost[0][0] > rejected.trace.Ppred[0][0],
+    "lockout relaxation should affect Ppost, not Ppred");
+});
+
 console.log(`\nAll ${passed} sim-core tests passed.`);
