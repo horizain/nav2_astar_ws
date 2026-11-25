@@ -175,4 +175,19 @@ test("LocalizerCore4D transitions TRACKING -> DEGRADED -> GLOBAL under sustained
   assert.equal(st.state, "GLOBAL");
 });
 
+// 13. Ch04 hands-on numeric example stays identical to the simulation core
+test("FieldGn teaching example exposes hand-checkable H, b and dp", () => {
+  const ex = S.createFieldGnTeachingExample();
+  const st = ex.step;
+  assert.equal(st.ok, true);
+  assert.equal(st.used, 5);
+  assert.ok(Math.abs(st.samplePoint.r - 0.2) < 1e-6);
+  assert.ok(Math.abs(st.samplePoint.w - 0.5) < 1e-6);
+  [-1, 0, -2].forEach((expected, i) => assert.ok(Math.abs(st.samplePoint.J[i] - expected) < 1e-6));
+  assert.ok(Math.abs(st.H[0] - 2.5) < 1e-5 && Math.abs(st.H[4]) < 1e-5 && Math.abs(st.H[8] - 5.0) < 1e-5);
+  assert.ok(Math.abs(st.b[0] + 0.5) < 1e-5 && Math.abs(st.b[1]) < 1e-5 && Math.abs(st.b[2]) < 1e-5);
+  assert.ok(Math.abs(st.dp[0] - 0.2) < 1e-5 && Math.abs(st.dp[1]) < 1e-5 && Math.abs(st.dp[2]) < 1e-5);
+  assert.ok(Math.abs(st.nextPose.x - 0.05) < 1e-5);
+});
+
 console.log(`\nAll ${passed} sim-core tests passed.`);
