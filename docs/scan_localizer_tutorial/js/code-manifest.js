@@ -5,12 +5,12 @@
 
   const CHAPTERS = [
     { id: "ch01", num: "01", title: "定位是什么 & SE(2) 与 TF 树", sub: "坐标变换、map→odom 与 PGM 地图加载", file: "chapters/ch01.html" },
-    { id: "ch02", num: "02", title: "MapField 地图表征与精确 EDT", sub: "1D/2D 下包络、SDF 梯度与滑窗金字塔", file: "chapters/ch02.html" },
+    { id: "ch02", num: "02", title: "从零写出 MapField 与精确 EDT", sub: "最小 edt1d、栈状态手算、源码步进与练习", file: "chapters/ch02.html" },
     { id: "ch03", num: "03", title: "经典匹配器演进", sub: "Correlative、ICP-P2P 与 2D NDT 对比", file: "chapters/ch03.html" },
     { id: "ch04", num: "04", title: "从零写出 Field-GN 与两级组合", sub: "最小实现、单步手算、源码步进与填空验收", file: "chapters/ch04.html" },
     { id: "ch05", num: "05", title: "长走廊退化与各向异性协方差", sub: "未阻尼 Hessian 求逆与 120,000× 特征值比", file: "chapters/ch05.html" },
     { id: "ch06", num: "06", title: "全局重定位：B&B vs 粒子滤波", sub: "swmax_ 分支定界剪枝与 AMCL-lite", file: "chapters/ch06.html" },
-    { id: "ch07", num: "07", title: "4D 各向异性 EKF 与五态状态机", sub: "陀螺零偏估计、四门控与对称走廊修复", file: "chapters/ch07.html" },
+    { id: "ch07", num: "07", title: "从零实现 4D EKF 与五态状态机", sub: "预测/门控/Joseph 步进、实时 P4 与练习", file: "chapters/ch07.html" },
     { id: "ch08", num: "08", title: "ROS 2 生产节点 LocalizerNode", sub: "Lifecycle、TF2 外参插值与锁外构场", file: "chapters/ch08.html" },
     { id: "ch09", num: "09", title: "仿真基准 E1–E10 与真值三方评测", sub: "可控实验设计、Intel Lab 450 组真值实测", file: "chapters/ch09.html" },
     { id: "ch10", num: "10", title: "C++20 × Eigen × ROS 2 实战手册", sub: "零分配缓冲、并发快照与语法速查", file: "chapters/ch10.html" },

@@ -261,7 +261,7 @@
     return q;
   }
 
-  function edt1dWithTrace(f) {
+  function edt1dWithTrace(f, captureTrace = true) {
     const n = f.length;
     const out = new Array(n).fill(0);
     if (n === 0) return { out, v: [], z: [], steps: [] };
@@ -272,7 +272,7 @@
     v[0] = 0;
     z[0] = -INF_Z;
     z[1] = INF_Z;
-    const steps = [{ q: 0, v: [0], z: [-INF_Z, INF_Z], popped: [] }];
+    const steps = captureTrace ? [{ q: 0, v: [0], z: [-INF_Z, INF_Z], popped: [] }] : [];
     for (let q = 1; q < n; q++) {
       const popped = [];
       let p = v[k];
@@ -287,7 +287,7 @@
       v[k] = q;
       z[k] = s;
       z[k + 1] = INF_Z;
-      steps.push({ q, v: v.slice(0, k + 1), z: z.slice(0, k + 2), popped });
+      if (captureTrace) steps.push({ q, v: v.slice(0, k + 1), z: z.slice(0, k + 2), popped });
     }
     let kk = 0;
     for (let q = 0; q < n; q++) {
@@ -300,7 +300,7 @@
   }
 
   function edt1d(f) {
-    return edt1dWithTrace(f).out;
+    return edt1dWithTrace(f, false).out;
   }
 
   function edt2d(width, height, seeds) {
@@ -1114,19 +1114,21 @@
         gateMahal = Number.isFinite(mahal) && mahal >= 0 && mahal < this.cfg.mahalGate;
       }
 
-      const accept = mr.valid && gateScore && gateInlier && gateCov && gateMahal && Sinv;
+      const accept = Boolean(mr.valid && gateScore && gateInlier && gateCov && gateMahal && Sinv);
       const isBad = !accept && (!mr.valid || mr.score < this.cfg.anomalyLowScore || (!gateInlier && !gateScore));
       this.anomalyWin.push(isBad ? 1 : 0);
       if (this.anomalyWin.length > this.cfg.anomalyWindow) this.anomalyWin.shift();
 
+      let K4 = null;
+      let dx = null;
       if (accept) {
         // K4 = Ppred[:,0:3] * Sinv (4x3)
-        const K4 = Array.from({ length: 4 }, (_, i) => [
+        K4 = Array.from({ length: 4 }, (_, i) => [
           Ppred[i][0] * Sinv[0] + Ppred[i][1] * Sinv[3] + Ppred[i][2] * Sinv[6],
           Ppred[i][0] * Sinv[1] + Ppred[i][1] * Sinv[4] + Ppred[i][2] * Sinv[7],
           Ppred[i][0] * Sinv[2] + Ppred[i][1] * Sinv[5] + Ppred[i][2] * Sinv[8],
         ]);
-        const dx = K4.map((row) => row[0] * innov[0] + row[1] * innov[1] + row[2] * innov[2]);
+        dx = K4.map((row) => row[0] * innov[0] + row[1] * innov[1] + row[2] * innov[2]);
         this.pose = { x: pred.x + dx[0], y: pred.y + dx[1], theta: wrapAngle(pred.theta + dx[2]) };
         this.gyroBias = Math.min(Math.max(this.gyroBias + dx[3], -this.cfg.maxGyroBias), this.cfg.maxGyroBias);
 
@@ -1150,7 +1152,7 @@
         this.state = "TRACKING";
       } else {
         this.pose = pred;
-        this.P4 = Ppred;
+        this.P4 = Ppred.map((row) => row.slice());
         // Stationary Mahalanobis lockout relaxation (98fcd28)
         if (mr.valid && gateInlier && gateScore && gateCov && !gateMahal) {
           for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) this.P4[i][j] *= 1.5;
@@ -1164,6 +1166,20 @@
         const sumBad = this.anomalyWin.reduce((a, b) => a + b, 0);
         if (sumBad >= this.cfg.anomalyThreshold) { this.state = "GLOBAL"; this.anomalyWin = []; }
       }
+      const trace = {
+        pred: { ...pred },
+        F4: F4.map((row) => row.slice()),
+        Q4: Q4.map((row) => row.slice()),
+        Ppred: Ppred.map((row) => row.slice()),
+        match: { pose: { ...mr.pose }, valid: mr.valid, score: mr.score, inlierRatio: mr.inlierRatio },
+        R: R.slice(),
+        innov: innov.slice(),
+        S: S.slice(),
+        K4: K4 ? K4.map((row) => row.slice()) : null,
+        dx: dx ? dx.slice() : null,
+        accepted: accept,
+        Ppost: this.P4.map((row) => row.slice()),
+      };
       return {
         pose: { ...this.pose },
         gyroBias: this.gyroBias,
@@ -1175,6 +1191,7 @@
         minEig,
         gates: { score: gateScore, inlier: gateInlier, cov: gateCov, mahal: gateMahal },
         rejectStreak: this.rejectStreak,
+        trace,
       };
     }
   }
