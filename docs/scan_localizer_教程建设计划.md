@@ -2,7 +2,7 @@
 
 > **状态**：**已完成（M1 → M4 全链路落地）**。教程入口见 [30 scan_localizer 交互式工程教程导览](30_scan_localizer教程导览.md) 与 [教程首页](scan_localizer_tutorial/index.html)。
 >
-> **基线提交**：`98fcd28`（`src/scan_localizer` 共 33 个文件 / ~11,900 行代码；`colcon test` 192 项测试 0 失败；Intel Research Lab 450 组真值三方评测 GT Trans RPE RMSE **3.06 cm**）。
+> **基线提交**：`98fcd28`（`src/scan_localizer` 共 33 个文件 / ~11,900 行代码；既有 CTest 记录为 63 项 GTest、0 失败，本轮未重跑 colcon；Intel Research Lab 450 组真值三方评测 GT Trans RPE RMSE **3.06 cm** 为仓库历史声明，本轮未复现）。
 
 ---
 
@@ -10,10 +10,10 @@
 
 采用**「交互式静态教程站 + Markdown 课程入口」双形态**（零前端构建工具、纯静态可离线打开，复用仓库已有的 KaTeX 与 Highlight.js `.min` 资产）：
 
-- **主站目录（规划）**：`docs/scan_localizer_tutorial/`
+- **主站目录**：`docs/scan_localizer_tutorial/`
   - 资产复用策略：`vendor/` 从 [docs/website](website/index.html) 的 `vendor/katex/`（与 `slam-mpc-academy/assets/vendor/katex/` 一致）及 `slam-mpc-academy/assets/vendor/hljs/`（`atom-one-dark.min.css`、`highlight.min.js`）引入最小集合，只保留 `.min` 版并仅引用 `contrib/auto-render.min.js`。
-- **Markdown 课程入口（规划）**：`docs/30_scan_localizer教程导览.md`，后续接入 [教学文档总目录](README.md)，并通过 [链接检查脚本](tools/check_tutorial_links.py) 检验。
-- **一键本地启动（规划）**：`docs/scan_localizer_tutorial/serve.sh`
+- **Markdown 课程入口**：`docs/30_scan_localizer教程导览.md`，已接入 [教学文档总目录](README.md)，并通过 [链接检查脚本](tools/check_tutorial_links.py) 检验。
+- **一键本地启动**：`docs/scan_localizer_tutorial/serve.sh`
   - 使用轻量 Python HTTP 服务启动教程站，同时以只读方式挂载 `src/scan_localizer/`，支持**网页内点击跳转徽章滑出实时源码抽屉**。
 - **每章统一 6 段式教学结构**：
   1. **直觉与动画先行**：先拖动滑块 / 观察 Canvas 动画，建立几何与动态直觉；
@@ -39,7 +39,7 @@
 | **第三阶段：全局定位与滤波状态机** | **Ch06 迷路了怎么办：B&B 全局定位 vs 粒子滤波（AMCL-lite）** | 冷启动与机器人绑架问题；基于 `swmax_` 的金字塔 Branch-and-Bound 上界剪枝、优先队列展开与 Top-K NMS 去重；对比 `ParticleFilter`（Thrun 反向运动分解、log-sum-exp 混合似然防浮点下溢、ESS 自适应重采样） | [matchers.cpp](../src/scan_localizer/src/matchers.cpp) (`global_correlative`), [particle_filter.hpp](../src/scan_localizer/include/scan_localizer/particle_filter.hpp), [particle_filter.cpp](../src/scan_localizer/src/particle_filter.cpp) | **动画 6**：**B&B 优先队列剪枝树动画 vs 500 粒子滤波收敛竞赛**（支持“一键绑架”观察多假设晋升） |
 | | **Ch07 4D 各向异性 EKF、四道门控与状态机** | 4 维状态 $[x,y,\theta,b_g]^\top$ 在线估计 IMU 陀螺零偏；SE(2)+Bias $4\times 4$ 雅可比预测与 Joseph 形式协方差更新；四道门控（`min_score` / `min_inlier_ratio` / $\chi^2(3)$ 马氏门限 / 最小特征值）；五态机 `UNINIT/TRACKING/DEGRADED/LOST/GLOBAL`；多假设队列与真实故障复盘（静止马氏锁死 & 对称走廊误跳变 `98fcd28`） | [localizer_core.hpp](../src/scan_localizer/include/scan_localizer/localizer_core.hpp), [localizer_core.cpp](../src/scan_localizer/src/localizer_core.cpp) | **动画 7**：**4D EKF 零偏收敛曲线 + 五态机门控模拟器**（手动注入陀螺零偏 / 动态遮挡 / 绑架 / 对称走廊，实时观察状态流转） |
 | **第四阶段：工程落地与验证** | **Ch08 ROS 2 生产级节点架构：LocalizerNode** | 算法核零 ROS 依赖分层；`LifecycleNode` 五回调与 `autostart: false`；`state_mtx_` 锁外构场与 `applyMap()` 原子交换 + 锁外发布 `OutputSnapshot`；TF2 3D 外参与扫瞄时间戳插值；6×6 协方差 `[35]` 偏航角下标坑；动态调参回调与话题/服务契约 | [localizer_node.hpp](../src/scan_localizer/include/scan_localizer/localizer_node.hpp), [localizer_node.cpp](../src/scan_localizer/src/localizer_node.cpp), [localizer.yaml](../src/scan_localizer/config/localizer.yaml), [demo.launch.py](../src/scan_localizer/launch/demo.launch.py) | **动画 8**：**全链路迷你仓库定位驾驶舱**（端到端闭环运行预测→匹配→4D EKF→状态机，支持切换匹配器与绑架测试）+ Lifecycle 状态流转图 |
-| | **Ch09 仿真测试、E1–E10 消融实验与 Intel Lab 真值三方评测** | 受控实验设计方法论（如何避免“泄露真值”、“随机种子死循环”、“重分箱角度偏置”等 E1–E10 评测陷阱）；ASan/UBSan 与 9 组 GTest 单测/集成/回归测试；Intel Lab 450 组手工精校真值三方实测分析（`scan_localizer` vs `nav2_amcl` vs `slam_toolbox`） | [sim_world.hpp](../src/scan_localizer/include/scan_localizer/sim_world.hpp), [sim_world.cpp](../src/scan_localizer/src/sim_world.cpp), [benchmark.cpp](../src/scan_localizer/test/benchmark.cpp), [benchmark_results_x86.txt](../src/scan_localizer/docs/benchmark_results_x86.txt) | **交互图表**：E1–E10 误差/耗时对比交互图 + 嵌入 Intel Lab 真值轨迹/精度/系统开销实测图表 |
+| | **Ch09 仿真测试、E1–E10 消融实验与 Intel Lab 真值三方评测** | 受控实验设计方法论（如何避免“泄露真值”、“随机种子死循环”、“重分箱角度偏置”等 E1–E10 评测陷阱）；9 组 GTest 单测/集成/回归测试（本轮未重跑）；ASan/UBSan 仅作方法介绍，未运行；Intel Lab 450 组手工精校真值三方历史声明分析（`scan_localizer` vs `nav2_amcl` vs `slam_toolbox`） | [sim_world.hpp](../src/scan_localizer/include/scan_localizer/sim_world.hpp), [sim_world.cpp](../src/scan_localizer/src/sim_world.cpp), [benchmark.cpp](../src/scan_localizer/test/benchmark.cpp), [benchmark_results_x86.txt](../src/scan_localizer/docs/benchmark_results_x86.txt) | **交互图表**：E1–E10 误差/耗时对比交互图 + 嵌入 Intel Lab 真值轨迹/精度/系统开销实测图表 |
 | **第五阶段：速查与索引** | **Ch10 C++20 × Eigen × ROS 2 语法与工程技巧实战手册** | 横跨全项目的现代 C++20、Eigen 数值代数、零分配缓冲优化、并发锁设计与 ROS 2 Lifecycle/TF2/QoS 陷阱速查卡片库 | 横跨 `src/scan_localizer` 全仓库典型片段 | **交互筛选器**：按 `C++20` / `Eigen` / `内存与并发` / `ROS 2` / `数值稳定` 标签实时过滤语法与工程卡片 |
 | **独立索引页** | **`code-index.html` 项目代码全景跳转索引** | 覆盖 [src/scan_localizer](../src/scan_localizer/README.md) 全部 33 个文件（头/源/测/配/Launch/CMake），提供 **3 条阅读路线**（3h 速通 / 算法核精读 / 全栈工程） | `src/scan_localizer` 全部 33 个文件 | **可点击架构依赖图（SVG）+ 符号搜索框 + 实时源码抽屉（精确行号高亮 + VS Code 一键跳转）** |
 
@@ -88,7 +88,7 @@
 
 ## 五、实施里程碑（M1–M4）与自动验收标准
 
-后续正式实施时，按 4 个里程碑推进，并以 **4 项硬性自动检查**收口：
+已按 4 个里程碑完成实施，并以 **4 项硬性自动检查**收口：
 
 - **M1 · 站内框架与全景代码索引**：搭建 `docs/scan_localizer_tutorial/` 共享样式、侧栏目录、KaTeX + Highlight.js、实时源码抽屉、`serve.sh`、`index.html` 与 `code-index.html`（含 33 个文件精确行号表）。
 - **M2 · 基础与扫描匹配篇（Ch01–Ch05 + 动画 1–5）**：完成 `sim-core.js` 公共几何/射线/EDT 引擎及前 5 章动画交互演示与推导。
@@ -101,8 +101,8 @@
 
 ---
 
-## 六、正式开工前待确认的 3 个小决策
+## 六、已确认的 3 个决策
 
-1. **目录位置**：放在 `docs/scan_localizer_tutorial/`（接入 [docs/README.md](README.md)，保持仓库根目录整洁），还是放在仓库根目录 `scan-localizer-academy/`？
-2. **视觉风格**：偏好类似 `slam-mpc-academy/` 的**明亮教科书风**、类似 [docs/website](website/index.html) 的**暗黑霓虹风**，还是提供右上角**一键切换深/浅色**？
-3. **推进节奏**：一次性按 `M1 → M4` 全部开发完成后统一验收，还是每完成一个里程碑暂停预览？
+1. **目录位置**：放在 `docs/scan_localizer_tutorial/`，接入 [docs/README.md](README.md)，保持仓库根目录整洁。
+2. **视觉风格**：采用 Apple 极简风格，并提供右上角深浅色一键切换。
+3. **推进节奏**：按 `M1 → M4` 分阶段实现，完成后统一执行自动验收；后续动手教学升级按章节逐步推进并做独立 review。

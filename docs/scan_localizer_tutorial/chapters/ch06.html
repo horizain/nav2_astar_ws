@@ -14,6 +14,7 @@
   <script defer src="../js/sim-core.js"></script>
   <script defer src="../js/app.js"></script>
   <script defer src="../js/sim-ch06.js"></script>
+  <script defer src="../js/hands-on-ch06.js"></script>
 </head>
 <body>
   <div id="site-nav"></div>
@@ -22,11 +23,12 @@
     <div class="container">
       <div class="crumb"><a href="../index.html">概览</a> / 第三阶段 · 全局重定位与滤波 / 第 6 章</div>
       <h1>迷路了怎么办：金字塔 B&amp;B 全局定位 vs 粒子滤波</h1>
-      <p class="sub">为什么在 40×30m 仓库冷启动时，20,000 粒子在 E8 只有 6.7% 召回率（446ms），而基于 <code>swmax_</code> 的分支定界（B&amp;B）一帧就能以 20.38ms 命中全局真解？</p>
+      <p class="sub">把一次冷启动拆成可验证的搜索：基于 <code>swmax_</code> 的分支定界（B&amp;B）用可采纳上界剪枝，粒子滤波用加权与重采样恢复多峰分布。历史 E8 记录中的 20,000 粒子召回率与耗时只是特定平台上的实验数据，不是本页 JavaScript 的计时结论。</p>
       <div class="pill-row">
-        <span class="pill">预计 35 分钟</span>
+        <span class="pill">预计 45 分钟</span>
         <span class="pill">核心文件：matchers.cpp · particle_filter.cpp</span>
         <span class="pill">动画：B&amp;B 块剪枝 vs 400 粒子滤波 PK</span>
+        <span class="pill">主动重建：最小实现 / 真实候选 / 源码步进 / 填空验收</span>
       </div>
     </div>
   </header>
@@ -39,7 +41,7 @@
 
     <article class="article-col">
       <h2 id="sec-intro"><span class="sec-no">6.1</span>交互实验室：一键绑架，看 B&amp;B 与 PF 谁先抓回真值</h2>
-      <p>点击<strong>“一键随机绑架机器人”</strong>：左侧确定性的分支定界搜索把整张地图当成树，一帧立刻标出前 3 优候选峰（蓝点第一优、橙点备选峰）；右侧粒子滤波撒出 400 颗粒子后需要一步步运动加权、ESS 重采样才会逐步坍缩。</p>
+      <p>点击<strong>“一键随机绑架机器人”</strong>：左侧确定性的分支定界搜索把整张地图当成树，一帧标出前 3 优候选峰（蓝点第一优、橙点备选峰）；右侧粒子滤波撒出 400 颗粒子后，需要一步步运动预测、观测加权，低于 ESS 门限才重采样。动画只负责建立直觉，下面的候选与计时面板才读取可复核的真实函数返回值。</p>
 
       <div class="lab-frame">
         <div class="lab-head">
@@ -61,32 +63,258 @@
         </div>
       </div>
 
-      <h2 id="sec-bnb"><span class="sec-no">6.2</span>分支定界（Branch-and-Bound）的可采纳上界证明</h2>
-      <p>想在全球地图 $W \times H \times N_\theta$ 个格子上搜完一个都不漏，总候选量往往上千万。Cartographer 与 <code>scan_localizer</code> 用 <code>swmax_[level]</code> 在常数时间内算出“一个 $2^{\ell}\times 2^{\ell}$ 大块里的最高可能得分”：</p>
+      <h2 id="sec-bnb"><span class="sec-no">6.2</span>分支定界的可采纳上界：为什么剪枝不会漏真解</h2>
+      <p>直接遍历全球地图 $W \times H \times N_\theta$ 个格点代价很高。Cartographer 与 <code>scan_localizer</code> 用 <code>swmax_[level]</code> 在常数时间内读出“一个 $2^{\ell}\times 2^{\ell}$ 大块里的最高可能似然”：</p>
       <div class="math-card">
-        <div class="math-title">可采纳上界不等式（永不漏真解）</div>
-        $$B(\text{block } [b_x, b_x+2^\ell) \times [b_y, b_y+2^\ell), \theta) = \frac{1}{N}\sum_{i=1}^N \underbrace{\max_{(\delta x,\delta y)\in[0,2^\ell)^2} L(c_{x,i}+\delta x,\; c_{y,i}+\delta y)}_{\text{swmax\_}[\ell][c_{x,i}+b_x,\, c_{y,i}+b_y]} \;\ge\; \max_{\boldsymbol{\xi}\in\text{block}} S(\boldsymbol{\xi})$$
+        <div class="math-title">可采纳上界不等式（对块内每个离散位姿都成立）</div>
+        $$B\bigl(\text{block }[b_x,b_x+2^\ell)\times[b_y,b_y+2^\ell),\theta\bigr)
+        =\frac{1}{N}\sum_{i=1}^N\max_{(\delta x,\delta y)\in[0,2^\ell)^2}
+        L(c_{x,i}+b_x+\delta x,\;c_{y,i}+b_y+\delta y)
+        \;\ge\;\max_{\boldsymbol{\xi}\in\text{block}}S(\boldsymbol{\xi})$$
       </div>
-      <p>优先队列每次弹出当前上界 <code>bound</code> 最高的块。一旦已经收满 <code>top-K</code> 个经过 <code>kNmsLinM=0.5m</code> 非极大值抑制的多峰候选，队列中凡是 <code>bound &lt;= worst_kept</code> 的所有剩余大块<strong>直接整枝剪掉</strong>！</p>
+      <p>关键不是“上界看起来很大”，而是<strong>任何块内叶子的精确分数都不会超过它</strong>。优先队列每次弹出 <code>bound</code> 最大的节点；一旦已经收满 <code>top-K</code> 个互相独立的峰，令 <code>worst_kept</code> 为其中最低分，则队首满足 <code>bound &lt;= worst_kept</code> 时，整棵剩余队列都不可能产生更优候选，可以一次结束搜索。</p>
+      <div class="callout callout-tip">
+        <div class="callout-head">三条不变量</div>
+        <ul>
+          <li><strong>上界只能高估，不能低估</strong>：完全越界的光束记 0；部分越界时不得用边界夹紧值制造虚假高分。</li>
+          <li><strong>队首是全局最大上界</strong>：优先队列必须按 <code>bound</code> 降序，不是按格子编号或广度优先顺序。</li>
+          <li><strong>剪枝阈值来自已保留峰</strong>：Top-K 未满时不能提前剪；NMS 合并或替换候选后必须重算 <code>worst_kept</code>。</li>
+        </ul>
+      </div>
 
-      <h2 id="sec-pf"><span class="sec-no">6.3</span>对比对照组：粒子滤波（AMCL-lite）的数值稳定性改造</h2>
-      <p>为了在仓库做公平对照组（E8/E9），我们按 Thrun《Probabilistic Robotics》完整实现了 <code>ParticleFilter</code>，并修复了初学者最容易写炸的三处数学细节：</p>
-      <ul>
-        <li><strong>倒车反向分解（<code>particle_filter.cpp:L130-136</code>）</strong>：当机器人倒车时 $\mathrm{atan2}(dy, dx) \approx \pm\pi$，直接代入正交采样公式会让 $\alpha_1\,\text{rot}_1^2$ 放大航向噪声几十倍；因此 $|\text{rot}_1| &gt; \pi/2$ 时必须翻转 $+\pi$ 并把平移符号取反。</li>
-        <li><strong>log-sum-exp 防下溢</strong>：200 束光连乘似然很容易跌破 $10^{-308}$ 变成 IEEE 754 `0.0`，全转对数域减去 <code>max_lw</code> 后再 <code>exp</code> 并加上效光束缩放因子 <code>beam_scale = min(1.0, 30/N)</code> 防止单帧粒子塌缩。</li>
-        <li><strong>圆均值角估计</strong>：计算均值角度绝不能做线性加权平均（$\pm 179^\circ$ 平均变 $0^\circ$），必须用 $\mathrm{atan2}(\sum w_i\sin\theta_i, \sum w_i\cos\theta_i)$。</li>
-      </ul>
+      <h2 id="sec-minimal"><span class="sec-no">6.3</span>从空白文件重建最小 B&amp;B：优先队列、上界剪枝与 Top-K NMS</h2>
+      <p>先只实现下面四个部件，再考虑性能：① 以 <code>{bound, level, bx, by, aidx}</code> 为节点的最大堆；② 从金字塔读块上界；③ 四分裂到 level 0 后精确打分；④ 固定容量 Top-K 与空间/角度 NMS。页面不会另造一份可执行算法，所有交互数字仍来自现有 <code>S.globalCorrelativeBnB</code>；这里给出的是实现契约与伪代码。</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>部件</th><th>最小契约</th><th>出错时最常见的结果</th></tr></thead>
+          <tbody>
+            <tr><td>最大堆</td><td><code>push</code> 后父节点不小于子节点；<code>pop</code> 返回当前最大 <code>bound</code></td><td>把最小堆当最大堆，提前剪掉真正高分的队列尾部/队首</td></tr>
+            <tr><td>块上界</td><td><code>evalBound(level,bx,by,angle)</code> 对块内任意叶子分数都是上界</td><td>漏光束、错误平移旋转方向或越界记负分，破坏可采纳性</td></tr>
+            <tr><td>四分裂</td><td>level &gt; 0 时生成四个 <code>2^(level-1)</code> 子块；level 0 才精确评分</td><td>把 <code>span</code> 当成半宽，重复搜索或漏掉四分之一区域</td></tr>
+            <tr><td>Top-K NMS</td><td>同一峰保留最高分；未满 K 时 <code>worst_kept=0</code>；满 K 后保存 K 个不同峰的最低分</td><td>相邻格子占满 K 个名额，真正全局峰被第 K 个重复峰误剪</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="code-card">
+        <div class="code-head"><span class="code-file">minimal_bnb.pseudo · 教学伪代码，不是第二份实现</span><button type="button" class="code-btn code-copy-btn">复制</button></div>
+        <pre><code class="language-text">Node = { bound, level, bx, by, aidx }
+pq = MaxHeap(key = bound)
+hyps = []                         // 最多 K 个不同峰
+worst_kept = 0.0
 
-      <h2 id="sec-code"><span class="sec-no">6.4</span>源码精读与跳变定位</h2>
+for each top-level block:
+    b = evalBound(level, bx, by, angle)
+    if b &gt; 0.05: pq.push(Node(b, level, bx, by, angle))
+
+while pq not empty:
+    node = pq.pop_max()
+    if size(hyps) == K and node.bound &lt;= worst_kept:
+        break                     // 队首即队列最大上界，剩余节点全部可剪
+
+    if node.level == 0:
+        score = exact_score(node) // 逐点似然平均值；越界点为 0
+        if score &lt;= 0.10: continue
+        cand = { score, bx, by, aidx }
+        if exists h in hyps where same_mode(h, cand):
+            keep the higher-scoring member of that mode
+        else if size(hyps) &lt; K:
+            hyps.push(cand)
+        else if cand.score &gt; worst_kept:
+            replace the lowest-scoring hypothesis with cand
+        worst_kept = (size(hyps) == K) ? min_score(hyps) : 0.0
+        continue
+
+    half = 1 &lt;&lt; (node.level - 1)
+    for dy in {0, 1}, dx in {0, 1}:
+        child = { bx: node.bx + dx * half,
+                  by: node.by + dy * half,
+                  level: node.level - 1, aidx: node.aidx }
+        if child intersects free-space bounding box:
+            b = evalBound(child)
+            if b &gt; 0.05 and (size(hyps) &lt; K or b &gt; worst_kept):
+                pq.push(Node(b, child))
+
+sort hyps by score descending
+refine each hypothesis in a small continuous window
+run final NMS again               // 精修后相邻峰可能重新靠在一起</code></pre>
+      </div>
+      <p>生产 C++ 的 NMS 阈值为 <code>0.50m</code> 与 <code>0.35rad</code>（<code>matchers.cpp:L839-855</code>）；当前教学数学核为了动画可读性使用 <code>0.80m</code> 与 <code>0.45rad</code>。两者都遵循同一契约，但数值面板展示的是教学核返回值，不能把阈值差异误判为随机误差。</p>
+
+      <h2 id="sec-candidates"><span class="sec-no">6.4</span>真实 global_correlative 候选面板：分数、误差与展开节点</h2>
+      <p>本面板使用固定真值 <code>(16.5, 10.0, 0.45)</code>、108 束扫描与 <code>beamsSubsample=2 / angStep=0.25 / topK=3</code>。点击重跑会直接调用 <code>S.globalCorrelativeBnB(field, scan, opts)</code>；下表不是预写答案，也没有读取上方画布像素。</p>
+      <div class="exercise-row" style="margin:14px 0;">
+        <button type="button" class="btn btn-primary btn-sm" id="ch06-rerun-btn">重跑真实 B&amp;B</button>
+        <span class="hands-on-note" id="ch06-result-status" aria-live="polite">等待数学核返回</span>
+      </div>
+      <dl class="hands-on-vars" id="ch06-result-vars"></dl>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>排名</th><th>x (m)</th><th>y (m)</th><th>θ (rad)</th><th>score</th><th>平移误差 (m)</th><th>角误差 (rad)</th></tr></thead>
+          <tbody id="ch06-candidates-body"><tr><td colspan="7">等待真实候选</td></tr></tbody>
+        </table>
+      </div>
+      <div class="callout callout-syntax">
+        <div class="callout-head">“真实”边界</div>
+        <p>这里真实调用的是浏览器中的教学数学核 <code>sim-core.js</code>，不是 ROS/C++ 进程。该版本返回离散 B&amp;B 候选，尚未实现生产 C++ 的末端 ±2 格、±半角步长精修；因此不能要求它与 <code>src/matchers.cpp:L941-1013</code> 的输出逐位相同。</p>
+      </div>
+
+      <div class="hands-on-stepper">
+        <div class="hands-on-toolbar">
+          <div>
+            <div class="hands-on-stage-title" id="ch06-trace-title">真实展开节点</div>
+            <div class="hands-on-stage-meta" id="ch06-trace-meta">S.globalCorrelativeBnB(...).trace</div>
+          </div>
+          <div class="exercise-row">
+            <button type="button" class="btn btn-secondary btn-sm" id="ch06-trace-prev">← 上一节点</button>
+            <span class="ctrl-val" id="ch06-trace-index">0 / 0</span>
+            <button type="button" class="btn btn-primary btn-sm" id="ch06-trace-next">下一节点 →</button>
+          </div>
+        </div>
+        <div class="hands-on-stage-body">
+          <p class="hands-on-explain" id="ch06-trace-explain">trace 仅保存前 360 个入队子节点，不包含播种节点，也不是完整出队/剪枝日志。</p>
+          <dl class="hands-on-vars" id="ch06-trace-vars"></dl>
+        </div>
+      </div>
+
+      <h2 id="sec-pf"><span class="sec-no">6.5</span>粒子滤波对照：从“一峰答案”到“加权多峰分布”</h2>
+      <p>B&amp;B 的输出是若干候选峰；PF 维护一整片带权粒子。它不直接继承 B&amp;B 的上界证明，优势是能自然保留对称地图上的多个模式，代价是全局初始化覆盖、随机方差与重采样退化。</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>维度</th><th>B&amp;B</th><th>ParticleFilter</th></tr></thead>
+          <tbody>
+            <tr><td>状态</td><td>优先队列节点 + 固定 Top-K 候选</td><td>400 个 <code>{x,y,θ,w}</code> 粒子</td></tr>
+            <tr><td>全局初始化</td><td>播种覆盖自由空间外接矩形</td><td>在自由格均匀撒点，航向均匀采样</td></tr>
+            <tr><td>观测融合</td><td>叶节点精确似然评分</td><td>对数似然加权，减 <code>max_lw</code> 后归一化</td></tr>
+            <tr><td>多峰处理</td><td>NMS 主动压成 Top-K 独立峰</td><td>粒子可同时覆盖多个区域；塌缩后难以自行恢复</td></tr>
+            <tr><td>主要失败</td><td>上界错误、NMS 过密、搜索域过窄</td><td>初始化未覆盖真值、粒子退化、重采样后多样性丧失</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>下方固定运行 10 帧、每帧 <code>predict({x:0.12,y:0,theta:0.05})</code> 后调用 <code>update(field, scan, 3)</code>。扫描与真值轨迹在计时前生成；修改种子可复现不同初始化。ESS/N 小于 0.5 时，教学核执行系统重采样。</p>
+      <div class="exercise-row" style="margin:14px 0;align-items:center;">
+        <label for="ch06-pf-seed">PF 随机种子</label>
+        <input class="exercise-input" id="ch06-pf-seed" type="number" step="1" value="20261125" style="flex:0 1 180px;" />
+        <button type="button" class="btn btn-primary btn-sm" id="ch06-pf-run">运行固定种子 PF</button>
+      </div>
+      <dl class="hands-on-vars" id="ch06-pf-vars"></dl>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>更新帧</th><th>ESS / N</th><th>触发重采样</th><th>PF 均值平移误差 (m)</th><th>PF 均值角误差 (rad)</th></tr></thead>
+          <tbody id="ch06-pf-steps-body"><tr><td colspan="5">等待 PF 运行</td></tr></tbody>
+        </table>
+      </div>
+
+      <h2 id="sec-timing"><span class="sec-no">6.6</span>公平计时：先对齐观测预算，再讨论快慢</h2>
+      <p>不能把“B&amp;B 一帧”与“PF 随机初始化后再迭代若干帧”直接相除。下面的受控微基准分成两个观测预算：<strong>1 帧任务</strong>比较 B&amp;B 完整全局解与 PF 全局初始化 + 1 次更新；<strong>10 帧任务</strong>让 B&amp;B 对每帧各解一次，PF 只初始化一次并做 10 次预测/更新。两侧读取完全相同的扫描序列。</p>
+      <div class="callout callout-tip">
+        <div class="callout-head">计时口径</div>
+        <ul>
+          <li><code>performance.now()</code> 只包住算法调用；地图构建、扫描生成、真值推进、误差计算、表格与画布渲染全部在计时区外。</li>
+          <li>每个任务预热 2 次，再测 7 次并取中位数；PF 使用可复现的固定种子序列，B&amp;B 为确定性计算。</li>
+          <li>最终误差与 ESS 取自“耗时中位数对应的那次试验”；成功率单独统计 7 次，避免用失败运行制造虚假加速比。</li>
+          <li>通过门限定为平移误差 <code>&lt;0.5m</code> 且角误差 <code>&lt;0.35rad</code>，只用于同一张表的验收，不是算法内部参数。</li>
+          <li>这是当前浏览器中的 JavaScript 教学核微基准，不能替代 C++/ROS 的 E8 实验，也不代表不同硬件上的绝对毫秒数。</li>
+        </ul>
+      </div>
+      <div class="exercise-row" style="margin:14px 0;">
+        <button type="button" class="btn btn-primary btn-sm" id="ch06-benchmark-btn">运行受控微基准</button>
+        <span class="hands-on-note" id="ch06-benchmark-status" aria-live="polite">尚未计时</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>任务</th><th>观测预算</th><th>中位耗时 (ms)</th><th>最终平移误差 (m)</th><th>最终角误差 (rad)</th><th>通过次数</th><th>最终 ESS / N</th></tr></thead>
+          <tbody id="ch06-benchmark-body">
+            <tr><td>B&amp;B · 1 帧全局解</td><td>1</td><td colspan="5">点击上方按钮</td></tr>
+            <tr><td>PF · 初始化 + 1 次更新</td><td>1</td><td colspan="5">点击上方按钮</td></tr>
+            <tr><td>B&amp;B · 10 帧各解一次</td><td>10</td><td colspan="5">点击上方按钮</td></tr>
+            <tr><td>PF · 初始化 + 10 次更新</td><td>10</td><td colspan="5">点击上方按钮</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <dl class="hands-on-vars" id="ch06-benchmark-vars"></dl>
+
+      <h2 id="sec-source"><span class="sec-no">6.7</span>真实源码步进：matchers.cpp 与 particle_filter.cpp</h2>
+      <p>切换文件后逐段阅读生产实现。每段都保留真实行号，并可通过“源码抽屉”打开当前片段。变量面板只显示本节真实计算或明确提示教学版尚未实现的生产步骤。</p>
       <div class="src-bar">
-        <button type="button" class="src-jump" data-file="src/matchers.cpp" data-lines="797-940"><span class="tag">源码抽屉</span>matchers.cpp : L797-940 (B&amp;B 上界剪枝与 NMS)</button>
-        <button type="button" class="src-jump" data-file="src/particle_filter.cpp" data-lines="121-254"><span class="tag">源码抽屉</span>particle_filter.cpp : L121-254 (倒车预测与 log-sum-exp)</button>
+        <button type="button" class="src-jump" data-file="src/matchers.cpp" data-lines="716-1014"><span class="tag">完整源码</span>matchers.cpp : L716-1014 (global_correlative)</button>
+        <button type="button" class="src-jump" data-file="src/particle_filter.cpp" data-lines="30-348"><span class="tag">完整源码</span>particle_filter.cpp : L30-348 (初始化 / 预测 / 更新 / 重采样)</button>
+      </div>
+      <div class="hands-on-stepper">
+        <div class="hands-on-toolbar">
+          <div>
+            <div class="hands-on-stage-title" id="ch06-stage-title"></div>
+            <div class="hands-on-stage-meta" id="ch06-stage-meta"></div>
+          </div>
+          <div class="exercise-row">
+            <button type="button" class="btn btn-secondary btn-sm" id="ch06-source-bnb" aria-pressed="true">matchers.cpp</button>
+            <button type="button" class="btn btn-secondary btn-sm" id="ch06-source-pf" aria-pressed="false">particle_filter.cpp</button>
+          </div>
+        </div>
+        <div class="hands-on-stage-body">
+          <div class="exercise-row" style="justify-content:flex-end;margin-bottom:14px;">
+            <button type="button" class="btn btn-secondary btn-sm" id="ch06-stage-prev">← 上一步</button>
+            <span class="ctrl-val" id="ch06-stage-index">1 / 1</span>
+            <button type="button" class="btn btn-primary btn-sm" id="ch06-stage-next">下一步 →</button>
+          </div>
+          <p class="hands-on-explain" id="ch06-stage-explain"></p>
+          <div class="code-card">
+            <div class="code-head">
+              <button type="button" class="src-jump" id="ch06-stage-source"><span class="tag">源码抽屉</span>打开当前实现</button>
+              <button type="button" class="code-btn" id="ch06-stage-copy">复制</button>
+            </div>
+            <pre><code class="language-cpp" id="ch06-stage-code"></code></pre>
+          </div>
+          <dl class="hands-on-vars" id="ch06-source-vars"></dl>
+        </div>
       </div>
 
-      <h2 id="sec-pitfall"><span class="sec-no">6.5</span>工程踩坑复盘：B&amp;B 曾为何在冷启动卡死？</h2>
+      <h2 id="sec-pitfall"><span class="sec-no">6.8</span>工程踩坑复盘：B&amp;B 为何曾在冷启动卡死或误剪</h2>
       <div class="callout callout-pitfall">
-        <div class="callout-head">Phase 2 修复：100% 激光越界剔除 + `worst_kept` 剪枝错乱（<code>matchers.cpp:L804</code>）</div>
-        <p>早期代码规定“只要有一束激光在边缘处越界就丢弃整个候选方块”，导致机器人在大厅边缘时合法方块全被扔掉（<code>pq</code> 变空）。正确逻辑是：<strong>只对整块完全越界的那几束光线记 0 分</strong>，机器人搜索框严格限定在自由空间外接矩形 <code>[free_xmin, free_xmax]</code> 内。另一处 Bug 是多峰去重更新前未重算第 $K$ 优阈值，导致真解过早被误剪。</p>
+        <div class="callout-head">Phase 2 修复：100% 激光越界剔除 + <code>worst_kept</code> 更新错乱（matchers.cpp:L796-913）</div>
+        <p>早期逻辑“只要有一束激光越界就丢弃整个候选方块”，会让大厅边缘的合法方块全部消失，优先队列提前变空。正确做法是只对<strong>整块完全越界</strong>的光束记 0，并把机器人位姿搜索框限制在自由空间外接矩形内。另一处 Bug 是多峰去重/替换后未重算第 K 优阈值，导致真解被过时的 <code>worst_kept</code> 误剪。</p>
+      </div>
+      <div class="callout callout-syntax">
+        <div class="callout-head">PF 的三处数值护栏</div>
+        <ul>
+          <li>倒车时 <code>|rot1| &gt; π/2</code> 要翻转 <code>rot1 += π</code> 并将平移取反，避免 ±π 附近噪声爆炸（<code>particle_filter.cpp:L129-136</code>）。</li>
+          <li>似然连乘改为对数累加，归一化时减 <code>max_lw</code>；非有限权重回退为均匀分布，避免全零或 NaN（<code>L183-236</code>）。</li>
+          <li>角度均值使用 <code>atan2(Σw sinθ, Σw cosθ)</code>，不能直接平均 ±179°（<code>L256-290</code>）。</li>
+        </ul>
+      </div>
+
+      <h2 id="sec-exercise"><span class="sec-no">6.9</span>填空练习与验收</h2>
+      <p>先独立写出数值与分支，再提交检查。三题覆盖 Top-K 阈值、等号剪枝与 PF 有效粒子数。</p>
+
+      <form class="hands-on-exercise" data-kind="number" data-answer="0.73" data-tolerance="1e-9" data-success="正确。Top-K 已满时，worst_kept 是三个已保留独立峰中的最低分 0.73。" data-hint="不要取最高分或平均分；worst_kept 必须能保护当前第 K 优峰。">
+        <label for="ch06-ex1">练习 1：Top-K=3，NMS 后保留分数 <code>[0.92, 0.81, 0.73]</code>，<code>worst_kept</code> 是多少？</label>
+        <div class="exercise-row"><input class="exercise-input" id="ch06-ex1" name="answer" inputmode="decimal" placeholder="输入数值" /><button class="btn btn-primary btn-sm" type="submit">检查</button></div>
+        <div class="exercise-feedback" aria-live="polite"></div>
+      </form>
+
+      <form class="hands-on-exercise" data-kind="choice" data-answer="prune" data-success="正确。队首已经是队列最大上界；bound == worst_kept 时也不可能产生更优峰，因此整队剪掉。" data-hint="注意生产代码使用严格小于等于：0.73 &lt;= 0.73 成立。">
+        <label for="ch06-ex2">练习 2：Top-K 已满，队首 <code>bound=0.73</code>，<code>worst_kept=0.73</code>。下一步应 <code>prune</code> 还是 <code>expand</code>？</label>
+        <div class="exercise-row"><input class="exercise-input" id="ch06-ex2" name="answer" placeholder="输入 prune 或 expand" /><button class="btn btn-primary btn-sm" type="submit">检查</button></div>
+        <div class="exercise-feedback" aria-live="polite"></div>
+      </form>
+
+      <form class="hands-on-exercise" data-kind="number" data-answer="1.5151515151515151" data-tolerance="1e-6" data-success="正确。ESS = 1 / 0.66 ≈ 1.5152，远低于 N=3 的一半，应该触发重采样。" data-hint="先算平方和：0.8² + 0.1² + 0.1² = 0.66，再取倒数。">
+        <label for="ch06-ex3">练习 3：3 个粒子的归一化权重为 <code>[0.8, 0.1, 0.1]</code>，有效粒子数 <code>ESS=1/Σwᵢ²</code> 是多少？</label>
+        <div class="exercise-row"><input class="exercise-input" id="ch06-ex3" name="answer" inputmode="decimal" placeholder="输入数值" /><button class="btn btn-primary btn-sm" type="submit">检查</button></div>
+        <div class="exercise-feedback" aria-live="polite"></div>
+      </form>
+
+      <div class="hands-on-note" id="ch06-exercise-progress" aria-live="polite">0 / 3 通过</div>
+
+      <div class="callout callout-tip">
+        <div class="callout-head">完成标准</div>
+        <ul>
+          <li>能从空白实现最大堆、块上界、四分裂、Top-K NMS，并解释 <code>bound &lt;= worst_kept</code> 为何安全。</li>
+          <li>能指出部分越界光束与完全越界光束的不同处理，并说明搜索域为何取自由空间外接矩形。</li>
+          <li>能读懂真实候选表：排名来自实际 <code>score</code> 降序，平移/角误差由固定真值复算，节点 trace 有 360 条上限。</li>
+          <li>能区分 B&amp;B 的确定性单峰/多峰答案与 PF 的加权分布，解释 ESS 降低为何触发系统重采样。</li>
+          <li>能复述公平计时边界：同输入、同观测预算、预热、固定种子、中位数、失败运行不得混入加速比。</li>
+          <li>C++ 回归可运行 <code>MatchersTest.GlobalCorrelativeNearWallOobAndSymmetricNms</code>、<code>BenchmarkRegression.E8GlobalCorrelativeRecall</code>、<code>ParticleFilterTest.BackwardMotionHasBoundedDispersion</code> 与 <code>ParticleFilterTest.AllZeroLikelihoodProducesNoNaN</code>。</li>
+        </ul>
       </div>
 
       <nav class="pager">

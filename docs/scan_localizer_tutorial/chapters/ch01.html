@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>第 1 章 · 定位是什么 & SE(2) 与 TF 树 | scan_localizer</title>
+  <title>第 1 章 · 从零重建 SE(2) 与 map → odom | scan_localizer</title>
   <link rel="stylesheet" href="../../website/vendor/katex/katex.min.css" />
   <link rel="stylesheet" href="../css/apple.css" />
   <script>window.TUTORIAL_ROOT = ".."; window.PAGE_ID = "ch01";</script>
@@ -14,6 +14,7 @@
   <script defer src="../js/sim-core.js"></script>
   <script defer src="../js/app.js"></script>
   <script defer src="../js/sim-ch01.js"></script>
+  <script defer src="../js/hands-on-ch01.js"></script>
 </head>
 <body>
   <div id="site-nav"></div>
@@ -21,12 +22,12 @@
   <header class="page-header">
     <div class="container">
       <div class="crumb"><a href="../index.html">概览</a> / 第一阶段 · 入门与底座 / 第 1 章</div>
-      <h1>定位是什么 &amp; SE(2) 与 TF 树</h1>
-      <p class="sub">从“拿到一帧激光距离数组”出发，彻底搞懂 2D 刚体变换群、为什么定位节点必须广播 <code>map → odom</code> 而不是直接广播 <code>map → base_link</code>，以及 PGM 地图上下翻转坑。</p>
+      <h1>从零重建 SE(2) 与 map → odom</h1>
+      <p class="sub">保留 TF 链与 PGM 交互动画，但本章的主线只有一件事：从空白文件写出最小 <code>Pose2</code>，用数值例验证复合、逆与点变换，再逐段对上生产源码。</p>
       <div class="pill-row">
-        <span class="pill">预计 25 分钟</span>
-        <span class="pill">核心文件：se2.hpp · map_io.cpp</span>
-        <span class="pill">动画：TF 链与倒装雷达交互实验室</span>
+        <span class="pill">预计 35 分钟</span>
+        <span class="pill">核心文件：se2.hpp · localizer_core.cpp</span>
+        <span class="pill">主动重建：最小实现 / 数值演算 / 公式推导 / 源码步进 / 填空验收</span>
       </div>
     </div>
   </header>
@@ -38,9 +39,9 @@
     </aside>
 
     <article class="article-col">
-      <h2 id="sec-intro"><span class="sec-no">1.1</span>直觉与交互实验室：定位到底在算什么？</h2>
-      <p><strong>建图（SLAM）</strong>是拿着空白画纸一边走路一边画房间；而<strong>已知地图定位（Localization）</strong>是手里已经有了一张精确蓝图（例如 <code>warehouse.pgm</code>），机器人要每秒 10~40 次回答同一个问题：<strong>“我现在在蓝图里的哪个 $(x, y, \theta)$ 位置？”</strong></p>
-      <p>如果只靠轮子编码器（里程计 <code>odom</code>）累加，打滑和轮径误差会让机器人轨迹越走越偏（下图红点）；加入雷达与地图匹配修正后，我们算出了修正量 <code>map → odom</code>，把整帧激光重新对齐回真实的墙体（蓝点）。请拖动下方滑块直观感受。</p>
+      <h2 id="sec-intro"><span class="sec-no">1.1</span>先看目标：定位节点到底输出什么？</h2>
+      <p>已知地图定位要回答“机器人底盘在地图里的位姿 <code>T_map_base</code> 是什么”。里程计已经提供 <code>T_odom_base</code>，但它会漂移；定位节点不能抢走里程计的 TF 父边，而是计算修正量 <code>T_map_odom</code> 并广播。后面所有匹配器都建立在本章的四个最小操作上：<strong>复合、求逆、点云变换、由两个 base 位姿求修正量</strong>。</p>
+      <p>下方原有动画保留不变，可先把漂移、倒装雷达和 PGM 翻转当成三种“连接问题”。主动重建时暂时把它们排除，集中把纯 SE(2) 代数做对。</p>
 
       <div class="lab-frame">
         <div class="lab-head">
@@ -69,103 +70,227 @@
         </div>
       </div>
 
-      <h2 id="sec-math"><span class="sec-no">1.2</span>公式推导：激光点云、$SE(2)$ 群与 TF 逆合成</h2>
-      <p><strong>第一步：极坐标转传感器局部笛卡尔点云。</strong>一帧 <code>LaserScan</code> 给我们一串距离数组 $r_i$，第 $i$ 束光线角度为 $\phi_i = \phi_{\min} + i \cdot \Delta\phi$，转成传感器坐标系下的二维点：</p>
-      <div class="math-card">
-        <div class="math-title">激光点云 + 3D 外参投影到车体 base_link</div>
-        $$\mathbf{p}_{\text{laser}} = \begin{bmatrix} r_i \cos\phi_i \\ r_i \sin\phi_i \\ 0 \end{bmatrix}, \qquad
-        \mathbf{p}_{\text{base}} = R_{b\leftarrow l}\,\mathbf{p}_{\text{laser}} + \mathbf{t}_{b\leftarrow l}$$
-      </div>
-      <p>如果雷达在实体车上是<strong>倒装</strong>的（即安装绕 X 轴旋转 $\text{roll}=\pi$），那么旋转矩阵 $R_x(\pi)=\mathrm{diag}(1,-1,-1)$ 会让激光在车体坐标系中左右翻转（$y \mapsto -y$）。必须通过 TF2 查出完整的 3D 刚体变换并投影回 2D，绝不能只传 `(lx, ly, ltheta)`！</p>
+      <h2 id="sec-minimal"><span class="sec-no">1.2</span>主动重建：先写出四个最小操作</h2>
+      <p>先不要打开生产头文件。新建 <code>se2_min.cpp</code>，按下面的契约从空白实现；完成后再折叠答案对照。位姿三元组统一为 <code>(x, y, theta)</code>，平移单位是米，角度单位是弧度。</p>
+      <ol>
+        <li><code>Pose2::operator*</code>：把右操作数表示的位姿复合到左操作数坐标系，角度归一化到 $(-\pi,\pi]$。</li>
+        <li><code>Pose2::inverse</code>：返回同一个刚体变换的逆，必须满足 $T\cdot T^{-1}=T^{-1}\cdot T=I$。</li>
+        <li><code>transform_scan</code>：把一组已经位于参考系的二维点旋转、平移到位姿所在系。</li>
+        <li><code>map_to_odom</code>：输入同一时刻的 <code>T_map_base</code> 与 <code>T_odom_base</code>，返回二者的修正链。</li>
+      </ol>
 
-      <p><strong>第二步：$SE(2)$ 群复合与群逆。</strong>平面位姿 $T = (x, y, \theta) \in SE(2)$ 代表“先旋转 $\theta$、再平移 $(x, y)$”。其复合与群逆公式如下：</p>
-      <div class="math-card">
-        <div class="math-title">SE(2) 复合、点变换与群逆公式</div>
-        $$T_1 \cdot T_2 = \begin{bmatrix} x_1 + c_1 x_2 - s_1 y_2 \\ y_1 + s_1 x_2 + c_1 y_2 \\ \mathrm{wrap}(\theta_1 + \theta_2) \end{bmatrix}, \qquad
-        T^{-1} = \begin{bmatrix} -(c\,x + s\,y) \\ -(-s\,x + c\,y) \\ \mathrm{wrap}(-\theta) \end{bmatrix}$$
-        $$\text{其中 } c = \cos\theta,\; s = \sin\theta$$
-      </div>
+      <details class="quiz-item" open>
+        <summary>最小参考实现（C++20，可复制后独立编译）</summary>
+        <div class="code-card">
+          <div class="code-head"><span class="code-file">se2_min.cpp · 教学最小版</span><button type="button" class="code-btn code-copy-btn">复制</button></div>
+          <pre><code class="language-cpp">#include &lt;cmath&gt;
+#include &lt;numbers&gt;
+#include &lt;vector&gt;
 
-      <p><strong>第三步：为什么必须广播 <code>map → odom</code>？</strong>ROS TF 树是一棵单亲树（每个子坐标系只能有一个父节点）。里程计节点已经在高速广播 <code>odom → base_link</code>（$T_{o\leftarrow b}$），定位节点算出车体在地图的真实位姿 $T_{m\leftarrow b}$ 后，根据链式恒等式 $T_{m\leftarrow b} = T_{m\leftarrow o}\cdot T_{o\leftarrow b}$，右乘 $T_{o\leftarrow b}^{-1}$ 即得：</p>
-      <div class="math-card">
-        <div class="math-title">map → odom 求解恒等式</div>
-        $$T_{\text{map}\leftarrow \text{odom}} \;=\; T_{\text{map}\leftarrow \text{base}}(t_{\text{scan}}) \;\cdot\; \bigl(T_{\text{odom}\leftarrow \text{base}}(t_{\text{scan}})\bigr)^{-1}$$
-      </div>
-
-      <h2 id="sec-code"><span class="sec-no">1.3</span>核心源码逐行剖析</h2>
-      <div class="src-bar">
-        <button type="button" class="src-jump" data-file="include/scan_localizer/se2.hpp" data-lines="34-114"><span class="tag">源码抽屉</span>se2.hpp : L34-114 (wrap_angle / Pose2 / transform_scan)</button>
-        <button type="button" class="src-jump" data-file="src/localizer_core.cpp" data-lines="268-275"><span class="tag">源码抽屉</span>localizer_core.cpp : L268-275 (map_to_odom)</button>
-        <button type="button" class="src-jump" data-file="src/map_io.cpp" data-lines="366-396"><span class="tag">源码抽屉</span>map_io.cpp : L366-396 (PGM Y轴翻转)</button>
-      </div>
-
-      <div class="code-card">
-        <div class="code-head"><span class="code-file">include/scan_localizer/se2.hpp : L34-94</span><button type="button" class="code-btn code-copy-btn">复制</button></div>
-        <pre><code class="language-cpp">// O(1) 安全角度归一化至 (-kPi, kPi]；非有限输入（±inf / NaN）返回 0.0
 inline double wrap_angle(double a)
 {
-  if (!std::isfinite(a)) { return 0.0; }
-  double r = std::remainder(a, kTwoPi);
-  if (r &lt;= -kPi) { r += kTwoPi; }
-  else if (r &gt; kPi) { r -= kTwoPi; }
+  double r = std::remainder(a, 2.0 * std::numbers::pi);
+  if (r &lt;= -std::numbers::pi) { r += 2.0 * std::numbers::pi; }
   return r;
 }
 
+struct Vec2 {
+  double px{0.0}, py{0.0};
+  Vec2() = default;
+  Vec2(double x, double y) : px(x), py(y) {}
+  double x() const { return px; }
+  double y() const { return py; }
+};
+
 struct Pose2 {
   double x{0.0}, y{0.0}, theta{0.0};
+
   Pose2 operator*(const Pose2 &amp; o) const {
     const double c = std::cos(theta), s = std::sin(theta);
-    return {x + c * o.x - s * o.y, y + s * o.x + c * o.y, wrap_angle(theta + o.theta)};
+    return {x + c * o.x - s * o.y,
+            y + s * o.x + c * o.y,
+            wrap_angle(theta + o.theta)};
   }
+
   Pose2 inverse() const {
     const double c = std::cos(theta), s = std::sin(theta);
-    return {-(c * x + s * y), -(-s * x + c * y), wrap_angle(-theta)};
+    return {-(c * x + s * y),
+            -(-s * x + c * y),
+            wrap_angle(-theta)};
   }
 };
 
-// 缓冲复用重载：avoid heap malloc inside hot loops
 template&lt;typename It&gt;
-inline void transform_scan(const Pose2 &amp; pose, It begin, It end, std::vector&lt;Vec2&gt; &amp; out) {
-  out.clear();
-  if constexpr (std::random_access_iterator&lt;It&gt;) {
-    out.reserve(static_cast&lt;std::size_t&gt;(std::distance(begin, end)));
-  }
+std::vector&lt;Vec2&gt; transform_scan(
+  const Pose2 &amp; pose, It begin, It end)
+{
+  std::vector&lt;Vec2&gt; out;
   const double c = std::cos(pose.theta), s = std::sin(pose.theta);
   for (It it = begin; it != end; ++it) {
     const double px = it-&gt;x(), py = it-&gt;y();
-    out.emplace_back(pose.x + c * px - s * py, pose.y + s * px + c * py);
+    out.emplace_back(pose.x + c * px - s * py,
+                     pose.y + s * px + c * py);
   }
+  return out;
+}
+
+Pose2 map_to_odom(
+  const Pose2 &amp; map_to_base, const Pose2 &amp; odom_to_base)
+{
+  return map_to_base * odom_to_base.inverse();
 }</code></pre>
+        </div>
+      </details>
+
+      <div class="callout callout-tip">
+        <div class="callout-head">最小版刻意省略了什么？</div>
+        <p>生产 <code>se2.hpp</code> 使用 <code>Eigen::Vector2d</code>，为 <code>wrap_angle</code> 增加 NaN/inf 防护，并提供写入复用输出缓冲的 <code>transform_scan</code> 重载。这些是接口与热路径增强；四个核心等式与最小版完全相同，稍后会在真实源码步进器中逐段补齐。</p>
       </div>
 
-      <h2 id="sec-syntax"><span class="sec-no">1.4</span>语法解码（Syntax Spotlight）</h2>
-      <div class="callout callout-syntax">
-        <div class="callout-head">C++20 现代特性在底层底座中的应用</div>
-        <ul>
-          <li><strong><code>std::remainder(a, kTwoPi)</code> 替代 <code>while (a &gt; pi)</code></strong>：若传感器异常吐出 $a = 10^{12}$，经典 <code>while</code> 循环会卡死 CPU，而 <code>std::remainder</code> 是硬件/库级 $O(1)$ 浮点取余。加上 <code>std::isfinite(a)</code> 防护，彻底消灭 NaN 污染。</li>
-          <li><strong><code>if constexpr (std::random_access_iterator&lt;It&gt;)</code></strong>：C++20 Concept + 编译期分支。传入 <code>std::vector</code> 迭代器时直接一次性 <code>reserve()</code>，传入链表等单向迭代器时编译器直接裁剪该语句。</li>
-          <li><strong><code>out.clear()</code> + 复用输出引用</strong>：热路径里不重新 <code>return std::vector</code> 触发堆分配，而是把成员向量清零尺寸但保留容量。</li>
-        </ul>
+      <h2 id="sec-numeric"><span class="sec-no">1.3</span>用一组可手算的数验证四个操作</h2>
+      <p>选择 $90^\circ$ 旋转，让 $\cos(\pi/2)=0,\ \sin(\pi/2)=1$，从而把符号错误直接暴露出来。定义：</p>
+      <div class="math-card">
+        <div class="math-title">本章固定数值例（角度均为弧度）</div>
+        $$A=(1,0,\pi/2),\quad B=(1,0,0),\quad M=T_{\text{map}\leftarrow\text{base}}=(2,1,\pi/2)$$
+        $$O=T_{\text{odom}\leftarrow\text{base}}=(1,0,0),\quad p_{\text{base}}=(1,0.5)$$
+      </div>
+      <ol>
+        <li><strong>复合</strong>：$A\cdot B=(1+0\cdot1-1\cdot0,\ 0+1\cdot1+0\cdot0,\ \pi/2)=(1,1,\pi/2)$。</li>
+        <li><strong>求逆</strong>：$M^{-1}=(-(0\cdot2+1\cdot1),\ -(-1\cdot2+0\cdot1),\ -\pi/2)=(-1,2,-\pi/2)$。</li>
+        <li><strong>求 map → odom</strong>：$O^{-1}=(-1,0,0)$，所以 $C=M\cdot O^{-1}=(2,1+1\cdot(-1),\pi/2)=(2,0,\pi/2)$。</li>
+        <li><strong>回代</strong>：$C\cdot O=(2,0,\pi/2)\cdot(1,0,0)=(2,1,\pi/2)=M$。链式恒等式闭合。</li>
+        <li><strong>点云</strong>：$O p_{\text{base}}=(2,0.5)$；再用修正量得到 $C(2,0.5)=(1.5,2)$，与直接计算 $M p_{\text{base}}$ 完全一致。</li>
+      </ol>
+
+      <dl class="hands-on-vars" id="ch01-numeric-vars"></dl>
+      <div class="hands-on-note">以上面板由 <code>S.poseMul</code>、<code>S.poseInv</code>、<code>S.mapToOdom</code> 与 <code>S.transformScan</code> 直接计算，不在页面里另写一套几何实现。浮点回代可能残留约 $10^{-16}$ 的误差。</div>
+
+      <h2 id="sec-math"><span class="sec-no">1.4</span>把公式推导清楚：旋转谁、右乘谁</h2>
+      <p>用齐次矩阵表示位姿：</p>
+      <div class="math-card">
+        <div class="math-title">SE(2) 的矩阵、复合与逆</div>
+        $$T(x,y,\theta)=\begin{bmatrix}R(\theta)&amp;\mathbf t\\0&amp;1\end{bmatrix},\qquad
+        R(\theta)=\begin{bmatrix}\cos\theta&amp;-\sin\theta\\\sin\theta&amp;\cos\theta\end{bmatrix}$$
+        $$T_1T_2=\begin{bmatrix}R_1R_2&amp;\mathbf t_1+R_1\mathbf t_2\\0&amp;1\end{bmatrix}$$
+        $$T^{-1}=\begin{bmatrix}R^\mathsf T&amp;-R^\mathsf T\mathbf t\\0&amp;1\end{bmatrix}$$
+      </div>
+      <p>把矩阵展开，就得到 <code>operator*</code> 与 <code>inverse()</code> 的三元组形式。关键是 <strong>$T_1\cdot T_2$ 先按 $T_1$ 的方向旋转 $T_2$ 的平移</strong>，不是把两个平移直接相加。</p>
+      <div class="math-card">
+        <div class="math-title">三元组形式与点变换</div>
+        $$T_1\cdot T_2=\left(x_1+c_1x_2-s_1y_2,\ y_1+s_1x_2+c_1y_2,\ \operatorname{wrap}(\theta_1+\theta_2)\right)$$
+        $$T^{-1}=\left(-(cx+sy),\ -(-sx+cy),\ \operatorname{wrap}(-\theta)\right)$$
+        $$\mathbf p_{\text{new}}=R(\theta)\mathbf p+\mathbf t=T\cdot(\mathbf p,1)$$
+      </div>
+      <p>这也解释了 <code>transform_scan</code>：它对每个点执行的就是上式；当只有一个点时，结果等价于 <code>S.poseMul(pose, {x: p.x, y: p.y, theta: 0})</code> 的平移部分。</p>
+
+      <p>同一扫描时刻 $t$ 的 TF 链满足 $M(t)=C(t)\cdot O(t)$。要解出 $C(t)$，必须在等式右边乘 $O(t)^{-1}$：</p>
+      <div class="math-card">
+        <div class="math-title">map → odom：右乘逆，不能反过来</div>
+        $$M=C\,O\ \Longrightarrow\ M O^{-1}=C O O^{-1}=C$$
+        $$T_{\text{map}\leftarrow\text{odom}}=T_{\text{map}\leftarrow\text{base}}\cdot\bigl(T_{\text{odom}\leftarrow\text{base}}\bigr)^{-1}$$
+      </div>
+      <p>若错写成 $O^{-1}M$，得到的是把地图位姿变换到 odom 系的另一种量，通常不能补回 <code>odom → base</code>。判断顺序最可靠的办法是回代：$C\cdot O$ 必须重新得到 $M$。</p>
+
+      <h2 id="sec-code"><span class="sec-no">1.5</span>真实源码步进：从 se2.hpp 到 map_to_odom()</h2>
+      <p>步进器逐段显示仓库当前实现，并标注真实行号。前三段补齐最小版的防御与缓冲细节，第四段展示重载分工，最后把 <code>map_to_odom</code> 落回生产调用点。</p>
+      <div class="src-bar">
+        <button type="button" class="src-jump" data-file="include/scan_localizer/se2.hpp" data-lines="30-114"><span class="tag">完整源码</span>se2.hpp : L30-114 (wrap_angle / Pose2 / transform_scan)</button>
+        <button type="button" class="src-jump" data-file="src/localizer_core.cpp" data-lines="268-275"><span class="tag">生产调用</span>localizer_core.cpp : L268-275 (map_to_odom)</button>
       </div>
 
-      <h2 id="sec-pitfall"><span class="sec-no">1.5</span>工程技巧与踩坑复盘</h2>
+      <div class="hands-on-stepper">
+        <div class="hands-on-toolbar">
+          <div>
+            <div class="hands-on-stage-title" id="ch01-stage-title"></div>
+            <div class="hands-on-stage-meta" id="ch01-stage-meta"></div>
+          </div>
+          <div class="exercise-row">
+            <button type="button" class="btn btn-secondary btn-sm" id="ch01-stage-prev">← 上一步</button>
+            <span class="ctrl-val" id="ch01-stage-index">1 / 5</span>
+            <button type="button" class="btn btn-primary btn-sm" id="ch01-stage-next">下一步 →</button>
+          </div>
+        </div>
+        <div class="hands-on-stage-body">
+          <p class="hands-on-explain" id="ch01-stage-explain"></p>
+          <div class="code-card">
+            <div class="code-head">
+              <button type="button" class="src-jump" id="ch01-stage-source" data-file="include/scan_localizer/se2.hpp" data-lines="30-46"><span class="tag">源码抽屉</span>打开当前实现</button>
+              <button type="button" class="code-btn" id="ch01-stage-copy">复制</button>
+            </div>
+            <pre><code class="language-cpp" id="ch01-stage-code"></code></pre>
+          </div>
+        </div>
+      </div>
+
+      <h2 id="sec-connect"><span class="sec-no">1.6</span>只做连接：TF 外参、时间戳与 PGM Y 翻转</h2>
       <div class="callout callout-pitfall">
-        <div class="callout-head">Phase 1 &amp; Phase 3 真实踩坑档案</div>
+        <div class="callout-head">这三件事发生在 SE(2) 核心之外，但会决定它是否被正确使用</div>
         <ul>
-          <li><strong>坑 1：PGM 第 0 行在顶部，ROS OccupancyGrid <code>iy=0</code> 在底部</strong>（<code>map_io.cpp:L369</code>）。如果不写 <code>row_pgm = h - 1 - iy</code>，从 <code>nav2_map_server</code> 加载进来的地图上下颠倒，全图定位必然失败！</li>
-          <li><strong>坑 2：<code>map_to_odom()</code> 混用时间戳</strong>（<code>localizer_core.cpp:L274</code>）。必须使用上一帧扫描时刻锚定的 <code>odom_at_last_scan_</code> 求逆，而不是直接用异步到达的最新 <code>last_odom_</code>，否则高速行驶时 TF 会产生周期性抖动锯齿。</li>
-          <li><strong>坑 3：倒装雷达（<code>roll = π</code>）</strong>：仅靠 2D 参数 <code>(laser_x, laser_y, laser_theta)</code> 无法表达左右镜像；生产代码中必须优先查 TF2 的 3D 四元数与平移（<code>localizer_node.cpp:L1217-1293</code>）。</li>
+          <li><strong>TF 方向与时间戳</strong>：本章箭头统一写成 <code>T_child_parent</code>，例如 <code>T_map_base</code> 把 base 点变到 map。生产代码用同一扫描时刻的 <code>last_pose_</code> 与 <code>odom_at_last_scan_</code> 求修正，不能混用异步到达的最新里程计。</li>
+          <li><strong>base → laser 是完整 3D 外参</strong>：倒装雷达的 <code>roll=π</code> 会在平面点云上产生 $y\mapsto-y$ 镜像，不能用一个普通 2D 旋转角冒充。应先用 TF2 的 3D 变换把点投到 base_link，再交给本章的 <code>transform_scan</code>。</li>
+          <li><strong>PGM Y 翻转是存储约定</strong>：PGM 第 0 行在顶部，ROS <code>OccupancyGrid</code> 的 <code>iy=0</code> 在底部，因此装载时使用 <code>row_pgm = h - 1 - iy</code>。它与 <code>map → odom</code> 的群运算无关，不能靠修改 TF 来补偿。</li>
+        </ul>
+      </div>
+      <div class="src-bar">
+        <button type="button" class="src-jump" data-file="src/localizer_core.cpp" data-lines="268-275"><span class="tag">连接源码</span>localizer_core.cpp : L268-275</button>
+        <button type="button" class="src-jump" data-file="src/map_io.cpp" data-lines="366-375"><span class="tag">连接源码</span>map_io.cpp : L366-375 (PGM 行映射)</button>
+      </div>
+
+      <h2 id="sec-syntax"><span class="sec-no">1.7</span>从最小版读向生产版</h2>
+      <div class="callout callout-syntax">
+        <div class="callout-head">C++20 与热路径设计</div>
+        <ul>
+          <li><strong><code>std::remainder(a, kTwoPi)</code></strong>：以 $O(1)$ 完成角度归一化；生产版先用 <code>std::isfinite</code> 拒绝 NaN/inf，避免异常值继续污染位姿。</li>
+          <li><strong><code>if constexpr (std::random_access_iterator&lt;It&gt;)</code></strong>：只有随机访问迭代器才在编译期保留 <code>distance + reserve</code> 分支，链表等迭代器不会背上无效操作。</li>
+          <li><strong><code>out.clear()</code> 与输出引用</strong>：清空元素但保留容量，循环中复用成员向量，避免每帧重新分配。返回向量版只是便利包装，生产热路径优先复用缓冲版。</li>
         </ul>
       </div>
 
-      <h2 id="sec-quiz"><span class="sec-no">1.6</span>思考题与自检</h2>
+      <h2 id="sec-exercise"><span class="sec-no">1.8</span>三道填空练习与验收</h2>
+      <p>先独立计算，再提交检查。前两题的答案由页面使用同一个 <code>S.poseMul</code> / <code>S.poseInv</code> 数值例生成；第三题检查链式求解的方向。</p>
+
+      <form class="hands-on-exercise" data-kind="number" data-answer="1" data-tolerance="1e-6" data-hint="A 旋转了 90°，B 的平移 (1,0) 旋转后应变成 (0,1)。" data-success="正确。S.poseMul(A,B)=(1,1,π/2)，平移 y 为 1。">
+        <label for="ch01-ex1">练习 1：已知 $A=(1,0,\pi/2)$、$B=(1,0,0)$，填写 <code>S.poseMul(A, B).y</code>。</label>
+        <div class="exercise-row"><input class="exercise-input" id="ch01-ex1" name="answer" inputmode="decimal" autocomplete="off" placeholder="输入数值" /><button class="btn btn-primary btn-sm" type="submit">检查</button></div>
+        <div class="exercise-feedback" aria-live="polite"></div>
+      </form>
+
+      <form class="hands-on-exercise" data-kind="number" data-answer="-1" data-tolerance="1e-6" data-hint="逆变换的平移是 -R(-θ)t；θ=π/2 时先算 Rᵀ(2,1)=(1,-2)。" data-success="正确。S.poseInv(M)=(-1,2,-π/2)，其 x 为 -1。">
+        <label for="ch01-ex2">练习 2：已知 $M=(2,1,\pi/2)$，填写 <code>S.poseInv(M).x</code>。</label>
+        <div class="exercise-row"><input class="exercise-input" id="ch01-ex2" name="answer" inputmode="decimal" autocomplete="off" placeholder="输入数值" /><button class="btn btn-primary btn-sm" type="submit">检查</button></div>
+        <div class="exercise-feedback" aria-live="polite"></div>
+      </form>
+
+      <form class="hands-on-exercise" data-kind="choice" data-answer="map_to_base * odom_to_base.inverse()" data-hint="从 M=C*O 出发，在等式右边乘 O 的逆，才能保留 map 在左、odom 在右。" data-success="正确。右乘 odom_to_base.inverse() 后，C*O*O⁻¹ 正好约去 O。">
+        <label for="ch01-ex3">练习 3：从 <code>M = C * O</code> 解出 <code>C = T_map_odom</code>，填写完整的 C++ 表达式。</label>
+        <div class="exercise-row"><input class="exercise-input" id="ch01-ex3" name="answer" autocomplete="off" placeholder="map_to_base * ..." /><button class="btn btn-primary btn-sm" type="submit">检查</button></div>
+        <div class="exercise-feedback" aria-live="polite"></div>
+      </form>
+
+      <div class="callout callout-tip">
+        <div class="callout-head">完成标准</div>
+        <ul>
+          <li>能从空白文件写出四个最小操作，并用 <code>g++ -std=c++20 -c se2_min.cpp -o se2_min.o</code> 编译通过（该片段不含 <code>main()</code>，因此只编译目标文件）。</li>
+          <li>能手算 $A\cdot B=(1,1,\pi/2)$、$M^{-1}=(-1,2,-\pi/2)$、$M\cdot O^{-1}=(2,0,\pi/2)$。</li>
+          <li>能验证左右逆不变量与链式回代：<code>S.poseMul(M, S.poseInv(M))</code> 和 <code>S.poseMul(C, O)</code> 分别约为单位位姿和 $M$。</li>
+          <li>能解释点变换 $(R\mathbf p+\mathbf t)$ 与 <code>poseMul(T, {p.x, p.y, 0})</code> 的平移部分等价。</li>
+          <li>能在真实源码步进器中指出：非有限角度防护在 L34-46，群运算在 L57-67，点云缓冲复用在 L80-93，便利重载在 L95-114。</li>
+          <li>能明确区分三层问题：SE(2) 求坐标变换；TF 提供方向、3D 外参和同一时间戳；PGM 装载负责行方向。三者不能互相替代。</li>
+        </ul>
+      </div>
+
+      <h2 id="sec-quiz"><span class="sec-no">1.9</span>思考题与自检</h2>
       <details class="quiz-item">
-        <summary>1. 为什么在 <code>LocalizerNode</code> 启动后，即使机器人完全静止，也不建议停止发布 <code>map → odom</code>？</summary>
-        <div class="quiz-ans">因为 Nav2 的代价地图和规划器依赖 TF 缓冲查询实时位姿，若 TF 超过 <code>transform_tolerance</code>（默认 0.1s）没有新变换就会报错超时。所以工程上需要 <code>tf_keepalive_timer_</code> 定时重广播最近一次 <code>map → odom</code>，配合未来的略微外推时间戳 <code>stamp + transform_tolerance</code>。</div>
+        <summary>1. 为什么 <code>map_to_odom</code> 必须右乘 <code>odom_to_base.inverse()</code>，而不是左乘？</summary>
+        <div class="quiz-ans">因为目标恒等式是 <code>M = C * O</code>，其中 C 把 odom 点变到 map，O 把 base 点变到 odom。右乘 O⁻¹ 后得到 <code>C = M * O⁻¹</code>；左乘得到的是 <code>O⁻¹ * M</code>，坐标系顺序不同，回代不能闭合。</div>
       </details>
       <details class="quiz-item">
-        <summary>2. 栅格索引 <code>worldToGridIndex</code> 和双线性插值坐标 <code>worldToGridF</code> 为什么相差 0.5？</summary>
-        <div class="quiz-ans">在 ROS 语义中，格子 <code>(ix, iy)</code> 占据的矩形区域是 $[x_0 + ix\cdot r,\; x_0 + (ix+1)\cdot r)$，所以它的<strong>中心</strong>在 $x_0 + (ix + 0.5)\cdot r$。双线性插值必须以“格心”为顶点网格，因此连续格心坐标需要减 <code>0.5</code>，保证落在格心正好对应整数下标。</div>
+        <summary>2. 已经拿到雷达局部点后，为什么不能把倒装雷达简单设成 <code>theta = π</code>？</summary>
+        <div class="quiz-ans">平面旋转 π 会把 (x,y) 变成 (-x,-y)；绕 X 轴倒装 roll=π 则把 (x,y,z) 变成 (x,-y,-z)，投影到平面后是左右镜像。二者不是同一个刚体变换。必须通过完整 3D TF 外参先转换到 base_link。</div>
+      </details>
+      <details class="quiz-item">
+        <summary>3. PGM 地图上下颠倒时，调整 <code>map → odom</code> 能修复吗？</summary>
+        <div class="quiz-ans">不能。PGM 行翻转错误发生在图像/栅格装载阶段，改变的是地图数据本身的行语义；<code>map → odom</code> 只修正同一地图内 odom 与 map 的坐标关系。应修正 <code>row_pgm = h - 1 - iy</code>，而不是污染 TF。</div>
       </details>
 
       <nav class="pager">

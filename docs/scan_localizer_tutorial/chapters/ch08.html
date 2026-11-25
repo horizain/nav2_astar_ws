@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>第 8 章 · ROS 2 生产级节点架构 LocalizerNode | scan_localizer</title>
+  <title>第 8 章 · 主动重建 LocalizerNode：生命周期、时间对齐与并发边界 | scan_localizer</title>
   <link rel="stylesheet" href="../../website/vendor/katex/katex.min.css" />
   <link rel="stylesheet" href="../css/apple.css" />
   <script>window.TUTORIAL_ROOT = ".."; window.PAGE_ID = "ch08";</script>
@@ -14,6 +14,7 @@
   <script defer src="../js/sim-core.js"></script>
   <script defer src="../js/app.js"></script>
   <script defer src="../js/sim-ch08.js"></script>
+  <script defer src="../js/hands-on-ch08.js"></script>
 </head>
 <body>
   <div id="site-nav"></div>
@@ -21,12 +22,13 @@
   <header class="page-header">
     <div class="container">
       <div class="crumb"><a href="../index.html">概览</a> / 第四阶段 · ROS 2 生产工程 / 第 8 章</div>
-      <h1>ROS 2 生产级节点架构：LocalizerNode</h1>
-      <p class="sub">把一个纯算法库包装成真正可直接并入 Nav2 生产栈的 ROS 2 Jazzy Lifecycle 组件节点：回调组隔离、锁外构场、原子交换、TF2 时间插值与 6×6 协方差规范。</p>
+      <h1>主动重建 ROS 2 生产节点：LocalizerNode</h1>
+      <p class="sub">沿一次 configure、热切图与 scan，亲手重建资源所有权、扫描时间锚、锁边界和失败回退。重点不是记住 ROS 接口，而是知道每一行代码为什么只能放在那个位置。</p>
       <div class="pill-row">
-        <span class="pill">预计 35 分钟</span>
-        <span class="pill">核心文件：localizer_node.cpp · localizer.yaml · demo.launch.py</span>
-        <span class="pill">动画：端到端仓库定位驾驶舱</span>
+        <span class="pill">预计 45 分钟</span>
+        <span class="pill">核心文件：localizer_node.cpp · localizer_node.hpp</span>
+        <span class="pill">保留：仓库定位驾驶舱</span>
+        <span class="pill">动手：Lifecycle / 并发时间线 / 真实源码步进 / 3 道练习</span>
       </div>
     </div>
   </header>
@@ -38,8 +40,8 @@
     </aside>
 
     <article class="article-col">
-      <h2 id="sec-intro"><span class="sec-no">8.1</span>全链路交互驾驶舱：亲手压测完整流水线</h2>
-      <p>下方的仓库驾驶舱在浏览器里实时跑着 <code>odom 预测 (带 2% 滑移) → Field-GN 匹配 → 4D EKF 更新 → 五态状态机</code> 全闭环。尝试点击“开启前方动态行人遮挡”或直接“手动绑架机器人”，观察状态如何切至 <code>GLOBAL</code> 并依靠 B&amp;B 瞬间追回：</p>
+      <h2 id="sec-intro"><span class="sec-no">8.1</span>先看闭环：仓库定位驾驶舱</h2>
+      <p>下方的仓库驾驶舱在浏览器里实时跑着 <code>odom 预测 (带 2% 滑移) → Field-GN 匹配 → 4D EKF 更新 → 五态状态机</code> 全闭环。尝试点击“开启前方动态行人遮挡”或直接“手动绑架机器人”，观察状态如何切至 <code>GLOBAL</code> 并依靠 B&amp;B 追回：</p>
 
       <div class="lab-frame">
         <div class="lab-head">
@@ -61,30 +63,526 @@
         </div>
       </div>
 
-      <h2 id="sec-arch"><span class="sec-no">8.2</span>四大生产级架构模式</h2>
-      <ul>
-        <li><strong>1. 严格 Lifecycle 生命周期与 <code>autostart: false</code></strong>：真正由 Nav2 <code>lifecycle_manager</code> 驱动，配置阶段 <code>on_configure()</code> 才读参数与建资源，激活阶段才发话题；清理回调 <code>on_cleanup()</code> 调用统一的 <code>resetResources()</code> 保证多次 <code>configure → deactivate → cleanup</code> 不留状态鬼影（例如清零 <code>imu_started_</code> 防止二次激活航向大跳）。</li>
-        <li><strong>2. 锁外重计算 + 原子替换（<code>applyMap()</code>）</strong>：构建大地图场和 NDT 耗时数十毫秒，绝不能在持有 <code>state_mtx_</code> 锁的情况下执行从而饿死高频传感器回调。正确范式是锁外造好 <code>std::shared_ptr&lt;MapField&gt;</code>，再临界区内微秒级指针交换，同时用 <code>OutputSnapshot</code> 在锁外执行 DDS <code>publish()</code>，彻底消除死锁。</li>
-        <li><strong>3. 双回调组 + 组件化零拷贝</strong>：<code>sensor_cb_group_</code> 专责高实时性 `/scan /odom /imu`，<code>work_cb_group_</code> 专责热切图与服务；<code>demo.launch.py</code> 通过 <code>ComposableNodeContainer</code> 打开 `use_intra_process_comms`，在嵌入式芯片上零序列化传递点云与栅格。</li>
-        <li><strong>4. Odom 优先 TF2 + 环形缓冲插值</strong>：按激光扫描严格时间戳 <code>m-&gt;header.stamp</code> 查 TF2 `odom→base_link`，超时/缺失时退回按时间戳线性插值的环形缓冲。</li>
-      </ul>
-
-      <h2 id="sec-code"><span class="sec-no">8.3</span>核心源码精读</h2>
-      <div class="src-bar">
-        <button type="button" class="src-jump" data-file="src/localizer_node.cpp" data-lines="890-963"><span class="tag">源码抽屉</span>localizer_node.cpp : L890-963 (锁外构场 applyMap)</button>
-        <button type="button" class="src-jump" data-file="src/localizer_node.cpp" data-lines="1189-1336"><span class="tag">源码抽屉</span>localizer_node.cpp : L1189-1336 (onScan 3D 外参+插值)</button>
-        <button type="button" class="src-jump" data-file="src/localizer_node.cpp" data-lines="1555-1667"><span class="tag">源码抽屉</span>localizer_node.cpp : L1555-1667 (锁外快照发布)</button>
-        <button type="button" class="src-jump" data-file="config/localizer.yaml" data-lines="1-80"><span class="tag">源码抽屉</span>localizer.yaml : L1-80 (52 项参数契约)</button>
+      <div class="callout callout-tip">
+        <div class="callout-head">动画证明算法闭环，不证明节点并发正确</div>
+        <p>驾驶舱直接调用浏览器里的算法核，没有 DDS、Lifecycle 或线程调度。下面主动重建生产节点：谁拥有资源、哪一帧数据属于同一时刻、锁在哪里释放、失败后旧状态是否还完整。</p>
       </div>
 
-      <h2 id="sec-pitfall"><span class="sec-no">8.4</span>ROS 2 工程经典踩坑复盘</h2>
+      <h2 id="sec-lifecycle"><span class="sec-no">8.2</span>Lifecycle：资源不是构造函数随手创建的</h2>
+      <p>先分清两套状态机：<code>LocalizerCore</code> 的 <code>UNINIT / TRACKING / DEGRADED / LOST / GLOBAL</code> 描述“定位是否可信”；<code>LifecycleNode</code> 的 <code>UNCONFIGURED / INACTIVE / ACTIVE</code> 描述“节点是否拥有资源、是否允许输出”。两者不能互相替代。</p>
+
+      <div class="hands-on-stepper" id="ch08-lifecycle-panel">
+        <div class="hands-on-toolbar">
+          <div>
+            <div class="hands-on-stage-title">交互式 Lifecycle 迁移台</div>
+            <div class="hands-on-stage-meta">点击合法迁移，观察 active_、发布器与核心资源何时变化</div>
+          </div>
+          <div class="exercise-row">
+            <button type="button" class="btn btn-primary btn-sm" data-life-action="configure">configure</button>
+            <button type="button" class="btn btn-primary btn-sm" data-life-action="activate">activate</button>
+            <button type="button" class="btn btn-secondary btn-sm" data-life-action="deactivate">deactivate</button>
+            <button type="button" class="btn btn-secondary btn-sm" data-life-action="cleanup">cleanup</button>
+            <button type="button" class="btn btn-secondary btn-sm" data-life-action="shutdown">shutdown</button>
+            <button type="button" class="btn btn-secondary btn-sm" id="ch08-life-reset">重置演示</button>
+          </div>
+        </div>
+        <div class="hands-on-stage-body">
+          <div class="pill-row" aria-label="Lifecycle 状态">
+            <span class="pill" id="ch08-life-unconfigured">UNCONFIGURED</span> →
+            <span class="pill" id="ch08-life-inactive">INACTIVE</span> →
+            <span class="pill" id="ch08-life-active">ACTIVE</span>
+            <span class="pill" id="ch08-life-finalized">FINALIZED</span>
+          </div>
+          <p class="hands-on-explain">生产默认 <code>autostart: false</code>，由 <code>lifecycle_manager</code> 驱动；演示 launch 才覆写为 true。勾选失败注入，观察 configure 创建资源后如何回滚，而不是半吊子停在 INACTIVE。</p>
+          <label><input type="checkbox" id="ch08-life-fail" /> 注入失败：<code>map_yaml</code> 路径不存在</label>
+          <dl class="hands-on-vars" id="ch08-life-vars"></dl>
+          <div class="hands-on-note" id="ch08-life-log" aria-live="polite">初始状态：UNCONFIGURED；不创建核心、TF 或发布器。</div>
+        </div>
+      </div>
+
+      <h3>最小状态回调骨架</h3>
+      <p>下面是 C++ 风格骨架，省略话题、参数与日志细节。它刻意保留四条生产规则：配置先校验；创建资源后加载地图失败要回滚；激活先打开发布器再置 <code>active_</code>；清理先关门，再销毁资源与算法状态。</p>
+      <div class="code-card">
+        <div class="code-head"><span class="code-file">教学骨架：Lifecycle 回调与幂等清理（非完整可编译单元）</span><button type="button" class="code-btn code-copy-btn">复制</button></div>
+        <pre><code class="language-cpp">CallbackReturn LocalizerNode::on_configure(const State &amp;)
+{
+  if (!readAndValidateParameters()) {
+    return CallbackReturn::FAILURE;              // 尚未拥有新资源
+  }
+  {
+    std::lock_guard&lt;std::mutex&gt; lk(state_mtx_);
+    core_ = std::make_unique&lt;LocalizerCore&gt;(core_cfg_);
+    imu_started_ = false;
+    odom_buffer_.clear();
+    has_last_scan_ = false;
+    // ... 其余算法状态归零 ...
+  }
+
+  // create_publisher / TF buffer / subscriptions / services ...
+  if (!map_yaml_.empty() &amp;&amp; !loadMapFromYaml(map_yaml_)) {
+    resetResources();                            // 关键失败路径
+    return CallbackReturn::FAILURE;
+  }
+  return CallbackReturn::SUCCESS;                // 状态机进入 INACTIVE
+}
+
+CallbackReturn LocalizerNode::on_activate(const State &amp;)
+{
+  if (pose_pub_) {pose_pub_-&gt;on_activate();}
+  if (status_pub_) {status_pub_-&gt;on_activate();}
+  if (hypotheses_pub_) {hypotheses_pub_-&gt;on_activate();}
+  active_.store(true);
+  return CallbackReturn::SUCCESS;
+}
+
+CallbackReturn LocalizerNode::on_deactivate(const State &amp;)
+{
+  active_.store(false);                           // 先停止接收新工作
+  if (pose_pub_) {pose_pub_-&gt;on_deactivate();}
+  if (status_pub_) {status_pub_-&gt;on_deactivate();}
+  if (hypotheses_pub_) {hypotheses_pub_-&gt;on_deactivate();}
+  return CallbackReturn::SUCCESS;
+}
+
+CallbackReturn LocalizerNode::on_cleanup(const State &amp;)
+{
+  resetResources();
+  return CallbackReturn::SUCCESS;
+}
+
+CallbackReturn LocalizerNode::on_shutdown(const State &amp;)
+{
+  resetResources();
+  return CallbackReturn::SUCCESS;
+}
+
+void LocalizerNode::resetResources()
+{
+  active_.store(false);
+  // cancel timers; remove parameter callback; reset subscriptions/publishers/TF ...
+  std::lock_guard&lt;std::mutex&gt; lk(state_mtx_);
+  core_.reset();
+  field_.reset();
+  grid_.reset();
+  matcher_.reset();
+  imu_started_ = false;                           // 防止下一轮继承旧航向锚
+  odom_buffer_.clear();
+  last_scan_.points.clear();
+  pending_hypotheses_.clear();
+  global_alternates_.clear();
+}</code></pre>
+      </div>
+      <p>真实实现见 <code>localizer_node.cpp:L644-699</code>（清理）、<code>L701-850</code>（configure 与失败回滚）、<code>L852-888</code>（activate / deactivate / cleanup / shutdown）。<code>active_</code> 是快速闸门，不是资源锁；真正可能触碰 <code>core_</code> 的回调仍必须在 <code>state_mtx_</code> 内二次检查。</p>
+
+      <h3>回调组的真实归属：不要照抄注释想当然</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>回调</th><th>实际回调组</th><th>为什么</th><th>真实源码</th></tr></thead>
+          <tbody>
+            <tr><td><code>/odom /imu</code></td><td><code>sensor_cb_group_</code></td><td>短临界区写入时间戳缓冲；地图重构建时仍可推进。</td><td><code>L764-772</code></td></tr>
+            <tr><td><code>/scan</code></td><td><code>work_cb_group_</code></td><td>扫描会调用核心、可能触发全局搜索，并与地图/服务共享工作线程序列。</td><td><code>L758-762</code></td></tr>
+            <tr><td><code>/map</code>、地图路径、服务、TF 保活</td><td><code>work_cb_group_</code></td><td>与 scan mutually exclusive，避免同组地图构建与核心步进重叠。</td><td><code>L750-756</code>、<code>L774-825</code></td></tr>
+          </tbody>
+        </table>
+      </div>
       <div class="callout callout-pitfall">
-        <div class="callout-head">四个最容易栽跟头的 ROS 2 细节</div>
+        <div class="callout-head">“锁外构场”不等于“scan 一定同时继续跑”</div>
+        <p>两个回调组都是 <code>MutuallyExclusive</code>。真实代码把 <code>/scan</code> 放在 <code>work_cb_group_</code>，因此同组的地图构建回调执行期间，scan 回调仍须等待；锁外构建直接保护的是可并行的 <code>/odom /imu</code> 传感器回调，并把状态锁占用缩到最短。是否真正并行还取决于 executor；单线程 executor 不会并行。组件容器 <code>component_container_mt</code> 才提供多线程调度条件。</p>
+      </div>
+
+      <h2 id="sec-map"><span class="sec-no">8.3</span>applyMap：锁外造好，锁内一次提交</h2>
+      <p>地图场、NDT 或匹配器的构建可能耗时数十毫秒。错误做法是拿着 <code>state_mtx_</code> 从栅格一路建到匹配器，期间所有需要读取核心状态的线程一起等待。正确做法把过程分成“验证 → 复制构建参数 → 锁外构建 → 锁内原子交换”四段。</p>
+      <div class="code-card">
+        <div class="code-head"><span class="code-file">教学最小版：applyMap 的提交边界（对应 L890-963）</span><button type="button" class="code-btn code-copy-btn">复制</button></div>
+        <pre><code class="language-cpp">bool LocalizerNode::applyMap(
+  std::shared_ptr&lt;OccupancyGrid&gt; grid, bool keep_pose)
+{
+  if (!grid || grid-&gt;width &lt;= 0 || grid-&gt;height &lt;= 0 ||
+      !isFinitePositive(grid-&gt;resolution)) {
+    return false;
+  }
+  const std::size_t expected =
+    static_cast&lt;std::size_t&gt;(grid-&gt;width) * grid-&gt;height;
+  if (grid-&gt;cells.size() != expected) {return false;}
+
+  double sigma = 0.20;
+  std::string matcher_name;
+  double ndt_voxel = 0.5;
+  {
+    std::lock_guard&lt;std::mutex&gt; lk(state_mtx_);   // 只复制参数
+    sigma = likelihood_sigma_;
+    matcher_name = matcher_name_;
+    ndt_voxel = ndt_voxel_;
+  }
+
+  // 耗时工作全部在锁外；失败时旧 grid_/field_/matcher_ 完全没动。
+  auto field = std::make_shared&lt;MapField&gt;();
+  if (!field-&gt;build(grid, sigma)) {return false;}
+  auto matcher = make_matcher(matcher_name, grid.get(), ndt_voxel);
+  if (!matcher) {return false;}
+
+  {
+    std::lock_guard&lt;std::mutex&gt; lk(state_mtx_);   // 只提交一致视图
+    if (!core_) {return false;}
+    const bool first = !map_received_;
+    grid_ = std::move(grid);
+    field_ = std::move(field);
+    matcher_ = std::move(matcher);
+    pending_hypotheses_.clear();
+    global_alternates_.clear();
+    stable_tracking_count_ = 0;
+    core_-&gt;set_map(field_);
+    core_-&gt;set_matcher(matcher_);
+    map_received_ = true;
+    if (!first &amp;&amp; !keep_pose) {
+      core_-&gt;request_global();                     // 热切图且不保位姿
+    }
+  }
+  return true;
+}</code></pre>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>阶段</th><th>持锁？</th><th>成功语义</th><th>失败语义</th></tr></thead>
+          <tbody>
+            <tr><td>尺寸、分辨率、胞元数验证</td><td>否</td><td>得到可构建的输入快照。</td><td>立即返回，不分配新地图资源。</td></tr>
+            <tr><td>复制 sigma / matcher / voxel</td><td>是，极短</td><td>本次构建使用一份一致参数。</td><td>不修改参数。</td></tr>
+            <tr><td><code>MapField::build</code> / <code>make_matcher</code></td><td>否</td><td>新地图与新匹配器同时就绪。</td><td>任一失败，旧地图继续服务；绝不能提交半成品。</td></tr>
+            <tr><td>交换三个地图成员并更新核心</td><td>是，极短</td><td>读取者只能看到交换前或交换后的完整地图视图。</td><td><code>core_</code> 已不存在时返回 false，不写地图成员。</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout callout-tip">
+        <div class="callout-head">这里的“原子”是逻辑原子，不是 std::atomic 指针魔法</div>
+        <p>生产代码用同一把 <code>state_mtx_</code> 保护 <code>grid_ / field_ / matcher_ / core_</code> 的整套切换。若逐个成员加锁或先更新 <code>field_</code> 后更新 <code>matcher_</code>，读取者可能看到“新场配旧匹配器”。</p>
+      </div>
+      <div class="callout callout-pitfall">
+        <div class="callout-head">失败路径与热切语义</div>
         <ul>
-          <li><strong>6×6 协方差下标写成 `[14]` 而不是 `[35]`！</strong>（<code>localizer_node.cpp:L1584-1590</code>）：ROS `PoseWithCovariance` 的 6 维顺序固定为 `[x, y, z, roll, pitch, yaw]`。2D 定位映射为 <code>constexpr int kIdx[3] = {0, 1, 5};</code>，偏航角方差在行优先索引 <code>6 * 5 + 5 = 35</code>！曾错写为 `[0, 1, 2]` 把航向方差塞进了 z 轴里，坑死下游 EKF。</li>
-          <li><strong>`/imu` QoS 不匹配沉默丢包</strong>：大多数真机 IMU 驱动发 <code>BestEffort</code>（`SensorDataQoS`），用默认可靠 QoS 订阅会一帧都收不到。</li>
-          <li><strong><code>autostart</code> 绕过状态机</strong>：旧版本直接在构造函数用计时器偷偷转 ACTIVE，导致 Nav2 启动管理报状态冲突。</li>
-          <li><strong>热参数不校验</strong>：若运行时通过 `ros2 param set` 传入负数 <code>likelihood_sigma</code> 会导致除零崩盘，必须在 `onSetParameters` 事务化校对全部参数。</li>
+          <li><strong>构建失败：</strong>局部新对象销毁，旧地图不变。上游若忽略 <code>applyMap()</code> 的 bool，会把“切换失败”误报成“切换成功”。</li>
+          <li><strong>首图：</strong><code>first=true</code>，不会仅因切图调用 <code>request_global()</code>；初始定位仍按核心状态机处理。</li>
+          <li><strong>后续地图：</strong><code>keep_pose=true</code> 保留位姿；为 false 时请求全局重定位，因为新地图里的旧坐标不再天然可信。</li>
+          <li><strong>顺序：</strong>互相排斥的 work 回调组串行化本节点的地图请求；原子交换不提供跨任意线程的“最后请求获胜”版本号。</li>
+        </ul>
+      </div>
+
+      <h2 id="sec-time"><span class="sec-no">8.4</span>onScan：一帧扫描只有一个时间锚</h2>
+      <p>激光消息的到达时刻、消息头时刻、当前最新里程计时刻不是同一个概念。匹配需要的是“这束激光在 <code>header.stamp</code> 时，雷达相对 base 在哪里，机器人相对 odom 在哪里”。因此外参 TF 与 odom 都按扫描时刻查询，而不是按回调开始时的 <code>now()</code>。</p>
+      <div class="code-card">
+        <div class="code-head"><span class="code-file">C++ 风格伪代码：扫描时刻对齐与双重提交检查（L1189-1336）</span><button type="button" class="code-btn code-copy-btn">复制</button></div>
+        <pre><code class="language-cpp">void LocalizerNode::onScan(const LaserScan::SharedPtr &amp; m)
+{
+  if (!active_.load() || !m) {return;}
+
+  // 1. 锁内只复制配置；没有地图或核心就直接返回。
+  std::string base_frame;
+  int min_pts = 10;
+  double tf_timeout = 0.05;
+  {
+    std::lock_guard&lt;std::mutex&gt; lk(state_mtx_);
+    if (!map_received_ || !core_) {return;}
+    base_frame = base_frame_;
+    min_pts = min_scan_points_;
+    tf_timeout = tf_lookup_timeout_;
+  }
+
+  const rclcpp::Time scan_stamp(m-&gt;header.stamp);
+
+  // 2. base_frame -&gt; laser_frame 也查 scan_stamp，保留 roll/pitch/z 外参。
+  //    仅 ExtrapolationException 回退到 latest；其他 TF 失败走 2D 参数。
+  Scan scan = preprocess_scan_at(m, base_frame, scan_stamp, tf_timeout);
+  if (static_cast&lt;int&gt;(scan.points.size()) &lt; min_pts) {return;}
+
+  // 3. odom -&gt; base_link 查同一个 scan_stamp：TF 优先，环形缓冲插值兜底。
+  Pose2 odom_at_scan{};
+  bool odom_stale = false;
+  const bool have_odom = lookupOdomAt(scan_stamp, odom_at_scan, odom_stale);
+
+  OutputSnapshot snap;
+  {
+    std::lock_guard&lt;std::mutex&gt; lk(state_mtx_);
+    if (!active_.load() || !map_received_ || !core_) {return;}
+    if (have_odom) {core_-&gt;on_odom(odom_at_scan);}
+    last_scan_ = scan;
+    has_last_scan_ = true;
+    const CoreOutput out = core_-&gt;on_scan(scan);
+    snap = buildSnapshotLocked(out, odom_stale);
+  }                                                   // 状态锁在这里释放
+
+  publishOutputs(snap, scan_stamp.nanoseconds() == 0 ? now() : scan_stamp);
+}
+
+bool LocalizerNode::lookupOdomAt(const rclcpp::Time &amp; stamp,
+                                 Pose2 &amp; out, bool &amp; stale)
+{
+  stale = false;
+  // 优先：lookupTransform(odom_frame, base_frame, stamp, timeout)
+  // 捕获 TransformException 后才进入下列 /odom 缓冲回退。
+
+  std::lock_guard&lt;std::mutex&gt; lk(state_mtx_);
+  if (odom_buffer_.empty()) {return false;}
+  if (stamp &gt; odom_buffer_.back().stamp &amp;&amp;
+      (stamp - odom_buffer_.back().stamp).seconds() &gt; odom_timeout_) {
+    stale = true;                                   // 告警，不直接丢帧
+  }
+  if (stamp &lt;= odom_buffer_.front().stamp) {
+    out = odom_buffer_.front().pose; return true;    // 端点钳制
+  }
+  if (stamp &gt;= odom_buffer_.back().stamp) {
+    out = odom_buffer_.back().pose; return true;
+  }
+  for (std::size_t i = 0; i + 1 &lt; odom_buffer_.size(); ++i) {
+    const auto &amp; a = odom_buffer_[i];
+    const auto &amp; b = odom_buffer_[i + 1];
+    if (a.stamp &lt;= stamp &amp;&amp; stamp &lt;= b.stamp) {
+      const double dt = (b.stamp - a.stamp).seconds();
+      const double alpha = dt &gt; 1e-9
+        ? std::clamp((stamp - a.stamp).seconds() / dt, 0.0, 1.0) : 0.0;
+      out.x = a.pose.x + alpha * (b.pose.x - a.pose.x);
+      out.y = a.pose.y + alpha * (b.pose.y - a.pose.y);
+      out.theta = wrap_angle(
+        a.pose.theta + alpha * wrap_angle(b.pose.theta - a.pose.theta));
+      return true;
+    }
+  }
+  out = odom_buffer_.back().pose;
+  return true;
+}</code></pre>
+      </div>
+      <p>角度插值必须先对 <code>b.theta - a.theta</code> 做 <code>wrap_angle</code>。否则从 <code>+179°</code> 到 <code>-179°</code> 会误走 358°，而不是跨过 ±π 的 2°。生产实现见 <code>L1170-1186</code>。</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>失败/边界</th><th>生产代码怎么做</th><th>为什么不是直接丢帧</th></tr></thead>
+          <tbody>
+            <tr><td>扫描头时间戳为 0</td><td>TF 查询 latest；输出时刻改用 <code>now()</code>。</td><td>兼容未填时间戳的驱动，但不能恢复已经丢失的测量时刻。</td></tr>
+            <tr><td>base→laser 精确时刻外推失败</td><td>仅对 <code>ExtrapolationException</code> 再查 latest；其他异常使用 2D 外参参数。</td><td>静态外参通常变化很慢；动态外参缺失则仍可能引入误差。</td></tr>
+            <tr><td>odom TF 缺失</td><td>回退到带时间戳的 <code>/odom</code> 环形缓冲并插值。</td><td>保留扫描时刻对齐，而不是拿最新 odom 顶替。</td></tr>
+            <tr><td>缓冲为空</td><td><code>have_odom=false</code>；本帧不调用 <code>core_-&gt;on_odom()</code>。</td><td>核心沿用已有运动锚；冷启动时是否可定位由核心状态机决定。</td></tr>
+            <tr><td>扫描晚于缓冲末端且超时</td><td>仍取末端样本，但 <code>odom_stale=true</code>，诊断在 TRACKING 时升为 WARN。</td><td>stale 是质量信号，不是硬拒绝；是否丢弃应由系统策略决定。</td></tr>
+            <tr><td>有效点少于 <code>min_scan_points</code></td><td>在更新核心前返回。</td><td>避免用不可靠稀疏扫描污染滤波器。</td></tr>
+            <tr><td>预处理期间被 deactivate / cleanup</td><td>锁内二次检查 <code>active_ / map_received_ / core_</code> 后返回。</td><td>入口检查不足以覆盖整个异步生命周期。</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2 id="sec-snapshot"><span class="sec-no">8.5</span>OutputSnapshot：把一致视图带出锁</h2>
+      <p>DDS <code>publish()</code> 可能因序列化、背压或进程内分发而阻塞。如果发布时仍持有 <code>state_mtx_</code>，一个慢订阅者就能拖住 odom、IMU、参数与地图状态读取。生产代码先在锁内复制一份自洽快照，再在锁外构造消息并发布。</p>
+      <div class="code-card">
+        <div class="code-head"><span class="code-file">教学最小版：快照所有权与锁外发布（hpp:L87-100；cpp:L1520-1592）</span><button type="button" class="code-btn code-copy-btn">复制</button></div>
+        <pre><code class="language-cpp">struct OutputSnapshot {
+  CoreOutput out;                                  // 位姿、协方差、状态、分数
+  Pose2 map_to_odom;
+  bool publish_tf{false};
+  bool fine_on{false};
+  bool odom_stale{false};
+  bool tf_broadcast{true};
+  double transform_tolerance{0.1};
+  std::string map_frame;
+  std::string odom_frame;
+  std::string base_frame;
+  std::vector&lt;Pose2&gt; hypotheses;                  // 值复制，不借引用
+};
+
+OutputSnapshot LocalizerNode::buildSnapshotLocked(
+  const CoreOutput &amp; out, bool odom_stale) const
+{
+  OutputSnapshot snap;                             // 调用者已持有 state_mtx_
+  snap.out = out;
+  snap.publish_tf = tf_broadcast_ &amp;&amp; core_ &amp;&amp;
+    core_-&gt;state() != LocState::UNINIT;
+  if (snap.publish_tf) {snap.map_to_odom = core_-&gt;map_to_odom();}
+  snap.odom_stale = odom_stale;
+  snap.map_frame = map_frame_;
+  snap.odom_frame = odom_frame_;
+  snap.base_frame = base_frame_;
+  if (out.state != LocState::UNINIT) {
+    snap.hypotheses.push_back(out.pose);
+  }
+  for (const auto &amp; h : pending_hypotheses_) {
+    snap.hypotheses.push_back(h);
+  }
+  for (const auto &amp; h : global_alternates_) {
+    snap.hypotheses.push_back(h);
+  }
+  if (core_) {
+    const auto core_hyps = core_-&gt;hypothesis_poses();
+    snap.hypotheses.insert(
+      snap.hypotheses.end(), core_hyps.begin(), core_hyps.end());
+  }
+  return snap;
+}
+
+void LocalizerNode::publishOutputs(
+  const OutputSnapshot &amp; snap, const rclcpp::Time &amp; stamp)
+{
+  if (!active_.load()) {return;}                    // 无 state_mtx_
+
+  if (snap.publish_tf &amp;&amp; tf_broadcaster_) {
+    geometry_msgs::msg::TransformStamped tf;
+    tf.header.stamp = stamp + rclcpp::Duration::from_seconds(
+      snap.transform_tolerance);
+    tf.header.frame_id = snap.map_frame;
+    tf.child_frame_id = snap.odom_frame;
+    tf.transform.translation.x = snap.map_to_odom.x;
+    tf.transform.translation.y = snap.map_to_odom.y;
+    tf.transform.rotation.z = std::sin(0.5 * snap.map_to_odom.theta);
+    tf.transform.rotation.w = std::cos(0.5 * snap.map_to_odom.theta);
+    tf_broadcaster_-&gt;sendTransform(tf);
+  }
+  if (pose_pub_ &amp;&amp; pose_pub_-&gt;is_activated()) {
+    geometry_msgs::msg::PoseWithCovarianceStamped pm;
+    pm.header.stamp = stamp;
+    pm.header.frame_id = snap.map_frame;
+    const auto &amp; p = snap.out.pose;
+    pm.pose.pose.position.x = p.x;
+    pm.pose.pose.position.y = p.y;
+    pm.pose.pose.orientation.z = std::sin(0.5 * p.theta);
+    pm.pose.pose.orientation.w = std::cos(0.5 * p.theta);
+    pm.pose.covariance.fill(0.0);
+    constexpr int kIdx[3] = {0, 1, 5};              // x, y, yaw
+    for (int i = 0; i &lt; 3; ++i) {
+      for (int j = 0; j &lt; 3; ++j) {
+        pm.pose.covariance[6 * kIdx[i] + kIdx[j]] = snap.out.covariance(i, j);
+      }
+    }
+    pose_pub_-&gt;publish(pm);                        // 慢在这里也不持状态锁
+  }
+  // ... hypotheses 与 DiagnosticArray 同样只读 snap ...
+}</code></pre>
+      </div>
+      <div class="callout callout-tip">
+        <div class="callout-head">快照保证的与不保证的</div>
+        <ul>
+          <li><strong>保证：</strong>位姿、map→odom、坐标系、诊断与候选假设来自同一个临界区视图，不会出现“位姿是新的、map_frame 是旧的”这种撕裂。</li>
+          <li><strong>保证：</strong><code>publish()</code> 不持有 <code>state_mtx_</code>，消除“发布路径等状态锁、状态路径等发布回调”的锁耦合。</li>
+          <li><strong>不保证：</strong>订阅者收到时状态仍是最新。快照是线性化视图，不是实时订阅；时间戳必须保留测量时刻。</li>
+          <li><strong>不保证：</strong>快照替代 Lifecycle 同步。<code>active_</code> 与发布器激活检查是闸门；deactivate 与在途发布之间仍存在过渡窗口，不应把它描述成硬实时截止。</li>
+        </ul>
+      </div>
+      <div class="callout callout-pitfall">
+        <div class="callout-head">6×6 协方差：2D 位姿占 {0, 1, 5}，不是 {0, 1, 2}</div>
+        <p>标准顺序是 <code>[x, y, z, roll, pitch, yaw]</code>。因此 yaw 方差在行主序 <code>6×5+5=35</code>；<code>[14]</code> 属于 z 方差，必须保持 0。真实代码在 <code>L1583-1590</code> 先 <code>fill(0.0)</code> 再写 3×3 槽位，集成测试同时检查 <code>[0] / [7] / [35] &gt; 0</code> 与 <code>[14] == 0</code>。</p>
+      </div>
+
+      <h2 id="sec-timeline"><span class="sec-no">8.6</span>交互式并发时间线：锁到底占多久</h2>
+      <p>选择成功切图、构建失败、TF 回退、过期 odom 或反例场景，再逐步推进。表中展示多线程 executor 下可能发生的交错；单线程 executor 不会并行，但同样的边界决定了阻塞与可重入风险。</p>
+      <div class="hands-on-stepper" id="ch08-timeline-panel">
+        <div class="hands-on-toolbar">
+          <div>
+            <div class="hands-on-stage-title" id="ch08-timeline-title">并发时间线</div>
+            <div class="hands-on-stage-meta" id="ch08-timeline-meta">尚未推进</div>
+          </div>
+          <div class="exercise-row">
+            <label for="ch08-timeline-scenario">场景</label>
+            <select id="ch08-timeline-scenario" class="exercise-input">
+              <option value="map-success">正确：锁外构场 + 原子交换</option>
+              <option value="map-fail">失败：MapField 构建失败</option>
+              <option value="tf-fallback">回退：扫描时刻 TF 缺失</option>
+              <option value="odom-stale">告警：odom 超时</option>
+              <option value="deactivate-race">生命周期：预处理期间失活</option>
+              <option value="held-lock">反例：锁内构场与发布</option>
+            </select>
+            <button type="button" class="btn btn-secondary btn-sm" id="ch08-timeline-prev">← 上一步</button>
+            <button type="button" class="btn btn-primary btn-sm" id="ch08-timeline-play">播放</button>
+            <button type="button" class="btn btn-primary btn-sm" id="ch08-timeline-next">下一步 →</button>
+            <button type="button" class="btn btn-secondary btn-sm" id="ch08-timeline-reset">重置</button>
+          </div>
+        </div>
+        <div class="hands-on-stage-body">
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>时刻</th><th>work 回调</th><th>sensor 回调</th><th>state_mtx_</th><th>决策 / 失败路径</th></tr></thead>
+              <tbody id="ch08-timeline-rows"></tbody>
+            </table>
+          </div>
+          <dl class="hands-on-vars" id="ch08-timeline-vars"></dl>
+          <div class="hands-on-note" id="ch08-timeline-decision" aria-live="polite">选择场景并点击“下一步”。</div>
+        </div>
+      </div>
+
+      <h2 id="sec-stepper"><span class="sec-no">8.7</span>真实源码步进：localizer_node.cpp</h2>
+      <p>每一步都标注真实行号，并给出生产源码节选；<code>// ...</code> 表示刻意省略，不能把节选当成完整编译单元。点击“打开当前实现”可在共享源码抽屉核对原文。</p>
+      <div class="src-bar">
+        <button type="button" class="src-jump" data-file="src/localizer_node.cpp" data-lines="644-888"><span class="tag">Lifecycle</span>清理与五个状态回调</button>
+        <button type="button" class="src-jump" data-file="src/localizer_node.cpp" data-lines="890-963"><span class="tag">切图</span>applyMap：锁外构建 + 原子交换</button>
+        <button type="button" class="src-jump" data-file="src/localizer_node.cpp" data-lines="1113-1336"><span class="tag">时间对齐</span>lookupOdomAt + onScan</button>
+        <button type="button" class="src-jump" data-file="src/localizer_node.cpp" data-lines="1520-1667"><span class="tag">发布</span>OutputSnapshot + 6×6 协方差</button>
+      </div>
+      <div class="hands-on-stepper">
+        <div class="hands-on-toolbar">
+          <div>
+            <div class="hands-on-stage-title" id="ch08-stage-title"></div>
+            <div class="hands-on-stage-meta" id="ch08-stage-meta"></div>
+          </div>
+          <div class="exercise-row">
+            <button type="button" class="btn btn-secondary btn-sm" id="ch08-stage-prev">← 上一步</button>
+            <span class="ctrl-val" id="ch08-stage-index">1 / 14</span>
+            <button type="button" class="btn btn-primary btn-sm" id="ch08-stage-next">下一步 →</button>
+          </div>
+        </div>
+        <div class="hands-on-stage-body">
+          <p class="hands-on-explain" id="ch08-stage-explain"></p>
+          <div class="code-card">
+            <div class="code-head">
+              <button type="button" class="src-jump" id="ch08-stage-source"><span class="tag">源码抽屉</span>打开当前实现</button>
+              <button type="button" class="code-btn" id="ch08-stage-copy">复制</button>
+            </div>
+            <pre><code class="language-cpp" id="ch08-stage-code"></code></pre>
+          </div>
+          <dl class="hands-on-vars" id="ch08-stage-facts"></dl>
+          <div class="hands-on-note">阅读时先找锁的花括号，再找 return；失败返回往往比成功赋值更能暴露架构边界。</div>
+        </div>
+      </div>
+
+      <h2 id="sec-pitfall"><span class="sec-no">8.8</span>失败路径复盘：症状不等于根因</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>症状</th><th>先检查哪里</th><th>错误修法</th><th>正确修法</th></tr></thead>
+          <tbody>
+            <tr><td>configure 后仍无输出</td><td>Lifecycle 是否到 ACTIVE；发布器是否激活；<code>active_</code> 是否为 true。</td><td>在构造函数里偷偷 activate。</td><td>由 lifecycle_manager 走 configure → activate；演示 autostart 只作为显式覆写。</td></tr>
+            <tr><td>切图期间 odom 延迟尖刺</td><td>构建 MapField / matcher 时是否持 <code>state_mtx_</code>。</td><td>把锁换成读写锁后仍覆盖整个构建。</td><td>锁外构建，锁内只交换整套成员。</td></tr>
+            <tr><td>新地图构建失败却“黑屏”</td><td><code>applyMap()</code> 的 false 是否被上报；旧地图是否被提前清空。</td><td>先 <code>field_.reset()</code> 再构建新的。</td><td>新对象全部就绪后才提交；失败保留旧视图。</td></tr>
+            <tr><td>转弯时定位系统性滞后</td><td>外参与 odom 是否按 <code>scan_stamp</code> 查询。</td><td>用回调里的最新 TF / odom。</td><td>同一扫描时刻查询；TF 失败再用时间戳缓冲插值。</td></tr>
+            <tr><td>odom 停更但 scan 仍持续</td><td><code>odom_stale</code> 与诊断 WARN。</td><td>把陈旧外推当成新鲜测量。</td><td>保留端点估计、显式标记 stale，并由上层决定降级策略。</td></tr>
+            <tr><td>慢订阅者拖住整个节点</td><td><code>publish()</code> 是否位于状态锁外。</td><td>只缩小消息队列，锁仍跨 DDS 调用。</td><td>锁内构造 OutputSnapshot，锁外发布。</td></tr>
+            <tr><td>IMU 一帧收不到</td><td>发布者是否 BestEffort；订阅是否使用 <code>SensorDataQoS</code>。</td><td>盲目增大可靠队列。</td><td>传感器流使用匹配的 SensorDataQoS；地图仍用 transient_local。</td></tr>
+            <tr><td>热调 <code>likelihood_sigma</code> 后异常</td><td><code>onSetParameters</code> 是否先验证完整参数批次。</td><td>逐个写入成员，后续校验失败也不回滚。</td><td>先算 next 配置并全部校验，再一次性提交。</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2 id="sec-exercise"><span class="sec-no">8.9</span>3 道练习与验收</h2>
+      <p>不要只记答案。先说出状态、资源或时间戳发生了什么，再提交检查。</p>
+
+      <form class="hands-on-exercise" data-kind="choice" data-answer="UNCONFIGURED" data-success="正确：map_yaml 加载失败后调用 resetResources()，configure 返回 FAILURE，状态保持 UNCONFIGURED。" data-hint="configure 失败不是 INACTIVE；已经创建的核心、发布器与 TF 资源必须回滚。">
+        <label for="ch08-ex1">练习 1：参数校验通过，但 configure 加载不存在的 <code>map_yaml</code> 失败。最终 Lifecycle 状态是 <code>UNCONFIGURED</code> 还是 <code>INACTIVE</code>？</label>
+        <div class="exercise-row"><input class="exercise-input" id="ch08-ex1" name="answer" placeholder="输入状态名" /><button class="btn btn-primary btn-sm" type="submit">检查</button></div>
+        <div class="exercise-feedback" aria-live="polite"></div>
+      </form>
+
+      <form class="hands-on-exercise" data-kind="choice" data-answer="old" data-success="正确：新 MapField 在锁外构建；失败时还没有进入交换临界区，旧地图与旧匹配器继续服务。" data-hint="关键词是“锁外构建、锁内交换”。失败发生在交换前，还是交换后？">
+        <label for="ch08-ex2">练习 2：节点已持有地图 A；切换到地图 B 时 <code>MapField::build()</code> 返回 false。之后应使用 <code>old</code>（地图 A）还是 <code>empty</code>（空地图）？</label>
+        <div class="exercise-row"><input class="exercise-input" id="ch08-ex2" name="answer" placeholder="输入 old 或 empty" /><button class="btn btn-primary btn-sm" type="submit">检查</button></div>
+        <div class="exercise-feedback" aria-live="polite"></div>
+      </form>
+
+      <form class="hands-on-exercise" data-kind="number" data-answer="1.1" data-tolerance="1e-9" data-success="正确：扫描时刻 10.000 位于两个样本中点，x=1.0+0.5×(1.2−1.0)=1.1。" data-hint="先算 α=(10.000−9.990)/(10.010−9.990)，再做线性插值。">
+        <label for="ch08-ex3">练习 3：odom TF 不可用。缓冲样本为 <code>(9.990s, x=1.0m)</code> 与 <code>(10.010s, x=1.2m)</code>，扫描时刻为 <code>10.000s</code>。插值后的 x 是多少米？</label>
+        <div class="exercise-row"><input class="exercise-input" id="ch08-ex3" name="answer" inputmode="decimal" placeholder="输入数值" /><button class="btn btn-primary btn-sm" type="submit">检查</button></div>
+        <div class="exercise-feedback" aria-live="polite"></div>
+      </form>
+
+      <div class="callout callout-tip">
+        <div class="callout-head">完成标准</div>
+        <ul>
+          <li>能徒手画出 <code>UNCONFIGURED → INACTIVE → ACTIVE → INACTIVE → UNCONFIGURED</code>，并指出 configure 失败的回滚与 cleanup 后重新 configure 的状态归零。</li>
+          <li>能解释算法五态与 Lifecycle 三态不是同一套状态机；<code>active_</code> 只是闸门，不能替代资源锁。</li>
+          <li>能按“验证 → 参数副本 → 锁外构建 → 锁内整套交换”复述 <code>applyMap()</code>，并说明构建失败保留旧地图、非首图且不保位姿时请求全局重定位。</li>
+          <li>能说明外参与 odom 都按 <code>scan_stamp</code> 对齐；环形缓冲对角度先 wrap 再插值，超时端点会标记 stale 而不是静默当作新鲜数据。</li>
+          <li>能画出 <code>onScan()</code> 的两段临界区，指出 <code>publish()</code> 在锁外；能解释 OutputSnapshot 的值复制、一致视图与 Lifecycle 过渡边界。</li>
+          <li>能核对 6×6 协方差槽位 <code>{0,1,5}</code>，确认 yaw 方差在 <code>[35]</code>、<code>[14]</code> 为 0。</li>
+          <li>能在并发时间线里辨认：work 组串行化 map/scan，sensor 组仍可推进；DDS 慢不应占住状态锁。</li>
+          <li>C++ 集成回归至少覆盖 <code>LifecycleTransitionsAndCleanupSafety</code>、<code>CovarianceSlotsNanFilteringAndNoMotionUpdate</code>、<code>ImuSensorDataQosNegativeDtAndCleanupReset</code>、<code>InvertedLidarTfRollPi</code> 与 <code>ServicesMapReloadMapPathAndHypotheses</code>。</li>
         </ul>
       </div>
 

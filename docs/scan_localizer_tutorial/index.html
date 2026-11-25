@@ -49,13 +49,13 @@
 
   <section class="section section-alt">
     <div class="container">
-      <span class="eyebrow">Real-World Benchmark · Intel Research Lab</span>
-      <h2 style="font-size:32px;margin-bottom:24px;">实测验证，而非纸上谈兵。</h2>
+      <span class="eyebrow">Historical Benchmark · Intel Research Lab</span>
+      <h2 style="font-size:32px;margin-bottom:24px;">仓库历史实测声明，本轮未复现。</h2>
       <div class="bento-4">
         <div class="card">
           <div class="metric-val" style="color:var(--accent);">3.06 cm</div>
           <div class="metric-label">GT 平移 RPE RMSE</div>
-          <div class="metric-sub">Intel Lab 450 组手工精校真值三方实测，优于 `nav2_amcl` (12.57 cm) 与 `slam_toolbox` (24.56 cm)。</div>
+          <div class="metric-sub">仓库历史声明：Intel Lab 450 组手工精校真值三方结果，本轮未复现；原始日志与配置未随教程提供。</div>
         </div>
         <div class="card">
           <div class="metric-val" style="color:var(--green);">0.054 ms</div>
@@ -68,9 +68,9 @@
           <div class="metric-sub">未阻尼 Hessian 求逆保持 `cov_along = 12.48 m²`、`cov_across = 0.0001 m²`，横向零误修。</div>
         </div>
         <div class="card">
-          <div class="metric-val">33 · 192</div>
-          <div class="metric-label">33 源码文件 · 192 项测试</div>
-          <div class="metric-sub">算法核与 ROS 零耦合，包含 9 组 GTest + ASan/UBSan 回归与完整 ament lint。</div>
+          <div class="metric-val">33 · 63</div>
+          <div class="metric-label">33 源码文件 · 63 项 GTest</div>
+          <div class="metric-sub">算法核与 ROS 适配层分离，包含 9 组 GTest 与 ament lint；本轮未重跑 colcon。</div>
         </div>
       </div>
     </div>
@@ -156,8 +156,8 @@
       <div class="bento-2">
         <a class="card card-hover" href="chapters/ch01.html">
           <div class="eyebrow">Ch01 · 第一阶段 入门与底座</div>
-          <h3>定位是什么 &amp; SE(2) 与 TF 树</h3>
-          <p style="color:var(--ink-3);font-size:15px;margin:8px 0 0;">极坐标点云、群复合与群逆、为什么必须广播 <code>map→odom</code>、PGM 图像 Y 轴翻转与格心 0.5 偏移。含倒装雷达动画。</p>
+          <h3>从零实现 SE(2) 与 TF 树</h3>
+          <p style="color:var(--ink-3);font-size:15px;margin:8px 0 0;">从最小 Pose2 代数开始，手算复合、群逆与 <code>map→odom</code>，再对照生产源码补齐点云变换与坐标约定。</p>
         </a>
         <a class="card card-hover" href="chapters/ch02.html">
           <div class="eyebrow">Ch02 · 第一阶段 入门与底座</div>
@@ -166,8 +166,8 @@
         </a>
         <a class="card card-hover" href="chapters/ch03.html">
           <div class="eyebrow">Ch03 · 第二阶段 扫描匹配演进</div>
-          <h3>Correlative / ICP-P2P / 2D NDT 演进</h3>
-          <p style="color:var(--ink-3);font-size:15px;margin:8px 0 0;">网格穷举热力图、ICP 旋转力臂雅可比与局部极小困境、NDT 体素高斯建模。拖动误差滑块亲眼看 ICP 掉坑。</p>
+          <h3>从零实现 Correlative 与经典匹配器</h3>
+          <p style="color:var(--ink-3);font-size:15px;margin:8px 0 0;">手写窗口评分与旋转点云复用，结合热力图和 ICP 局部极小实验，理解 Correlative、ICP 与 NDT 的适用边界。</p>
         </a>
         <a class="card card-hover" href="chapters/ch04.html">
           <div class="eyebrow">Ch04 · 第二阶段 扫描匹配演进</div>
@@ -176,13 +176,13 @@
         </a>
         <a class="card card-hover" href="chapters/ch05.html">
           <div class="eyebrow">Ch05 · 第二阶段 扫描匹配演进</div>
-          <h3>长走廊退化与各向异性协方差</h3>
-          <p style="color:var(--ink-3);font-size:15px;margin:8px 0 0;">为什么匹配协方差绝不能混入 LM 阻尼项、特征分解如何暴露不可观测方向，及长走廊 120,000× 各向异性实测。</p>
+          <h3>从零实现退化安全的协方差</h3>
+          <p style="color:var(--ink-3);font-size:15px;margin:8px 0 0;">从特征值夹紧最小实现开始，理解为什么协方差必须使用未阻尼 Hessian，并用实时各向异性面板检查长走廊退化。</p>
         </a>
         <a class="card card-hover" href="chapters/ch06.html">
           <div class="eyebrow">Ch06 · 第三阶段 全局重定位</div>
-          <h3>分支定界 B&amp;B vs 粒子滤波 AMCL-lite</h3>
-          <p style="color:var(--ink-3);font-size:15px;margin:8px 0 0;"><code>swmax_</code> 可采纳上界剪枝与 Top-K NMS，同场 PK 粒子滤波（Thrun 反向分解、log-sum-exp 与 ESS 重采样）。</p>
+          <h3>从零实现 B&amp;B 全局重定位</h3>
+          <p style="color:var(--ink-3);font-size:15px;margin:8px 0 0;">从优先级队列和可采纳上界开始，手写剪枝与 Top-K NMS，再与粒子滤波做同输入、同指标的对照。</p>
         </a>
         <a class="card card-hover" href="chapters/ch07.html">
           <div class="eyebrow">Ch07 · 第三阶段 滤波与状态机</div>
@@ -191,18 +191,18 @@
         </a>
         <a class="card card-hover" href="chapters/ch08.html">
           <div class="eyebrow">Ch08 · 第四阶段 ROS 2 生产工程</div>
-          <h3>LocalizerNode 生命周期组件节点</h3>
-          <p style="color:var(--ink-3);font-size:15px;margin:8px 0 0;">Lifecycle 五回调、锁外构场原子交换、TF2 3D 外参与插值、6×6 协方差下标 <code>[35]</code> 坑与全链路驾驶舱。</p>
+          <h3>从零实现 ROS 2 定位节点</h3>
+          <p style="color:var(--ink-3);font-size:15px;margin:8px 0 0;">逐段实现 Lifecycle、锁外构场、扫描时间对齐与快照发布，结合并发时间线理解为什么不能全程持锁。</p>
         </a>
         <a class="card card-hover" href="chapters/ch09.html">
           <div class="eyebrow">Ch09 · 第四阶段 实验与评测</div>
-          <h3>E1–E10 受控基准与 Intel Lab 真值对比</h3>
-          <p style="color:var(--ink-3);font-size:15px;margin:8px 0 0;">如何设计不说谎的消融实验、避开基准自欺陷阱，及 450 组精校真值三方实测图表完整解读。</p>
+          <h3>从零设计不作弊的基准实验</h3>
+          <p style="color:var(--ink-3);font-size:15px;margin:8px 0 0;">从假设、配对试验、固定种子到指标复算，亲手检查 E1–E10 是否公平，并识别数据泄露与统计自欺。</p>
         </a>
         <a class="card card-hover" href="chapters/ch10.html">
           <div class="eyebrow">Ch10 · 第五阶段 语法与实战手册</div>
-          <h3>C++20 × Eigen × ROS 2 高频实战手册</h3>
-          <p style="color:var(--ink-3);font-size:15px;margin:8px 0 0;">全仓 24 张语法与工程技巧卡片：<code>concept</code>、零分配缓冲、Eigen <code>LDLT</code>、并发快照与十大真实踩坑对照。</p>
+          <h3>C++20 × Eigen × ROS 2 代码重建</h3>
+          <p style="color:var(--ink-3);font-size:15px;margin:8px 0 0;">保留 10 张语法与工程卡片，新增关键行填空、源码步进与验收，覆盖 <code>concept</code>、Eigen、锁快照和 Lifecycle。</p>
         </a>
       </div>
     </div>
