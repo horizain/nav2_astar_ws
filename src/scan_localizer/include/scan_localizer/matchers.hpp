@@ -150,6 +150,12 @@ GlobalResult global_correlative(
   int beams_subsample, double ang_step,
   int n_hypotheses);
 
+// 光束内部自由空间 / 穿墙 / 未知区一致性因子 ∈ [0.05, 1.0]：
+// 用于识别“仅靠侧墙端点得分虚高、但长光束穿墙或射出地图外未知灰区”的反向/错位假峰。
+double beam_visibility_consistency(
+  const MapField & field, const Pose2 & pose, const Scan & scan,
+  bool check_occupied = true);
+
 // 工厂：名字 → 匹配器（配置驱动，供 ROS 节点参数选择）
 // grid 供 NDT 等需要预构建的匹配器使用；可为 nullptr（此时 "ndt" 返回空）
 std::shared_ptr<Matcher> make_matcher(

@@ -402,4 +402,81 @@ TEST(MatchersTest, GlobalCorrelativeNearWallOobAndSymmetricNms)
   }
 }
 
+TEST(MatchersTest, BeamVisibilityPenalizesOutOfMapAndWallPiercingCorridorFlip)
+{
+  // Open west corridor + east wall/unknown exterior (simulating single-ended corridor flip)
+  sloc::OccupancyGrid grid;
+  grid.resolution = 0.10;
+  grid.width = 260;
+  grid.height = 50;
+  grid.origin_x = -20.0;
+  grid.origin_y = -2.5;
+  grid.cells.assign(static_cast<std::size_t>(grid.width) * grid.height, -1);
+
+  // Carve free corridor x in [20..220] (wx in [-18..+2]), y in [15..34] (wy in [-1..+1])
+  for (int y = 15; y <= 34; ++y) {
+    for (int x = 20; x <= 220; ++x) {
+      grid.cells[static_cast<std::size_t>(y) * grid.width + x] = 0;
+    }
+  }
+  // Solid walls around corridor
+  for (int x = 19; x <= 221; ++x) {
+    grid.cells[14 * grid.width + x] = 100;
+    grid.cells[35 * grid.width + x] = 100;
+  }
+  for (int y = 14; y <= 35; ++y) {
+    grid.cells[y * grid.width + 19] = 100;
+    grid.cells[y * grid.width + 221] = 100;
+  }
+  // Asymmetric alcove near the east end so (true_pose) is uniquely identifiable.
+  for (int y = 35; y <= 44; ++y) {
+    for (int x = 192; x <= 202; ++x) {
+      grid.cells[static_cast<std::size_t>(y) * grid.width + x] = 0;
+    }
+    grid.cells[y * grid.width + 191] = 100;
+    grid.cells[y * grid.width + 203] = 100;
+  }
+  for (int x = 191; x <= 203; ++x) {
+    grid.cells[45 * grid.width + x] = 100;
+  }
+  for (int x = 192; x <= 202; ++x) {
+    grid.cells[35 * grid.width + x] = 0;
+  }
+
+  sloc::MapField field;
+  ASSERT_TRUE(field.build(grid, 0.20));
+
+  std::mt19937 rng(42);
+  sloc::sim::ScanSimConfig scfg;
+  scfg.beams = 180;
+  scfg.range_max = 25.0;
+  scfg.noise_std = 0.0;
+  // True pose near east end facing WEST (-x, pi) down the 18m corridor
+  const sloc::Pose2 true_pose(-1.5, 0.0, M_PI);
+  const auto scan = sloc::sim::make_scan(grid, true_pose, scfg, rng);
+
+  // Flipped pose facing EAST (+x, 0) shoots the 17m corridor beam straight through east wall
+  // and 13m+ into gray unknown (-1) cells despite matching side walls!
+  const sloc::Pose2 flipped_pose(-1.5, 0.0, 0.0);
+  const double vis_true = sloc::beam_visibility_consistency(field, true_pose, scan, true);
+  const double vis_flip = sloc::beam_visibility_consistency(field, flipped_pose, scan, true);
+  EXPECT_GT(vis_true, 0.95);
+  EXPECT_LT(vis_flip, 0.45);
+
+  // A 0.5m moved pillar/cart blocking a few corridor rays must NOT break vis_true.
+  sloc::OccupancyGrid dirty = grid;
+  for (int y = 24; y <= 25; ++y) {
+    for (int x = 120; x <= 125; ++x) {
+      dirty.cells[static_cast<std::size_t>(y) * dirty.width + x] = 100;
+    }
+  }
+  sloc::MapField dirty_field;
+  ASSERT_TRUE(dirty_field.build(dirty, 0.20));
+  EXPECT_GT(sloc::beam_visibility_consistency(dirty_field, true_pose, scan, true), 0.90);
+
+  const auto gres = sloc::global_correlative(field, scan, 2, 5.0 * kDeg, 4);
+  ASSERT_TRUE(gres.valid);
+  EXPECT_LT(std::abs(sloc::wrap_angle(gres.pose.theta - true_pose.theta)), 0.30);
+}
+
 }  // namespace

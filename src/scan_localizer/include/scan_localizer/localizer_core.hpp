@@ -73,17 +73,19 @@ struct CoreConfig
   double max_update_trans{0.0};    // 可选单帧最大平移修正 (m)，<=0 不限幅
   double max_update_rot{0.0};      // 可选单帧最大航向修正 (rad)，<=0 不限幅
   // 多假设队列
-  int hyp_confirm_frames{2};       // 候选假设连续通过验证帧数后晋升
-  double hyp_min_score{0.70};      // 候选假设得分门槛
-  double hyp_min_inlier{0.65};     // 候选假设内点率门槛
-  std::size_t max_hypotheses{8};   // 候选假设数量上限
+  int hyp_confirm_frames{2};             // 单峰候选假设连续通过验证帧数后晋升
+  int hyp_ambiguous_confirm_frames{6};   // 对称多峰竞争（分差不足）时的最小连续确认帧数
+  double hyp_ambiguity_margin{0.08};     // 对称歧义判定分差阈值（低于此值视为多峰接近打平）
+  double hyp_min_score{0.70};            // 候选假设得分门槛
+  double hyp_min_inlier{0.65};           // 候选假设内点率门槛
+  std::size_t max_hypotheses{8};         // 候选假设数量上限
   // 主动绑架检测（滑动窗口低分 / 匹配失效监测）
   int anomaly_window{10};          // 滑动窗口长度（<=0 关闭）
   int anomaly_bad_threshold{8};    // 窗口内异常帧数达到阈值即主动触发 GLOBAL
   double anomaly_low_score{0.25};  // 极低分异常阈值
   // 自动全局重定位远距离跳变安全保护（防对称走廊误跳）
   double global_jump_min_dist{1.0};       // 远距离跳变判定阈值 (m)
-  double global_jump_score_margin{0.15};  // 远距离候选需显著优于当前局部匹配的得分裕度
+  double global_jump_score_margin{0.10};  // 远距离候选需显著优于当前局部匹配的得分裕度
   // 匹配器选项（跟踪窗口）
   MatchOptions match_opt{};
 };
@@ -108,10 +110,10 @@ public:
   void set_initial_pose(const Pose2 & p, const Cov3 & cov);
   void set_options(const CoreConfig & cfg);     // 热更新（fine mode 等）
 
-  // 手动触发全局重定位：
+  // 请求进入全局重定位：
   // - 无 map/matcher 或已处于 GLOBAL 时返回 false
-  // - UNINIT / TRACKING / DEGRADED / LOST 时切换至 GLOBAL 并返回 true
-  bool request_global();
+  // - manual=true 表示显式外部指令（允许跨区重定位）；manual=false 表示自动异常恢复（启用防跳变连续性保护）
+  bool request_global(bool manual = true);
 
   // 全局搜索回调（UNINIT / LOST / GLOBAL 时由外层驱动：PF 或 correlative 全局）
   using GlobalFn =
@@ -150,6 +152,8 @@ private:
     Pose2 pose;
     int confirm_count{0};
     double last_score{0.0};
+    double ema_score{0.0};
+    int eval_count{0};
   };
 
   void compute_motion_delta(Pose2 & delta, bool & imu_used, double & dt_imu);

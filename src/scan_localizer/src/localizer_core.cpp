@@ -143,7 +143,7 @@ void LocalizerCore::set_initial_pose(const Pose2 & p, const Cov3 & cov)
   imu_consumed_ = true;
 }
 
-bool LocalizerCore::request_global()
+bool LocalizerCore::request_global(bool manual)
 {
   if (!field_ || !matcher_) {
     return false;
@@ -152,7 +152,7 @@ bool LocalizerCore::request_global()
     return false;
   }
   state_ = LocState::GLOBAL;
-  manual_global_ = true;
+  manual_global_ = manual;
   reject_streak_ = 0;
   stable_tracking_streak_ = 0;
   anomaly_window_.clear();
@@ -316,9 +316,18 @@ bool LocalizerCore::try_promote_hypotheses(const Scan & scan, CoreOutput & out)
     return false;
   }
   const int req_frames = std::max(1, cfg_.hyp_confirm_frames);
+  const int ambig_frames = std::max(req_frames, cfg_.hyp_ambiguous_confirm_frames);
+
+  struct EvalEntry
+  {
+    bool valid{false};
+    bool ok{false};
+    MatchResult mr{};
+  };
+  std::vector<EvalEntry> evals(hypotheses_.size());
+
   int best_idx = -1;
   double best_score = -1.0;
-  MatchResult best_mr;
   double frame_best_score = -1.0;
 
   for (std::size_t i = 0; i < hypotheses_.size(); ++i) {
@@ -328,12 +337,19 @@ bool LocalizerCore::try_promote_hypotheses(const Scan & scan, CoreOutput & out)
       is_finite_pose(mr.pose) &&
       std::isfinite(mr.score) &&
       std::isfinite(mr.inlier_ratio);
-    if (valid_match && mr.inlier_ratio >= cfg_.min_inlier_ratio) {
-      frame_best_score = std::max(frame_best_score, mr.score);
+    evals[i].valid = valid_match;
+    evals[i].mr = mr;
+    if (valid_match) {
+      h.ema_score = (h.eval_count == 0) ? mr.score : (0.7 * h.ema_score + 0.3 * mr.score);
+      ++h.eval_count;
+      if (mr.inlier_ratio >= cfg_.min_inlier_ratio) {
+        frame_best_score = std::max(frame_best_score, mr.score);
+      }
     }
     const bool ok = valid_match &&
       mr.score >= cfg_.hyp_min_score &&
       mr.inlier_ratio >= cfg_.hyp_min_inlier;
+    evals[i].ok = ok;
     if (ok) {
       h.pose = Pose2(mr.pose.x, mr.pose.y, wrap_angle(mr.pose.theta));
       h.last_score = mr.score;
@@ -341,7 +357,6 @@ bool LocalizerCore::try_promote_hypotheses(const Scan & scan, CoreOutput & out)
       if (h.confirm_count >= req_frames && mr.score > best_score) {
         best_score = mr.score;
         best_idx = static_cast<int>(i);
-        best_mr = mr;
       }
     } else {
       // 滞回退火：单帧偶发遮挡不直接清零，防低分次优对称峰趁虚抢先晋升
@@ -357,6 +372,91 @@ bool LocalizerCore::try_promote_hypotheses(const Scan & scan, CoreOutput & out)
     return false;
   }
 
+  const auto is_distinct = [](const Pose2 & a, const Pose2 & b) {
+      return std::hypot(a.x - b.x, a.y - b.y) >= 0.8 ||
+             std::abs(wrap_angle(a.theta - b.theta)) >= 0.35;
+    };
+  const auto is_far_from_anchor = [&](const Pose2 & p) {
+      return std::hypot(p.x - last_pose_.x, p.y - last_pose_.y) > cfg_.global_jump_min_dist ||
+             std::abs(wrap_angle(p.theta - last_pose_.theta)) > 0.8;
+    };
+
+  bool local_reanchored = false;
+  MatchResult best_mr = evals[best_idx].mr;
+
+  // 自动恢复连续性保护（!manual_global_ && first_fix_）：
+  // 拟晋升为远距离/反朝向假设时，优先核验锚点附近是否存在健康局部匹配；若存在且远端分差
+  // 未超过跳变裕度，则抑制跨区瞬移，改由局部连续假设/重锚定接管。
+  if (!manual_global_ && first_fix_ && is_far_from_anchor(best_mr.pose)) {
+    int local_idx = -1;
+    double local_best_score = -1.0;
+    for (std::size_t i = 0; i < hypotheses_.size(); ++i) {
+      if (!evals[i].valid || is_far_from_anchor(evals[i].mr.pose)) {
+        continue;
+      }
+      const auto & m = evals[i].mr;
+      if (m.score >= cfg_.min_score && m.inlier_ratio >= cfg_.min_inlier_ratio &&
+        m.score > local_best_score)
+      {
+        local_best_score = m.score;
+        local_idx = static_cast<int>(i);
+      }
+    }
+    if (local_idx >= 0 && best_score < local_best_score + cfg_.global_jump_score_margin) {
+      if (evals[local_idx].ok && hypotheses_[local_idx].confirm_count >= req_frames) {
+        best_idx = local_idx;
+        best_score = local_best_score;
+        best_mr = evals[local_idx].mr;
+        local_reanchored = true;
+      } else {
+        return false;
+      }
+    } else {
+      const MatchResult local_mr = matcher_->match(
+        *field_, last_pose_, scan, cfg_.match_opt);
+      const bool local_healthy = local_mr.valid &&
+        is_finite_pose(local_mr.pose) &&
+        std::isfinite(local_mr.score) &&
+        std::isfinite(local_mr.inlier_ratio) &&
+        local_mr.score >= cfg_.min_score &&
+        local_mr.inlier_ratio >= cfg_.min_inlier_ratio;
+      if (local_healthy && best_score < local_mr.score + cfg_.global_jump_score_margin) {
+        best_mr = local_mr;
+        local_reanchored = true;
+      }
+    }
+  }
+
+  // 对称多峰歧义保护：若非本地连续重锚且存在空间分离的近似平手峰（分差 < hyp_ambiguity_margin），
+  // 禁止 2 帧快进晋升，至少观测 hyp_ambiguous_confirm_frames 帧等待几何对称打破。
+  if (!local_reanchored && hypotheses_.size() > 1) {
+    double competing_score = -1.0;
+    double competing_ema = -1.0;
+    for (std::size_t i = 0; i < hypotheses_.size(); ++i) {
+      if (static_cast<int>(i) == best_idx || !evals[i].ok) {
+        continue;
+      }
+      if (is_distinct(evals[i].mr.pose, best_mr.pose)) {
+        competing_score = std::max(competing_score, evals[i].mr.score);
+        competing_ema = std::max(competing_ema, hypotheses_[i].ema_score);
+      }
+    }
+    const bool ambiguous = competing_score >= 0.0 &&
+      (best_score - competing_score) < cfg_.hyp_ambiguity_margin;
+    if (ambiguous) {
+      const int c = hypotheses_[best_idx].confirm_count;
+      if (c < ambig_frames) {
+        return false;
+      }
+      if (!manual_global_ && first_fix_ && is_far_from_anchor(best_mr.pose) &&
+        hypotheses_[best_idx].ema_score < competing_ema + 0.02 &&
+        c < ambig_frames * 2)
+      {
+        return false;
+      }
+    }
+  }
+
   last_pose_ = Pose2(best_mr.pose.x, best_mr.pose.y, wrap_angle(best_mr.pose.theta));
   Cov3 pose_cov = Cov3::Identity() * 0.04;
   if (is_valid_spd_cov3(best_mr.covariance)) {
@@ -367,6 +467,7 @@ bool LocalizerCore::try_promote_hypotheses(const Scan & scan, CoreOutput & out)
   P4_.topLeftCorner<3, 3>() = pose_cov;
   P4_(3, 3) = bias_var;
   state_ = LocState::TRACKING;
+  manual_global_ = false;
   reject_streak_ = 0;
   stable_tracking_streak_ = 0;
   first_fix_ = true;
@@ -446,11 +547,14 @@ CoreOutput LocalizerCore::on_scan(const Scan & scan)
     bool imu_used = false;
     double dt_imu = 0.0;
     compute_motion_delta(delta, imu_used, dt_imu);
-
-    if (!hypotheses_.empty()) {
-      if (first_fix_) {
+    if (first_fix_) {
+      last_pose_ = last_pose_ * delta;
+      if (!hypotheses_.empty()) {
         propagate_hypotheses(delta);
       }
+    }
+
+    if (!hypotheses_.empty()) {
       if (try_promote_hypotheses(*active_scan, out)) {
         return out;
       }
@@ -720,10 +824,10 @@ CoreOutput LocalizerCore::on_scan(const Scan & scan)
   // 若匹配本身高分高内点率且协方差有效，仅因马氏门控过紧被拒（典型场景：静止/原地旋转时
   // dtrans≈0 导致 P4_pred 过小），适度松弛先验协方差以打破马氏锁死。
   if (mr_finite && gate_inlier && gate_score && gate_cov && !gate_mahal) {
-    P4_.topLeftCorner<3, 3>() *= 1.5;
-    P4_(0, 0) = std::min(P4_(0, 0) + 2e-4, 0.25);
-    P4_(1, 1) = std::min(P4_(1, 1) + 2e-4, 0.25);
-    P4_(2, 2) = std::min(P4_(2, 2) + 2e-5, 0.10);
+    P4_.topLeftCorner<3, 3>() *= 2.5;
+    P4_(0, 0) = std::min(P4_(0, 0) + 4e-3, 0.25);
+    P4_(1, 1) = std::min(P4_(1, 1) + 4e-3, 0.25);
+    P4_(2, 2) = std::min(P4_(2, 2) + 5e-4, 0.10);
   }
   stable_tracking_streak_ = 0;
   ++reject_streak_;

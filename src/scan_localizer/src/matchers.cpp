@@ -91,6 +91,23 @@ Cov3 cov_from_hessian(
   const double scale = std::max(res_var, min_var_xy) * inflation;
   Cov3 cov = scale * H_inv;
   cov = 0.5 * (cov + cov.transpose()).eval();
+
+  // 长走廊纵向退化感知：若 2D 平移 Hessian 条件数显著失衡，仅沿弱约束主轴叠加
+  // 方差下界，既防止 MAHAL_GATE 因纵向微差锁死，也避免 EKF 吸收地图离散滑移。
+  const Eigen::Matrix2d Hxy = Hsym.topLeftCorner<2, 2>();
+  Eigen::SelfAdjointEigenSolver<Eigen::Matrix2d> es_xy(Hxy);
+  if (es_xy.info() == Eigen::Success && es_xy.eigenvalues().size() == 2) {
+    const double lmin = es_xy.eigenvalues()(0);
+    const double lmax = es_xy.eigenvalues()(1);
+    const double cond = lmax / std::max(lmin, 1e-6);
+    if (lmax > 1.0 && cond > 6.0) {
+      const double extra = std::min(0.04, 0.002 * (cond - 6.0));
+      const Eigen::Vector2d vmin = es_xy.eigenvectors().col(0);
+      const Eigen::Vector3d v3(vmin.x(), vmin.y(), 0.0);
+      cov += extra * (v3 * v3.transpose());
+    }
+  }
+
   cov(0, 0) = std::max(cov(0, 0), min_var_xy);
   cov(1, 1) = std::max(cov(1, 1), min_var_xy);
   cov(2, 2) = std::max(cov(2, 2), min_var_th);
@@ -891,6 +908,12 @@ GlobalResult global_correlative(
       {
         continue;
       }
+      const int8_t origin_cell = grid->cells[
+        static_cast<std::size_t>(nd.by) * static_cast<std::size_t>(W) +
+        static_cast<std::size_t>(nd.bx)];
+      if (origin_cell < 0) {
+        continue;
+      }
         // 精确重评分（出界点 0 分，无滑窗膨胀）
       double sc = 0.0;
       for (const auto & c : A.cells) {
@@ -1018,6 +1041,139 @@ GlobalResult global_correlative(
   }
   out.valid = out.score > 0.10;
   return out;
+}
+
+double beam_visibility_consistency(
+  const MapField & field, const Pose2 & pose, const Scan & scan,
+  bool check_occupied)
+{
+  if (!field.valid() || !pose_is_finite(pose) || scan.points.empty()) {
+    return 1.0;
+  }
+  const auto & grid = field.grid();
+  const Eigen::Vector2i og = grid.worldToGridIndex(pose.x, pose.y);
+  if (!grid.inside(og.x(), og.y())) {
+    return 0.05;
+  }
+  const int8_t oc = grid.cells[
+    static_cast<std::size_t>(og.y()) * static_cast<std::size_t>(grid.width) +
+    static_cast<std::size_t>(og.x())];
+  if (oc < 0 || (check_occupied && oc > 65)) {
+    return 0.15;
+  }
+
+  const std::size_t n = scan.points.size();
+  const std::size_t stride = std::max<std::size_t>(1, n / 256);
+  const double c = std::cos(pose.theta);
+  const double s = std::sin(pose.theta);
+  const double start_clear = std::max(0.30, 1.5 * grid.resolution);
+  const double end_clear = std::max(0.30, 1.5 * grid.resolution);
+  const double ds = std::max(0.25, 4.0 * grid.resolution);
+
+  double total_len = 0.0;
+  double unk_bad_len = 0.0;
+  double occ_bad_len = 0.0;
+  double max_unk_depth = 0.0;
+  double max_occ_depth = 0.0;
+  std::size_t deep_unk_beams = 0;
+  std::size_t deep_occ_beams = 0;
+  std::size_t used = 0;
+
+  for (std::size_t i = 0; i < n; i += stride) {
+    const auto & pt = scan.points[i];
+    if (!pt_is_finite(pt)) {continue;}
+    const double r = std::hypot(pt.x(), pt.y());
+    if (r <= 1e-4) {continue;}
+
+    const double lx = c * pt.x() - s * pt.y();
+    const double ly = s * pt.x() + c * pt.y();
+    const double ux = lx / r;
+    const double uy = ly / r;
+
+    double unk_len = 0.0;
+    double occ_len = 0.0;
+    double first_occ_d = -1.0;
+    if (r > start_clear + end_clear) {
+      for (double d = start_clear; d <= r - end_clear; d += ds) {
+        const Eigen::Vector2i idx = grid.worldToGridIndex(pose.x + d * ux, pose.y + d * uy);
+        if (!grid.inside(idx.x(), idx.y())) {
+          unk_len += ds;
+          continue;
+        }
+        const int8_t cell = grid.cells[
+          static_cast<std::size_t>(idx.y()) * static_cast<std::size_t>(grid.width) +
+          static_cast<std::size_t>(idx.x())];
+        if (cell < 0) {
+          unk_len += ds;
+        } else if (check_occupied && cell > 65) {
+          occ_len += ds;
+          if (first_occ_d < 0.0) {first_occ_d = d;}
+        }
+      }
+    }
+    bool end_unknown = false;
+    const Eigen::Vector2i end_idx = grid.worldToGridIndex(pose.x + lx, pose.y + ly);
+    if (!grid.inside(end_idx.x(), end_idx.y())) {
+      unk_len += 0.5 * ds;
+      end_unknown = true;
+    } else {
+      const int8_t ec = grid.cells[
+        static_cast<std::size_t>(end_idx.y()) * static_cast<std::size_t>(grid.width) +
+        static_cast<std::size_t>(end_idx.x())];
+      if (ec < 0) {
+        unk_len += 0.5 * ds;
+        end_unknown = true;
+      }
+    }
+
+    const double eff_unk_depth =
+      ((unk_len >= 2.5 && end_unknown) || unk_len >= 4.0) ? unk_len : 0.0;
+    const double wall_pierce_depth = (occ_len >= 0.55 && first_occ_d >= 0.0)
+      ? std::max(0.0, r - first_occ_d - 0.45)
+      : 0.0;
+
+    total_len += r;
+    if (eff_unk_depth > 0.0) {
+      unk_bad_len += std::min(r, eff_unk_depth);
+      ++deep_unk_beams;
+      max_unk_depth = std::max(max_unk_depth, eff_unk_depth);
+    }
+    if (wall_pierce_depth >= 1.5) {
+      occ_bad_len += std::min(r, 0.30 * wall_pierce_depth);
+      ++deep_occ_beams;
+      max_occ_depth = std::max(max_occ_depth, wall_pierce_depth);
+    }
+    ++used;
+  }
+
+  if (used == 0 || total_len <= 1e-6) {return 1.0;}
+  const std::size_t min_unk_beams = std::max<std::size_t>(3, used / 50);
+  const std::size_t min_occ_beams = std::max<std::size_t>(12, used / 12);
+
+  double unk_pen = 0.0;
+  if (deep_unk_beams >= min_unk_beams) {
+    const double unk_ratio = unk_bad_len / total_len;
+    const double unk_frac = static_cast<double>(deep_unk_beams) / static_cast<double>(used);
+    unk_pen += 1.8 * std::max(0.0, unk_ratio - 0.06);
+    unk_pen += 1.4 * std::max(0.0, unk_frac - 0.015);
+    if (unk_ratio >= 0.05) {
+      unk_pen += std::min(0.65, 0.08 * std::max(0.0, max_unk_depth - 2.0));
+    }
+  }
+
+  double occ_pen = 0.0;
+  if (deep_occ_beams >= min_occ_beams) {
+    const double occ_ratio = occ_bad_len / total_len;
+    const double occ_frac = static_cast<double>(deep_occ_beams) / static_cast<double>(used);
+    occ_pen += 1.5 * std::max(0.0, occ_ratio - 0.12);
+    occ_pen += 1.2 * std::max(0.0, occ_frac - 0.08);
+    if (occ_ratio >= 0.12) {
+      occ_pen += std::min(0.50, 0.06 * std::max(0.0, max_occ_depth - 2.0));
+    }
+  }
+
+  const double vis = 1.0 - std::max(unk_pen, occ_pen);
+  return std::clamp(vis, 0.05, 1.0);
 }
 
 // 工厂

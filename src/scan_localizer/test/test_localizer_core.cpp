@@ -927,4 +927,147 @@ TEST(LocalizerCoreTest, HypothesisPromotionHysteresisPreventsWeakCandidateSteal)
   EXPECT_NEAR(out.pose.x, leader.x, 1e-6);
 }
 
+TEST(LocalizerCoreTest, AutoGlobalContinuityAndSymmetryAmbiguityGuard)
+{
+  class SymmetricCorridorMatcher : public sloc::Matcher {
+  public:
+    double far_score{0.95};
+    double local_score{0.93};
+    bool local_valid{true};
+
+    sloc::MatchResult match(
+      const sloc::MapField &, const sloc::Pose2 & prior,
+      const sloc::Scan &, const sloc::MatchOptions &) const override
+    {
+      sloc::MatchResult r;
+      r.pose = prior;
+      r.covariance = sloc::Cov3::Identity() * 1e-3;
+      if (std::hypot(prior.x - 5.0, prior.y - 5.0) < 1.5) {
+        r.valid = local_valid;
+        r.score = local_valid ? local_score : 0.0;
+        r.inlier_ratio = local_valid ? 0.94 : 0.0;
+      } else if (std::hypot(prior.x - 24.0, prior.y - 5.0) < 1.5) {
+        r.valid = true;
+        r.score = far_score;
+        r.inlier_ratio = 0.95;
+      }
+      return r;
+    }
+  };
+
+  const auto & wf = shared_warehouse();
+  auto sm = std::make_shared<SymmetricCorridorMatcher>();
+  const sloc::Scan dummy = make_dummy_scan();
+
+  sloc::CoreConfig cfg;
+  cfg.min_score = 0.35;
+  cfg.min_inlier_ratio = 0.45;
+  cfg.hyp_confirm_frames = 2;
+  cfg.hyp_ambiguous_confirm_frames = 6;
+  cfg.hyp_ambiguity_margin = 0.08;
+  cfg.hyp_min_score = 0.45;
+  cfg.hyp_min_inlier = 0.50;
+  cfg.global_jump_min_dist = 1.0;
+  cfg.global_jump_score_margin = 0.15;
+  cfg.anomaly_window = 0;
+
+  // 1) Auto-triggered global recovery must prefer continuous local candidate over slightly
+  // higher (+0.02) 19m flipped corridor mirror.
+  {
+    sloc::LocalizerCore core(cfg);
+    core.set_map(wf.field);
+    core.set_matcher(sm);
+    core.on_odom(sloc::Pose2(0.0, 0.0, 0.0));
+    core.set_initial_pose(sloc::Pose2(5.0, 5.0, 0.0));
+    ASSERT_TRUE(core.request_global(false));
+    core.add_hypotheses({sloc::Pose2(24.0, 5.0, 3.14159), sloc::Pose2(5.05, 5.0, 0.01)});
+
+    EXPECT_FALSE(core.on_scan(dummy).accepted);
+    const auto out = core.on_scan(dummy);
+    EXPECT_TRUE(out.accepted);
+    EXPECT_EQ(out.state, sloc::LocState::TRACKING);
+    EXPECT_LT(std::hypot(out.pose.x - 5.0, out.pose.y - 5.0), 0.5);
+  }
+
+  // 2) Manual/cold global localization with two nearly tied far peaks (diff=0.02 < 0.08)
+  // must NOT promote prematurely at frame 2.
+  {
+    sm->local_valid = false;
+    sloc::LocalizerCore core(cfg);
+    core.set_map(wf.field);
+    core.set_matcher(sm);
+    core.on_odom(sloc::Pose2(0.0, 0.0, 0.0));
+    ASSERT_TRUE(core.request_global(true));
+    core.add_hypotheses({sloc::Pose2(24.0, 5.0, 3.14159), sloc::Pose2(14.0, 5.0, 0.0)});
+    // Re-score both as high-scoring far peaks via distinct x coordinates:
+    class TiedFarMatcher : public sloc::Matcher {
+    public:
+      sloc::MatchResult match(
+        const sloc::MapField &, const sloc::Pose2 & prior,
+        const sloc::Scan &, const sloc::MatchOptions &) const override
+      {
+        sloc::MatchResult r;
+        r.valid = true;
+        r.pose = prior;
+        r.inlier_ratio = 0.95;
+        r.covariance = sloc::Cov3::Identity() * 1e-3;
+        r.score = (prior.x > 20.0) ? 0.95 : 0.93;
+        return r;
+      }
+    };
+    core.set_matcher(std::make_shared<TiedFarMatcher>());
+
+    for (int f = 0; f < 5; ++f) {
+      const auto out = core.on_scan(dummy);
+      EXPECT_FALSE(out.accepted) << "must hold promotion under ambiguity at frame " << f;
+    }
+    const auto out6 = core.on_scan(dummy);
+    EXPECT_TRUE(out6.accepted);
+  }
+}
+
+TEST(LocalizerCoreTest, CorridorLongitudinalLagRelaxesMahalGate)
+{
+  const auto & wf = shared_warehouse();
+  auto sm = std::make_shared<ScriptedMatcher>();
+
+  sloc::CoreConfig cfg;
+  cfg.min_score = 0.35;
+  cfg.min_inlier_ratio = 0.45;
+  cfg.mahal_gate = 9.0;
+  cfg.odom_trans_var_per_m = 1e-3;
+  cfg.anomaly_window = 0;
+  sloc::LocalizerCore core(cfg);
+  core.set_map(wf.field);
+  core.set_matcher(sm);
+
+  sloc::Pose2 odom(0.0, 0.0, 0.0);
+  core.on_odom(odom);
+  core.set_initial_pose(sloc::Pose2(5.0, 5.0, 0.0), sloc::Cov3::Identity() * 1e-4);
+
+  const sloc::Scan dummy = make_dummy_scan();
+  sm->next_result.valid = true;
+  sm->next_result.score = 0.96;
+  sm->next_result.inlier_ratio = 0.99;
+  sm->next_result.covariance = sloc::Cov3::Zero();
+  sm->next_result.covariance(0, 0) = 6.25e-4;
+  sm->next_result.covariance(1, 1) = 6.25e-4;
+  sm->next_result.covariance(2, 2) = 4.0e-4;
+
+  // Frame 1: 0.13m lag -> MAHAL_GATE rejects, inflates P4_
+  odom = sloc::Pose2(0.08, 0.0, 0.0);
+  core.on_odom(odom);
+  sm->next_result.pose = sloc::Pose2(4.95, 5.0, 0.0);
+  const auto out1 = core.on_scan(dummy);
+  EXPECT_FALSE(out1.accepted);
+
+  // Frame 2: 0.18m lag against relaxed covariance -> recovers locally without hitting GLOBAL
+  odom = sloc::Pose2(0.16, 0.0, 0.0);
+  core.on_odom(odom);
+  sm->next_result.pose = sloc::Pose2(4.98, 5.0, 0.0);
+  const auto out2 = core.on_scan(dummy);
+  EXPECT_TRUE(out2.accepted);
+  EXPECT_EQ(out2.state, sloc::LocState::TRACKING);
+}
+
 }  // namespace

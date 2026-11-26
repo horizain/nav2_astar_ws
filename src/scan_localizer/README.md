@@ -250,7 +250,9 @@ scan_localizer/
 │   └── test_benchmark_regression.cpp E1/E4/E5/E8 轻量确定性回归断言
 ├── config/localizer.yaml     全量生产参数（与 LocalizerNode 声明 100% 一一对应）
 ├── launch/demo.launch.py     组合容器 / 独立进程端到端演示启动文件
-└── docs/benchmark_results_x86.txt  E1–E10 实测基准输出
+└── docs/
+    ├── benchmark_results_x86.txt        E1–E10 实测基准输出
+    └── corridor_relocalization_notes.md 长走廊退化、射线可见性约束与对称重定位工程说明
 ```
 
 ### 核心参数与调参速查（详见 `config/localizer.yaml`）
@@ -287,6 +289,7 @@ scan_localizer/
 - 2D 激光在 5cm 栅格地图上的物理精度受限于地图分辨率与半胞元量化（中位 ~2cm）；`set_fine_mode` 通过收紧搜窗、鲁棒核截断并提高内点率门限至 0.75 来抑制外点干扰，不包含额外视觉/反光板传感器融合。
 - 在完全重复对称环境（如无限长同规格货架阵列）中，单帧全局搜索可能出现多个同分假设——多假设队列会在机器人运动后自动验证并晋升唯一正确假设，极端对称场景建议配合 `/localizer/global_hypotheses` 外部先验。
 - 无 `/odom` 模式下使用常值位置预测（配合可选 IMU 航向），要求机器人在扫描周期内的位移落在 `match_window_lin` 范围内。
+- 面向长走廊退化、半建图边界反朝向翻转与实车遮挡场景的算法改进与阈值权衡分析，详见 [docs/corridor_relocalization_notes.md](docs/corridor_relocalization_notes.md)。
 
 ## 许可
 
