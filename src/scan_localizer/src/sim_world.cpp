@@ -126,6 +126,218 @@ OccupancyGrid make_corridor(double resolution)
   return g;
 }
 
+OccupancyGrid make_twin_rooms(double resolution)
+{
+  OccupancyGrid g;
+  g.resolution = resolution;
+  g.width = static_cast<int>(std::lround(24.0 / resolution));
+  g.height = static_cast<int>(std::lround(10.0 / resolution));
+  g.origin_x = 0.0;
+  g.origin_y = 0.0;
+  g.cells.assign(
+    static_cast<std::size_t>(g.width) * static_cast<std::size_t>(g.height), 0);
+
+  const double margin = 1.5 * resolution;
+  const double max_x = 24.0 - margin;
+  const double max_y = 10.0 - margin;
+  box(g, margin, margin, max_x, max_y);
+  mark_exterior_unknown(g, margin, margin, max_x, max_y);
+
+  // Solid middle block x in [10.0, 14.0], y in [margin, 6.5]
+  rasterize_segment(g, 10.0, margin, 10.0, 6.5);
+  rasterize_segment(g, 14.0, margin, 14.0, 6.5);
+  rasterize_segment(g, 10.0, 6.5, 14.0, 6.5);
+
+  // Mark interior cells strictly inside x in (10.05, 13.95), y in (margin, 6.45) as -1 unknown
+  for (int y = 0; y < g.height; ++y) {
+    for (int x = 0; x < g.width; ++x) {
+      const auto w = g.gridToWorld(x, y);
+      const double wx = w.x();
+      const double wy = w.y();
+      if (wx > 10.05 && wx < 13.95 && wy > margin && wy < 6.45) {
+        g.cells[static_cast<std::size_t>(y) * static_cast<std::size_t>(g.width) +
+          static_cast<std::size_t>(x)] = -1;
+      }
+    }
+  }
+
+  // Left room (x in [margin, 10.0], y in [margin, 6.5]): doorway gap x in [4.2, 5.8]
+  rasterize_segment(g, margin, 6.5, 4.2, 6.5);
+  rasterize_segment(g, 5.8, 6.5, 10.0, 6.5);
+  // L-pillar in Left room
+  rasterize_segment(g, 2.5, 2.5, 4.0, 2.5);
+  rasterize_segment(g, 2.5, 2.5, 2.5, 4.0);
+
+  // Right room (x in [14.0, max_x], y in [margin, 6.5]): doorway gap x in [18.2, 19.8]
+  rasterize_segment(g, 14.0, 6.5, 18.2, 6.5);
+  rasterize_segment(g, 19.8, 6.5, max_x, 6.5);
+  // Identical L-pillar in Right room (+14.0m x translation)
+  rasterize_segment(g, 16.5, 2.5, 18.0, 2.5);
+  rasterize_segment(g, 16.5, 2.5, 16.5, 4.0);
+
+  // Symmetry-breaking features in top corridor y in [6.5, max_y]
+  box(g, 8.2, 8.0, 9.8, 9.5);
+  rasterize_segment(g, 15.2, 7.8, 15.2, max_y);
+
+  return g;
+}
+
+OccupancyGrid make_open_corridor(double resolution)
+{
+  OccupancyGrid g;
+  g.resolution = resolution;
+  g.width = static_cast<int>(std::lround(28.0 / resolution));
+  g.height = static_cast<int>(std::lround(5.0 / resolution));
+  g.origin_x = -20.0;
+  g.origin_y = -2.5;
+  g.cells.assign(
+    static_cast<std::size_t>(g.width) * static_cast<std::size_t>(g.height), -1);
+
+  // Carve free corridor (0) for world coordinates wx in [-18.0, +2.0], wy in [-1.1, +1.1]
+  // and asymmetric North alcove (0) for wx in [-1.2, +0.2], wy in [+1.1, +2.0]
+  for (int y = 0; y < g.height; ++y) {
+    for (int x = 0; x < g.width; ++x) {
+      const auto w = g.gridToWorld(x, y);
+      const double wx = w.x();
+      const double wy = w.y();
+      const bool main_corridor = (wx >= -18.0 && wx <= 2.0 && wy >= -1.1 && wy <= 1.1);
+      const bool north_alcove = (wx >= -1.2 && wx <= 0.2 && wy > 1.1 && wy <= 2.0);
+      if (main_corridor || north_alcove) {
+        g.cells[static_cast<std::size_t>(y) * static_cast<std::size_t>(g.width) +
+          static_cast<std::size_t>(x)] = 0;
+      }
+    }
+  }
+
+  // Rasterize solid walls (100)
+  rasterize_segment(g, -18.0, -1.15, 2.05, -1.15);   // South wall
+  rasterize_segment(g, -18.0, 1.15, -1.2, 1.15);     // North wall west part
+  rasterize_segment(g, 0.2, 1.15, 2.05, 1.15);       // North wall east part
+  rasterize_segment(g, -1.2, 1.15, -1.2, 2.05);      // Alcove west wall
+  rasterize_segment(g, -1.2, 2.05, 0.2, 2.05);       // Alcove north wall
+  rasterize_segment(g, 0.2, 2.05, 0.2, 1.15);        // Alcove east wall
+  rasterize_segment(g, 2.05, -1.15, 2.05, 1.15);     // East end-wall
+  rasterize_segment(g, -18.05, -1.15, -18.05, 1.15);  // West back wall
+
+  return g;
+}
+
+OccupancyGrid make_cluttered_corridor(double resolution, bool include_static_ghosts)
+{
+  OccupancyGrid g;
+  g.resolution = resolution;
+  g.width = static_cast<int>(std::lround(30.0 / resolution));
+  g.height = static_cast<int>(std::lround(4.0 / resolution));
+  g.origin_x = 0.0;
+  g.origin_y = 0.0;
+  g.cells.assign(
+    static_cast<std::size_t>(g.width) * static_cast<std::size_t>(g.height), -1);
+
+  // Free main corridor (0) for wx in [0.2, 29.8], wy in [0.8, 3.2]
+  // plus 3 asymmetric recess alcoves along North/South corridor walls
+  for (int y = 0; y < g.height; ++y) {
+    for (int x = 0; x < g.width; ++x) {
+      const auto w = g.gridToWorld(x, y);
+      const double wx = w.x();
+      const double wy = w.y();
+      const bool main_c = (wx >= 0.2 && wx <= 29.8 && wy >= 0.8 && wy <= 3.2);
+      const bool alc1 = (wx >= 6.0 && wx <= 7.2 && wy > 3.2 && wy <= 3.8);
+      const bool alc2 = (wx >= 14.5 && wx <= 15.8 && wy >= 0.2 && wy < 0.8);
+      const bool alc3 = (wx >= 22.0 && wx <= 23.5 && wy > 3.2 && wy <= 3.8);
+      if (main_c || alc1 || alc2 || alc3) {
+        g.cells[static_cast<std::size_t>(y) * static_cast<std::size_t>(g.width) +
+          static_cast<std::size_t>(x)] = 0;
+      }
+    }
+  }
+
+  // Rasterize continuous boundary walls around corridor and all 3 alcoves
+  rasterize_segment(g, 0.2, 0.8, 14.5, 0.8);
+  rasterize_segment(g, 15.8, 0.8, 29.8, 0.8);  // South wall sections (gap only for alcove 2)
+
+  rasterize_segment(g, 0.2, 3.2, 6.0, 3.2);
+  rasterize_segment(g, 7.2, 3.2, 22.0, 3.2);
+  rasterize_segment(g, 23.5, 3.2, 29.8, 3.2);  // North wall sections (gaps for alcoves 1 & 3)
+
+  // Alcove 1 walls
+  rasterize_segment(g, 6.0, 3.2, 6.0, 3.8);
+  rasterize_segment(g, 6.0, 3.8, 7.2, 3.8);
+  rasterize_segment(g, 7.2, 3.8, 7.2, 3.2);
+
+  // Alcove 2 walls
+  rasterize_segment(g, 14.5, 0.8, 14.5, 0.2);
+  rasterize_segment(g, 14.5, 0.2, 15.8, 0.2);
+  rasterize_segment(g, 15.8, 0.2, 15.8, 0.8);
+
+  // Alcove 3 walls
+  rasterize_segment(g, 22.0, 3.2, 22.0, 3.8);
+  rasterize_segment(g, 22.0, 3.8, 23.5, 3.8);
+  rasterize_segment(g, 23.5, 3.8, 23.5, 3.2);
+
+  // End walls
+  rasterize_segment(g, 0.2, 0.8, 0.2, 3.2);
+  rasterize_segment(g, 29.8, 0.8, 29.8, 3.2);
+
+  if (include_static_ghosts) {
+    const double centers[][2] = {
+      {5.0, 1.5}, {11.0, 2.5}, {18.0, 1.5}, {24.5, 2.4}
+    };
+    for (const auto & c : centers) {
+      const double cx = c[0];
+      const double cy = c[1];
+      box(g, cx - 0.175, cy - 0.175, cx + 0.175, cy + 0.175);
+      // Fill box interior
+      for (int y = 0; y < g.height; ++y) {
+        for (int x = 0; x < g.width; ++x) {
+          const auto w = g.gridToWorld(x, y);
+          const double wx = w.x();
+          const double wy = w.y();
+          if (wx >= cx - 0.175 && wx <= cx + 0.175 && wy >= cy - 0.175 && wy <= cy + 0.175) {
+            g.cells[static_cast<std::size_t>(y) * static_cast<std::size_t>(g.width) +
+              static_cast<std::size_t>(x)] = 100;
+          }
+        }
+      }
+    }
+  }
+
+  return g;
+}
+
+OccupancyGrid make_open_hall(double resolution)
+{
+  OccupancyGrid g;
+  g.resolution = resolution;
+  g.width = static_cast<int>(std::lround(36.0 / resolution));
+  g.height = static_cast<int>(std::lround(28.0 / resolution));
+  g.origin_x = 0.0;
+  g.origin_y = 0.0;
+  g.cells.assign(
+    static_cast<std::size_t>(g.width) * static_cast<std::size_t>(g.height), 0);
+
+  const double margin = 1.5 * resolution;
+  const double max_x = 36.0 - margin;
+  const double max_y = 28.0 - margin;
+  box(g, margin, margin, max_x, max_y);
+  mark_exterior_unknown(g, margin, margin, max_x, max_y);
+
+  // Sparse interior pillars (0.6m x 0.6m boxes)
+  const double pillar_centers[][2] = {
+    {9.0, 8.0}, {18.0, 7.5}, {27.0, 9.0}, {13.5, 19.0}, {23.5, 20.0}
+  };
+  for (const auto & pc : pillar_centers) {
+    const double cx = pc[0];
+    const double cy = pc[1];
+    box(g, cx - 0.3, cy - 0.3, cx + 0.3, cy + 0.3);
+  }
+
+  // L-shaped reception counter
+  rasterize_segment(g, 5.0, 14.0, 7.5, 14.0);
+  rasterize_segment(g, 7.5, 14.0, 7.5, 16.5);
+
+  return g;
+}
+
 double raycast_range(
   const OccupancyGrid & grid, double px, double py, double world_angle,
   double min_range, double range_max,

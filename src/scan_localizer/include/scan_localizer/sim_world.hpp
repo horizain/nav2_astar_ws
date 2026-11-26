@@ -32,6 +32,19 @@ OccupancyGrid make_warehouse(double resolution = 0.05);
 // 场景二：长走廊（30×3m，沿轴退化场景）
 OccupancyGrid make_corridor(double resolution = 0.05);
 
+// 场景三：对称孪生房间（24×10m，左右两间局部全同房间 + 顶部走廊非对称破缺区）
+OccupancyGrid make_twin_rooms(double resolution = 0.05);
+
+// 场景四：半建图单端走廊（28×5m，东端闭合含壁龛 + 外部大面积 -1 未知灰区，测 180° 翻转外溢）
+OccupancyGrid make_open_corridor(double resolution = 0.05);
+
+// 场景五：带壁龛与可选建图静态残影块的长走廊（include_static_ghosts 控制是否保留搬移前残影块）
+OccupancyGrid make_cluttered_corridor(
+  double resolution = 0.05, bool include_static_ghosts = true);
+
+// 场景六：开阔展览大厅（36×28m，远超 12m 量程的稀疏柱阵与单边墙大面积漏射场景）
+OccupancyGrid make_open_hall(double resolution = 0.05);
+
 // 动态障碍：矩形（世界系）
 struct DynBox { double cx, cy, hw, hh; };
 

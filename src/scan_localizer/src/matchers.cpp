@@ -862,6 +862,10 @@ GlobalResult global_correlative(
     // NMS 判定阈值（用于区分多峰假设，防止同一峰相邻像素占满 top-K）
   constexpr double kNmsLinM = 0.50;
   constexpr double kNmsAngRad = 0.35;
+    // 空间+航向分桶配额：防止单段对称长走廊的相邻峰耗尽全部 top-K 名额并抬高剪枝下界
+  constexpr double kBucketSizeM = 2.50;
+  constexpr int kAngBuckets = 4;
+  const int max_per_bucket = (topk >= 4) ? std::max(2, (topk + 2) / 3) : topk;
 
   struct Hyp { double score; int dx, dy, aidx; };
   std::vector<Hyp> hyps;
@@ -875,6 +879,24 @@ GlobalResult global_correlative(
         (a.dy - b.dy) * grid->resolution);
       const double dang = std::abs(wrap_angle((a.aidx - b.aidx) * ang_step));
       return dist_m < kNmsLinM && dang < kNmsAngRad;
+    };
+
+  auto same_bucket = [&](const Hyp & a, const Hyp & b)
+    {
+      const int axb = static_cast<int>(std::floor(a.dx * grid->resolution / kBucketSizeM));
+      const int ayb = static_cast<int>(std::floor(a.dy * grid->resolution / kBucketSizeM));
+      const int bxb = static_cast<int>(std::floor(b.dx * grid->resolution / kBucketSizeM));
+      const int byb = static_cast<int>(std::floor(b.dy * grid->resolution / kBucketSizeM));
+      if (axb != bxb || ayb != byb) {return false;}
+      const double tha = wrap_angle(a.aidx * ang_step);
+      const double thb = wrap_angle(b.aidx * ang_step);
+      const int aab = std::clamp(
+        static_cast<int>(std::floor((tha + kPi) / (kTwoPi / kAngBuckets))),
+        0, kAngBuckets - 1);
+      const int bab = std::clamp(
+        static_cast<int>(std::floor((thb + kPi) / (kTwoPi / kAngBuckets))),
+        0, kAngBuckets - 1);
+      return aab == bab;
     };
 
   auto update_bounds = [&]()
@@ -911,7 +933,7 @@ GlobalResult global_correlative(
       const int8_t origin_cell = grid->cells[
         static_cast<std::size_t>(nd.by) * static_cast<std::size_t>(W) +
         static_cast<std::size_t>(nd.bx)];
-      if (origin_cell < 0) {
+      if (origin_cell < 0 || origin_cell > 65) {
         continue;
       }
         // 精确重评分（出界点 0 分，无滑窗膨胀）
@@ -931,7 +953,24 @@ GlobalResult global_correlative(
           }
         }
         if (!merged) {
-          if (static_cast<int>(hyps.size()) < topk) {
+          int bucket_cnt = 0;
+          int worst_in_bucket = -1;
+          for (std::size_t hi = 0; hi < hyps.size(); ++hi) {
+            if (same_bucket(hyps[hi], cand)) {
+              ++bucket_cnt;
+              if (worst_in_bucket < 0 ||
+                hyps[hi].score < hyps[static_cast<std::size_t>(worst_in_bucket)].score)
+              {
+                worst_in_bucket = static_cast<int>(hi);
+              }
+            }
+          }
+          if (bucket_cnt >= max_per_bucket && worst_in_bucket >= 0) {
+            auto & wb = hyps[static_cast<std::size_t>(worst_in_bucket)];
+            if (cand.score > wb.score) {
+              wb = cand;
+            }
+          } else if (static_cast<int>(hyps.size()) < topk) {
             hyps.push_back(cand);
           } else {
             auto worst_it = std::min_element(
@@ -968,12 +1007,15 @@ GlobalResult global_correlative(
   }
   if (hyps.empty()) {return out;}
 
-    // 每个假设：连续小窗口细修 + 全点集重评分（点云旋转提至 5x5 平移循环外）
+    // 每个假设：连续小窗口细修 + GN 亚像素抛光 + 全点集重评分
   struct Refined { double score; Pose2 pose; };
   std::vector<Refined> refined;
   refined.reserve(hyps.size());
   std::vector<Eigen::Vector2d> rot_pts;
   rot_pts.reserve(valid_pts.size());
+  FieldGnMatcher gn_refiner;
+  MatchOptions gn_opt;
+  gn_opt.max_iterations = 10;
   for (const auto & hyp : hyps) {
     const double th0 = hyp.aidx * ang_step;
     const Eigen::Vector2d w0 = grid->gridToWorld(hyp.dx, hyp.dy);
@@ -1005,6 +1047,15 @@ GlobalResult global_correlative(
           }
         }
       }
+    }
+    const MatchResult gn_res = gn_refiner.match(field, {bx, by, bth}, scan, gn_opt);
+    if (gn_res.valid && pose_is_finite(gn_res.pose) &&
+      std::isfinite(gn_res.score) && gn_res.score + 0.01 >= best_sc)
+    {
+      bx = gn_res.pose.x;
+      by = gn_res.pose.y;
+      bth = wrap_angle(gn_res.pose.theta);
+      best_sc = std::max(best_sc, gn_res.score);
     }
     refined.push_back({best_sc, {bx, by, bth}});
   }
@@ -1128,9 +1179,9 @@ double beam_visibility_consistency(
 
     const double eff_unk_depth =
       ((unk_len >= 2.5 && end_unknown) || unk_len >= 4.0) ? unk_len : 0.0;
-    const double wall_pierce_depth = (occ_len >= 0.55 && first_occ_d >= 0.0)
-      ? std::max(0.0, r - first_occ_d - 0.45)
-      : 0.0;
+    const double wall_pierce_depth = (occ_len >= 0.55 && first_occ_d >= 0.0) ?
+      std::max(0.0, r - first_occ_d - 0.45) :
+      0.0;
 
     total_len += r;
     if (eff_unk_depth > 0.0) {

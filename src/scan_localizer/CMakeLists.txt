@@ -195,6 +195,12 @@ if(BUILD_TESTING)
     target_link_libraries(test_benchmark_regression scan_localizer_core scan_localizer_sim_lib)
     target_compile_options(test_benchmark_regression PRIVATE ${SCAN_LOCALIZER_WARN_FLAGS})
   endif()
+
+  ament_add_gtest(test_generalization_matrix test/test_generalization_matrix.cpp)
+  if(TARGET test_generalization_matrix)
+    target_link_libraries(test_generalization_matrix scan_localizer_core scan_localizer_sim_lib)
+    target_compile_options(test_generalization_matrix PRIVATE ${SCAN_LOCALIZER_WARN_FLAGS})
+  endif()
 endif()
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)

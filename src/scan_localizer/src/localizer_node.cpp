@@ -712,9 +712,9 @@ LocalizerNode::CallbackReturn LocalizerNode::on_configure(
   {
     std::lock_guard<std::mutex> lk(state_mtx_);
     core_ = std::make_unique<LocalizerCore>(core_cfg_);
-    core_->set_global_fn(
-      [this](const Scan & s, Pose2 & out, double & sc) {
-        return use_global_search_ && runGlobalSearchLocked(s, out, sc);
+    core_->set_global_multi_fn(
+      [this](const Scan & s) {
+        return use_global_search_ ? runGlobalMultiSearchLocked(s) : GlobalResult{};
       });
     fine_on_ = false;
     map_received_ = false;
@@ -1097,17 +1097,32 @@ void LocalizerNode::onHypotheses(
       m->header.frame_id.c_str(), map_frame_.c_str());
     return;
   }
-  pending_hypotheses_.clear();
+  std::vector<Pose2> ext_poses;
+  ext_poses.reserve(m->poses.size());
   for (const auto & p : m->poses) {
-    pending_hypotheses_.emplace_back(
-      p.position.x, p.position.y, quatToYaw(p.orientation));
+    const double yaw = quatToYaw(p.orientation);
+    if (std::isfinite(p.position.x) && std::isfinite(p.position.y) && std::isfinite(yaw)) {
+      ext_poses.emplace_back(p.position.x, p.position.y, yaw);
+    }
+  }
+  if (ext_poses.empty()) {
+    return;
   }
   stable_tracking_count_ = 0;
-  if (!pending_hypotheses_.empty()) {
-    RCLCPP_INFO(
-      get_logger(), "external hypotheses received: %zu",
-      pending_hypotheses_.size());
+  // 若处于跟踪或降级态，直接注入 Core 多假设队列参与实时异常恢复；若处于未初始化/全局态，
+  // 交由全局多峰搜索入口做宽窗验证与对称消歧（绝不静默丢弃）。
+  if (core_->state() == LocState::TRACKING || core_->state() == LocState::DEGRADED) {
+    core_->add_hypotheses(ext_poses);
+    pending_hypotheses_.clear();
+  } else {
+    pending_hypotheses_ = ext_poses;
+    if (core_->state() == LocState::UNINIT && map_received_) {
+      core_->request_global(true);
+    }
   }
+  RCLCPP_INFO(
+    get_logger(), "external hypotheses received: %zu",
+    ext_poses.size());
 }
 
 bool LocalizerNode::lookupOdomAt(
@@ -1370,36 +1385,54 @@ void LocalizerNode::onInitialPose(
     pose.x, pose.y, pose.theta * kDegPerRad);
 }
 
-bool LocalizerNode::runGlobalSearchLocked(
-  const Scan & scan, Pose2 & out, double & score)
+GlobalResult LocalizerNode::runGlobalMultiSearchLocked(const Scan & scan)
 {
-  if (!field_ || !matcher_) {return false;}
+  GlobalResult out;
+  if (!field_ || !matcher_) {return out;}
 
-  // 1) 外部假设优先（激光强验证，仅采纳 valid 且得分过门槛的假设）
+  // 1) 外部假设优先：保留全部通过门槛的外部候选，单峰直接秒锁、对称多峰自动进入 Core 消歧
   if (!pending_hypotheses_.empty()) {
     MatchOptions vo = core_cfg_.match_opt;
     vo.window_lin = kExternalHypWindowLin;
     vo.window_ang = kExternalHypWindowAng;
+    struct ExtCand { double score; Pose2 pose; };
+    std::vector<ExtCand> verified;
     double best_s = -1.0;
-    Pose2 best_p{};
-    bool found_valid = false;
     for (const auto & h : pending_hypotheses_) {
       const auto r = matcher_->match(*field_, h, scan, vo);
-      if (r.valid && r.score > best_s) {
-        best_s = r.score;
-        best_p = r.pose;
-        found_valid = true;
+      if (r.valid && std::isfinite(r.score)) {
+        const double vis = (core_cfg_.use_visibility_check && scan.points.size() >= 16) ?
+          beam_visibility_consistency(*field_, r.pose, scan, true) : 1.0;
+        const double eff_s = r.score * vis;
+        best_s = std::max(best_s, eff_s);
+        if (eff_s >= core_cfg_.hyp_min_score) {
+          verified.push_back({eff_s, r.pose});
+        }
       }
     }
     pending_hypotheses_.clear();
-    if (found_valid && best_s >= kExternalHypMinScore) {
-      out = best_p;
-      score = best_s;
+    std::sort(verified.begin(), verified.end(),
+      [](const ExtCand & a, const ExtCand & b) {return a.score > b.score;});
+    if (!verified.empty() && verified[0].score >= kExternalHypMinScore) {
+      out.valid = true;
+      out.pose = verified[0].pose;
+      out.score = verified[0].score;
+      global_alternates_.clear();
+      for (std::size_t i = 1; i < verified.size(); ++i) {
+        out.alternates.push_back(verified[i].pose);
+        if (std::hypot(
+            verified[i].pose.x - out.pose.x,
+            verified[i].pose.y - out.pose.y) > kAlternateMinSepM)
+        {
+          global_alternates_.push_back(verified[i].pose);
+        }
+      }
       RCLCPP_INFO(
         get_logger(),
-        "external hypothesis VERIFIED: (%.2f, %.2f, %.1f deg) score=%.3f",
-        best_p.x, best_p.y, best_p.theta * kDegPerRad, best_s);
-      return true;
+        "external hypothesis VERIFIED: (%.2f, %.2f, %.1f deg) score=%.3f (+%zu alternates)",
+        out.pose.x, out.pose.y, out.pose.theta * kDegPerRad, out.score,
+        out.alternates.size());
+      return out;
     }
     RCLCPP_WARN(
       get_logger(),
@@ -1407,11 +1440,9 @@ bool LocalizerNode::runGlobalSearchLocked(
       best_s, kExternalHypMinScore);
   }
 
-  // 2) 回退：B&B 激光全局搜索
-  const auto g = global_correlative(*field_, scan, 3, 2.0 * kPi / 180.0, 5);
-  if (!g.valid) {return false;}
-  out = g.pose;
-  score = g.score;
+  // 2) 回退：空间分桶多样性 B&B 全局搜索，全部备选峰交由 Core 多假设与可见性闭环管理
+  const auto g = global_correlative(*field_, scan, 3, 2.0 * kPi / 180.0, 8);
+  if (!g.valid) {return out;}
 
   global_alternates_.clear();
   for (const auto & a : g.alternates) {
@@ -1422,10 +1453,10 @@ bool LocalizerNode::runGlobalSearchLocked(
   }
   RCLCPP_INFO(
     get_logger(),
-    "global search: (%.2f, %.2f, %.1f deg) score=%.3f (%zu alternates recorded)",
+    "global search: (%.2f, %.2f, %.1f deg) score=%.3f (%zu alternates forwarded to core)",
     g.pose.x, g.pose.y, g.pose.theta * kDegPerRad, g.score,
-    global_alternates_.size());
-  return true;
+    g.alternates.size());
+  return g;
 }
 
 void LocalizerNode::onGlobalRelocalize(

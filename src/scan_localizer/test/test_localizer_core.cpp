@@ -858,7 +858,7 @@ TEST(LocalizerCoreTest, InPlaceRotationWithLateralSkewSurvivesMahalGate)
 TEST(LocalizerCoreTest, HypothesisPromotionHysteresisPreventsWeakCandidateSteal)
 {
   class CompetingHypMatcher : public sloc::Matcher {
-  public:
+public:
     double leader_score{0.80};
     double leader_inlier{0.85};
     double runner_score{0.52};
@@ -930,7 +930,7 @@ TEST(LocalizerCoreTest, HypothesisPromotionHysteresisPreventsWeakCandidateSteal)
 TEST(LocalizerCoreTest, AutoGlobalContinuityAndSymmetryAmbiguityGuard)
 {
   class SymmetricCorridorMatcher : public sloc::Matcher {
-  public:
+public:
     double far_score{0.95};
     double local_score{0.93};
     bool local_valid{true};
@@ -1001,7 +1001,7 @@ TEST(LocalizerCoreTest, AutoGlobalContinuityAndSymmetryAmbiguityGuard)
     core.add_hypotheses({sloc::Pose2(24.0, 5.0, 3.14159), sloc::Pose2(14.0, 5.0, 0.0)});
     // Re-score both as high-scoring far peaks via distinct x coordinates:
     class TiedFarMatcher : public sloc::Matcher {
-    public:
+public:
       sloc::MatchResult match(
         const sloc::MapField &, const sloc::Pose2 & prior,
         const sloc::Scan &, const sloc::MatchOptions &) const override

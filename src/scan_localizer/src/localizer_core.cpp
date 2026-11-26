@@ -69,6 +69,17 @@ double compute_inlier_ratio(
   return static_cast<double>(inliers) / static_cast<double>(scan.points.size());
 }
 
+double effective_match_score(
+  const MapField & field, const Pose2 & pose, const Scan & scan,
+  double raw_score, bool check_vis)
+{
+  if (!check_vis || scan.points.size() < 16) {
+    return raw_score;
+  }
+  const double vis = beam_visibility_consistency(field, pose, scan, true);
+  return raw_score * vis;
+}
+
 }  // namespace
 
 LocalizerCore::LocalizerCore(CoreConfig cfg)
@@ -164,21 +175,65 @@ void LocalizerCore::set_global_fn(GlobalFn fn)
   global_fn_ = std::move(fn);
 }
 
+void LocalizerCore::set_global_multi_fn(GlobalMultiFn fn)
+{
+  global_multi_fn_ = std::move(fn);
+}
+
+void LocalizerCore::enable_builtin_global(
+  bool enable, int beams_subsample, double ang_step, int n_hypotheses)
+{
+  builtin_global_enabled_ = enable;
+  builtin_beams_sub_ = std::max(1, beams_subsample);
+  builtin_ang_step_ = (std::isfinite(ang_step) && ang_step > 0.0) ?
+    ang_step : (2.0 * kPi / 180.0);
+  builtin_n_hyps_ = std::max(1, n_hypotheses);
+}
+
 void LocalizerCore::add_hypotheses(const std::vector<Pose2> & hyps)
 {
+  const bool was_empty = hypotheses_.empty();
   for (const auto & p : hyps) {
     if (!is_finite_pose(p)) {
       continue;
     }
-    if (hypotheses_.size() >= cfg_.max_hypotheses) {
-      break;
+    const Pose2 clean_p(p.x, p.y, wrap_angle(p.theta));
+    bool duplicate = false;
+    for (const auto & existing : hypotheses_) {
+      if (std::hypot(existing.pose.x - clean_p.x, existing.pose.y - clean_p.y) < 0.35 &&
+        std::abs(wrap_angle(existing.pose.theta - clean_p.theta)) < 0.25)
+      {
+        duplicate = true;
+        break;
+      }
+    }
+    if (duplicate) {
+      continue;
     }
     Hypothesis h;
-    h.pose = Pose2(p.x, p.y, wrap_angle(p.theta));
-    hypotheses_.push_back(h);
+    h.pose = clean_p;
+    if (hypotheses_.size() < cfg_.max_hypotheses) {
+      hypotheses_.push_back(h);
+    } else {
+      // 僵尸淘汰替换：优先覆盖未确认且历史 EMA 最低的槽位，防止死假设永久占满队列
+      int evict_idx = -1;
+      double worst_ema = std::numeric_limits<double>::infinity();
+      for (std::size_t i = 0; i < hypotheses_.size(); ++i) {
+        if (hypotheses_[i].confirm_count == 0 && hypotheses_[i].ema_score < worst_ema) {
+          worst_ema = hypotheses_[i].ema_score;
+          evict_idx = static_cast<int>(i);
+        }
+      }
+      if (evict_idx >= 0) {
+        hypotheses_[static_cast<std::size_t>(evict_idx)] = h;
+      }
+    }
   }
   if (!hypotheses_.empty()) {
     stable_tracking_streak_ = 0;
+    if (was_empty && !first_fix_ && has_odom_) {
+      odom_at_last_scan_ = last_odom_;
+    }
   }
 }
 
@@ -283,7 +338,7 @@ void LocalizerCore::compute_motion_delta(
 
   if (has_odom_) {
     const Pose2 odom_now = last_odom_;
-    if (first_fix_) {
+    if (first_fix_ || !hypotheses_.empty()) {
       delta = odom_at_last_scan_.inverse() * odom_now;
     }
     odom_at_last_scan_ = odom_now;
@@ -332,11 +387,15 @@ bool LocalizerCore::try_promote_hypotheses(const Scan & scan, CoreOutput & out)
 
   for (std::size_t i = 0; i < hypotheses_.size(); ++i) {
     auto & h = hypotheses_[i];
-    const MatchResult mr = matcher_->match(*field_, h.pose, scan, cfg_.match_opt);
+    MatchResult mr = matcher_->match(*field_, h.pose, scan, cfg_.match_opt);
     const bool valid_match = mr.valid &&
       is_finite_pose(mr.pose) &&
       std::isfinite(mr.score) &&
       std::isfinite(mr.inlier_ratio);
+    if (valid_match) {
+      mr.score = effective_match_score(
+        *field_, mr.pose, scan, mr.score, cfg_.use_visibility_check);
+    }
     evals[i].valid = valid_match;
     evals[i].mr = mr;
     if (valid_match) {
@@ -345,6 +404,9 @@ bool LocalizerCore::try_promote_hypotheses(const Scan & scan, CoreOutput & out)
       if (mr.inlier_ratio >= cfg_.min_inlier_ratio) {
         frame_best_score = std::max(frame_best_score, mr.score);
       }
+    } else {
+      h.ema_score = (h.eval_count == 0) ? 0.0 : (0.7 * h.ema_score);
+      ++h.eval_count;
     }
     const bool ok = valid_match &&
       mr.score >= cfg_.hyp_min_score &&
@@ -359,16 +421,33 @@ bool LocalizerCore::try_promote_hypotheses(const Scan & scan, CoreOutput & out)
         best_idx = static_cast<int>(i);
       }
     } else {
+      if (valid_match && mr.score >= cfg_.min_score &&
+        mr.inlier_ratio >= cfg_.min_inlier_ratio)
+      {
+        h.pose = Pose2(mr.pose.x, mr.pose.y, wrap_angle(mr.pose.theta));
+      }
       // 滞回退火：单帧偶发遮挡不直接清零，防低分次优对称峰趁虚抢先晋升
       h.confirm_count = std::max(0, h.confirm_count - 1);
     }
   }
+
+  auto prune_dead_hypotheses = [&]() {
+      hypotheses_.erase(
+        std::remove_if(
+          hypotheses_.begin(), hypotheses_.end(),
+          [&](const Hypothesis & h) {
+            return h.eval_count >= 4 && h.confirm_count == 0 &&
+                   h.ema_score < cfg_.min_score;
+          }),
+        hypotheses_.end());
+    };
 
   // 多峰竞争保护：若当前帧存在显著更高分的另一竞争假设（差值 >= 0.08），
   // 则暂缓低分假设抢跑晋升，继续观察确认。
   if (best_idx < 0 ||
     (hypotheses_.size() > 1 && frame_best_score >= best_score + 0.08))
   {
+    prune_dead_hypotheses();
     return false;
   }
 
@@ -409,15 +488,21 @@ bool LocalizerCore::try_promote_hypotheses(const Scan & scan, CoreOutput & out)
         best_mr = evals[local_idx].mr;
         local_reanchored = true;
       } else {
+        prune_dead_hypotheses();
         return false;
       }
     } else {
-      const MatchResult local_mr = matcher_->match(
+      MatchResult local_mr = matcher_->match(
         *field_, last_pose_, scan, cfg_.match_opt);
-      const bool local_healthy = local_mr.valid &&
+      const bool local_valid = local_mr.valid &&
         is_finite_pose(local_mr.pose) &&
         std::isfinite(local_mr.score) &&
-        std::isfinite(local_mr.inlier_ratio) &&
+        std::isfinite(local_mr.inlier_ratio);
+      if (local_valid) {
+        local_mr.score = effective_match_score(
+          *field_, local_mr.pose, scan, local_mr.score, cfg_.use_visibility_check);
+      }
+      const bool local_healthy = local_valid &&
         local_mr.score >= cfg_.min_score &&
         local_mr.inlier_ratio >= cfg_.min_inlier_ratio;
       if (local_healthy && best_score < local_mr.score + cfg_.global_jump_score_margin) {
@@ -446,12 +531,14 @@ bool LocalizerCore::try_promote_hypotheses(const Scan & scan, CoreOutput & out)
     if (ambiguous) {
       const int c = hypotheses_[best_idx].confirm_count;
       if (c < ambig_frames) {
+        prune_dead_hypotheses();
         return false;
       }
       if (!manual_global_ && first_fix_ && is_far_from_anchor(best_mr.pose) &&
         hypotheses_[best_idx].ema_score < competing_ema + 0.02 &&
         c < ambig_frames * 2)
       {
+        prune_dead_hypotheses();
         return false;
       }
     }
@@ -506,6 +593,320 @@ int LocalizerCore::anomaly_count() const
   return cnt;
 }
 
+bool LocalizerCore::handle_recovery_scan(const Scan & active_scan, CoreOutput & out)
+{
+  Pose2 delta{};
+  bool imu_used = false;
+  double dt_imu = 0.0;
+  compute_motion_delta(delta, imu_used, dt_imu);
+  if (first_fix_) {
+    last_pose_ = last_pose_ * delta;
+  }
+  if (!hypotheses_.empty()) {
+    propagate_hypotheses(delta);
+  }
+
+  if (!hypotheses_.empty()) {
+    if (try_promote_hypotheses(active_scan, out)) {
+      return true;
+    }
+    // 仅当存在本轮匹配健康（last_score >= min_score 且 confirm_count > 0）的活跃竞争假设时，
+    // 才暂缓重跑全局搜索；若旧队列全为失效残留假设，立即清空并回退全局搜索。
+    bool has_live_competing = false;
+    for (const auto & h : hypotheses_) {
+      if (h.confirm_count > 0 || h.last_score >= cfg_.min_score) {
+        has_live_competing = true;
+        break;
+      }
+    }
+    if (has_live_competing) {
+      return true;
+    }
+    if (global_multi_fn_ || builtin_global_enabled_ || global_fn_) {
+      clear_hypotheses();
+    }
+  }
+
+  if (global_multi_fn_ || builtin_global_enabled_) {
+    const GlobalResult gres = global_multi_fn_ ?
+      global_multi_fn_(active_scan) :
+      global_correlative(
+        *field_, active_scan,
+        builtin_beams_sub_, builtin_ang_step_, builtin_n_hyps_);
+    if (gres.valid && is_finite_pose(gres.pose)) {
+      std::vector<Pose2> raw_cands;
+      raw_cands.reserve(1 + gres.alternates.size());
+      raw_cands.push_back(gres.pose);
+      for (const auto & alt : gres.alternates) {
+        if (is_finite_pose(alt)) {
+          raw_cands.push_back(alt);
+        }
+      }
+
+      MatchOptions cand_opt = cfg_.match_opt;
+      cand_opt.window_lin = std::max(cand_opt.window_lin, 0.20);
+      cand_opt.window_ang = std::max(cand_opt.window_ang, 0.15);
+
+      struct EvalCand
+      {
+        Pose2 pose;
+        double eff_score{0.0};
+        double inlier{0.0};
+        Cov3 cov{Cov3::Identity() * 0.04};
+        bool has_cov{false};
+      };
+      std::vector<EvalCand> cands;
+      cands.reserve(raw_cands.size());
+
+      for (std::size_t i = 0; i < raw_cands.size(); ++i) {
+        const Pose2 & p0 = raw_cands[i];
+        const MatchResult mr = matcher_->match(*field_, p0, active_scan, cand_opt);
+        EvalCand ec;
+        if (mr.valid && is_finite_pose(mr.pose) &&
+          std::isfinite(mr.score) && std::isfinite(mr.inlier_ratio))
+        {
+          ec.pose = Pose2(mr.pose.x, mr.pose.y, wrap_angle(mr.pose.theta));
+          ec.eff_score = effective_match_score(
+            *field_, ec.pose, active_scan, mr.score, cfg_.use_visibility_check);
+          ec.inlier = mr.inlier_ratio;
+          if (is_valid_spd_cov3(mr.covariance)) {
+            ec.cov = 0.5 * (mr.covariance + mr.covariance.transpose());
+            ec.has_cov = true;
+          }
+        } else if (i == 0 && std::isfinite(gres.score)) {
+          ec.pose = Pose2(p0.x, p0.y, wrap_angle(p0.theta));
+          ec.eff_score = effective_match_score(
+            *field_, ec.pose, active_scan, gres.score, cfg_.use_visibility_check);
+          ec.inlier = compute_inlier_ratio(
+            *field_, ec.pose, active_scan, cfg_.match_opt.inlier_gate);
+        } else {
+          continue;
+        }
+        if (ec.eff_score > 0.10) {
+          cands.push_back(ec);
+        }
+      }
+
+      std::sort(cands.begin(), cands.end(),
+        [](const EvalCand & a, const EvalCand & b) {
+          return a.eff_score > b.eff_score;
+        });
+
+      std::vector<EvalCand> dedup;
+      dedup.reserve(cands.size());
+      for (const auto & c : cands) {
+        bool same = false;
+        for (const auto & k : dedup) {
+          if (std::hypot(c.pose.x - k.pose.x, c.pose.y - k.pose.y) < 0.50 &&
+            std::abs(wrap_angle(c.pose.theta - k.pose.theta)) < 0.35)
+          {
+            same = true;
+            break;
+          }
+        }
+        if (!same) {
+          dedup.push_back(c);
+        }
+      }
+
+      if (!dedup.empty()) {
+        const auto & best = dedup[0];
+
+        if (first_fix_ && !manual_global_) {
+          const double jump_dist = std::hypot(
+            best.pose.x - last_pose_.x, best.pose.y - last_pose_.y);
+          const double jump_ang = std::abs(
+            wrap_angle(best.pose.theta - last_pose_.theta));
+          if (jump_dist > cfg_.global_jump_min_dist || jump_ang > 0.8) {
+            MatchResult local_mr = matcher_->match(
+              *field_, last_pose_, active_scan, cfg_.match_opt);
+            const bool local_valid = local_mr.valid &&
+              is_finite_pose(local_mr.pose) &&
+              std::isfinite(local_mr.score) &&
+              std::isfinite(local_mr.inlier_ratio);
+            if (local_valid) {
+              local_mr.score = effective_match_score(
+                *field_, local_mr.pose, active_scan,
+                local_mr.score, cfg_.use_visibility_check);
+            }
+            const bool local_healthy = local_valid &&
+              local_mr.score >= cfg_.min_score &&
+              local_mr.inlier_ratio >= cfg_.min_inlier_ratio;
+            if (local_healthy &&
+              best.eff_score < local_mr.score + cfg_.global_jump_score_margin)
+            {
+              last_pose_ = Pose2(
+                local_mr.pose.x, local_mr.pose.y, wrap_angle(local_mr.pose.theta));
+              state_ = LocState::TRACKING;
+              reject_streak_ = 0;
+              stable_tracking_streak_ = 0;
+              anomaly_window_.clear();
+              std::vector<Pose2> far_hyps;
+              for (const auto & d : dedup) {
+                far_hyps.push_back(d.pose);
+              }
+              add_hypotheses(far_hyps);
+
+              out.pose = last_pose_;
+              out.covariance = last_cov();
+              out.state = state_;
+              out.accepted = true;
+              out.score = local_mr.score;
+              out.inlier_ratio = local_mr.inlier_ratio;
+              out.reject_streak = 0;
+              return true;
+            }
+          }
+        }
+
+        double competing_eff = -1.0;
+        for (std::size_t i = 1; i < dedup.size(); ++i) {
+          const bool distinct =
+            std::hypot(dedup[i].pose.x - best.pose.x, dedup[i].pose.y - best.pose.y) >= 0.8 ||
+            std::abs(wrap_angle(dedup[i].pose.theta - best.pose.theta)) >= 0.35;
+          if (distinct && dedup[i].eff_score >= cfg_.min_score &&
+            dedup[i].inlier >= cfg_.min_inlier_ratio * 0.85)
+          {
+            competing_eff = std::max(competing_eff, dedup[i].eff_score);
+          }
+        }
+        const bool ambiguous = competing_eff >= 0.0 &&
+          (best.eff_score - competing_eff) < cfg_.hyp_ambiguity_margin;
+
+        if (ambiguous) {
+          clear_hypotheses();
+          const double keep_floor = std::max(cfg_.min_score, best.eff_score - 0.20);
+          for (const auto & d : dedup) {
+            if (d.eff_score < keep_floor || hypotheses_.size() >= cfg_.max_hypotheses) {
+              continue;
+            }
+            Hypothesis h;
+            h.pose = d.pose;
+            h.confirm_count = (d.eff_score >= cfg_.hyp_min_score &&
+              d.inlier >= cfg_.hyp_min_inlier) ? 1 : 0;
+            h.last_score = d.eff_score;
+            h.ema_score = d.eff_score;
+            h.eval_count = 1;
+            hypotheses_.push_back(h);
+          }
+          if (has_odom_ && !first_fix_) {
+            odom_at_last_scan_ = last_odom_;
+          }
+          state_ = LocState::GLOBAL;
+          out.pose = last_pose_;
+          out.covariance = last_cov();
+          out.state = state_;
+          out.accepted = false;
+          out.score = best.eff_score;
+          out.inlier_ratio = best.inlier;
+          out.reject_streak = reject_streak_;
+          return true;
+        }
+
+        last_pose_ = best.pose;
+        P4_ = Cov4::Zero();
+        P4_.topLeftCorner<3, 3>() = best.has_cov ? best.cov : (Cov3::Identity() * 0.04);
+        P4_(3, 3) = std::max(1e-9, cfg_.gyro_bias_init_var);
+        gyro_bias_ = 0.0;
+        if (has_odom_) {
+          odom_at_last_scan_ = last_odom_;
+        }
+        if (has_imu_) {
+          imu_yaw_at_last_scan_ = imu_yaw_;
+        }
+        imu_dt_accum_ = 0.0;
+        imu_consumed_ = true;
+        state_ = LocState::TRACKING;
+        manual_global_ = false;
+        reject_streak_ = 0;
+        stable_tracking_streak_ = 0;
+        first_fix_ = true;
+        clear_hypotheses();
+        anomaly_window_.clear();
+
+        out.pose = last_pose_;
+        out.covariance = last_cov();
+        out.state = state_;
+        out.accepted = true;
+        out.score = best.eff_score;
+        out.inlier_ratio = best.inlier;
+        out.reject_streak = 0;
+        return true;
+      }
+    }
+    return true;
+  }
+
+  if (global_fn_) {
+    Pose2 g{};
+    double sc = 0.0;
+    if (global_fn_(active_scan, g, sc) && is_finite_pose(g) && std::isfinite(sc)) {
+      if (first_fix_ && !manual_global_) {
+        const double jump_dist = std::hypot(g.x - last_pose_.x, g.y - last_pose_.y);
+        if (jump_dist > cfg_.global_jump_min_dist) {
+          const MatchResult local_mr = matcher_->match(
+            *field_, last_pose_, active_scan, cfg_.match_opt);
+          const bool local_healthy = local_mr.valid &&
+            is_finite_pose(local_mr.pose) &&
+            std::isfinite(local_mr.score) &&
+            std::isfinite(local_mr.inlier_ratio) &&
+            local_mr.score >= cfg_.min_score &&
+            local_mr.inlier_ratio >= cfg_.min_inlier_ratio;
+          if (local_healthy && sc < local_mr.score + cfg_.global_jump_score_margin) {
+            last_pose_ = Pose2(
+              local_mr.pose.x, local_mr.pose.y, wrap_angle(local_mr.pose.theta));
+            state_ = LocState::TRACKING;
+            reject_streak_ = 0;
+            stable_tracking_streak_ = 0;
+            anomaly_window_.clear();
+            add_hypotheses({g});
+
+            out.pose = last_pose_;
+            out.covariance = last_cov();
+            out.state = state_;
+            out.accepted = true;
+            out.score = local_mr.score;
+            out.inlier_ratio = local_mr.inlier_ratio;
+            out.reject_streak = 0;
+            return true;
+          }
+        }
+      }
+
+      last_pose_ = Pose2(g.x, g.y, wrap_angle(g.theta));
+      P4_ = Cov4::Zero();
+      P4_.topLeftCorner<3, 3>() = Cov3::Identity() * 0.04;
+      P4_(3, 3) = std::max(1e-9, cfg_.gyro_bias_init_var);
+      gyro_bias_ = 0.0;
+      if (has_odom_) {
+        odom_at_last_scan_ = last_odom_;
+      }
+      if (has_imu_) {
+        imu_yaw_at_last_scan_ = imu_yaw_;
+      }
+      imu_dt_accum_ = 0.0;
+      imu_consumed_ = true;
+      state_ = LocState::TRACKING;
+      manual_global_ = false;
+      reject_streak_ = 0;
+      stable_tracking_streak_ = 0;
+      first_fix_ = true;
+      clear_hypotheses();
+      anomaly_window_.clear();
+
+      out.pose = last_pose_;
+      out.covariance = last_cov();
+      out.state = state_;
+      out.accepted = true;
+      out.score = sc;
+      out.inlier_ratio = compute_inlier_ratio(
+        *field_, last_pose_, active_scan, cfg_.match_opt.inlier_gate);
+      out.reject_streak = 0;
+    }
+  }
+  return true;
+}
+
 CoreOutput LocalizerCore::on_scan(const Scan & scan)
 {
   CoreOutput out;
@@ -543,99 +944,7 @@ CoreOutput LocalizerCore::on_scan(const Scan & scan)
   if (state_ == LocState::UNINIT || state_ == LocState::LOST ||
     state_ == LocState::GLOBAL)
   {
-    Pose2 delta{};
-    bool imu_used = false;
-    double dt_imu = 0.0;
-    compute_motion_delta(delta, imu_used, dt_imu);
-    if (first_fix_) {
-      last_pose_ = last_pose_ * delta;
-      if (!hypotheses_.empty()) {
-        propagate_hypotheses(delta);
-      }
-    }
-
-    if (!hypotheses_.empty()) {
-      if (try_promote_hypotheses(*active_scan, out)) {
-        return out;
-      }
-    }
-
-    if (global_fn_) {
-      Pose2 g{};
-      double sc = 0.0;
-      if (global_fn_(*active_scan, g, sc) && is_finite_pose(g) && std::isfinite(sc)) {
-        // 自动触发的远距离全局跳变保护：若已有历史跟踪位姿且非显式手动重定位，
-        // 远距离候选必须显著优于当前局部匹配，否则拒绝瞬移并转入多假设验证队列。
-        if (first_fix_ && !manual_global_) {
-          const double th_prev = last_pose_.theta;
-          const double c_prev = std::cos(th_prev);
-          const double s_prev = std::sin(th_prev);
-          const Pose2 pred_local(
-            last_pose_.x + c_prev * delta.x - s_prev * delta.y,
-            last_pose_.y + s_prev * delta.x + c_prev * delta.y,
-            wrap_angle(th_prev + delta.theta));
-          const double jump_dist = std::hypot(g.x - pred_local.x, g.y - pred_local.y);
-          if (jump_dist > cfg_.global_jump_min_dist) {
-            const MatchResult local_mr = matcher_->match(
-              *field_, pred_local, *active_scan, cfg_.match_opt);
-            const bool local_healthy = local_mr.valid &&
-              is_finite_pose(local_mr.pose) &&
-              std::isfinite(local_mr.score) &&
-              std::isfinite(local_mr.inlier_ratio) &&
-              local_mr.score >= cfg_.min_score &&
-              local_mr.inlier_ratio >= cfg_.min_inlier_ratio;
-            if (local_healthy && sc < local_mr.score + cfg_.global_jump_score_margin) {
-              last_pose_ = Pose2(
-                local_mr.pose.x, local_mr.pose.y, wrap_angle(local_mr.pose.theta));
-              state_ = LocState::TRACKING;
-              reject_streak_ = 0;
-              stable_tracking_streak_ = 0;
-              anomaly_window_.clear();
-              add_hypotheses({g});
-
-              out.pose = last_pose_;
-              out.covariance = last_cov();
-              out.state = state_;
-              out.accepted = true;
-              out.score = local_mr.score;
-              out.inlier_ratio = local_mr.inlier_ratio;
-              out.reject_streak = 0;
-              return out;
-            }
-          }
-        }
-
-        last_pose_ = Pose2(g.x, g.y, wrap_angle(g.theta));
-        P4_ = Cov4::Zero();
-        P4_.topLeftCorner<3, 3>() = Cov3::Identity() * 0.04;
-        P4_(3, 3) = std::max(1e-9, cfg_.gyro_bias_init_var);
-        gyro_bias_ = 0.0;
-        if (has_odom_) {
-          odom_at_last_scan_ = last_odom_;
-        }
-        if (has_imu_) {
-          imu_yaw_at_last_scan_ = imu_yaw_;
-        }
-        imu_dt_accum_ = 0.0;
-        imu_consumed_ = true;
-        state_ = LocState::TRACKING;
-        manual_global_ = false;
-        reject_streak_ = 0;
-        stable_tracking_streak_ = 0;
-        first_fix_ = true;
-        clear_hypotheses();
-        anomaly_window_.clear();
-
-        out.pose = last_pose_;
-        out.covariance = last_cov();
-        out.state = state_;
-        out.accepted = true;
-        out.score = sc;
-        out.inlier_ratio = compute_inlier_ratio(
-          *field_, last_pose_, *active_scan, cfg_.match_opt.inlier_gate);
-        out.reject_streak = 0;
-      }
-    }
+    handle_recovery_scan(*active_scan, out);
     return out;
   }
 

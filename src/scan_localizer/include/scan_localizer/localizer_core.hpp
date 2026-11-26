@@ -86,6 +86,8 @@ struct CoreConfig
   // 自动全局重定位远距离跳变安全保护（防对称走廊误跳）
   double global_jump_min_dist{1.0};       // 远距离跳变判定阈值 (m)
   double global_jump_score_margin{0.10};  // 远距离候选需显著优于当前局部匹配的得分裕度
+  // 射线物理可见性一致性校验（抑制半建图边界反朝向翻转与穿墙假峰）
+  bool use_visibility_check{true};
   // 匹配器选项（跟踪窗口）
   MatchOptions match_opt{};
 };
@@ -112,13 +114,19 @@ public:
 
   // 请求进入全局重定位：
   // - 无 map/matcher 或已处于 GLOBAL 时返回 false
-  // - manual=true 表示显式外部指令（允许跨区重定位）；manual=false 表示自动异常恢复（启用防跳变连续性保护）
+  // - manual=true 允许跨区重定位；manual=false 为自动异常恢复（启用连续性保护）
   bool request_global(bool manual = true);
 
-  // 全局搜索回调（UNINIT / LOST / GLOBAL 时由外层驱动：PF 或 correlative 全局）
+  // 全局搜索回调（UNINIT / LOST / GLOBAL 时由外层驱动或启用内置多峰 B&B 搜索）
   using GlobalFn =
     std::function<bool(const Scan &, Pose2 & out, double & score)>;
+  using GlobalMultiFn =
+    std::function<GlobalResult(const Scan &)>;
   void set_global_fn(GlobalFn fn);
+  void set_global_multi_fn(GlobalMultiFn fn);
+  void enable_builtin_global(
+    bool enable = true, int beams_subsample = 3,
+    double ang_step = 2.0 * kPi / 180.0, int n_hypotheses = 8);
 
   // 多假设候选队列（随 odom/IMU 传播，DEGRADED/LOST/GLOBAL 下多帧验证晋升）
   void add_hypotheses(const std::vector<Pose2> & hyps);
@@ -157,6 +165,7 @@ private:
   };
 
   void compute_motion_delta(Pose2 & delta, bool & imu_used, double & dt_imu);
+  bool handle_recovery_scan(const Scan & active_scan, CoreOutput & out);
   bool try_promote_hypotheses(const Scan & scan, CoreOutput & out);
   void propagate_hypotheses(const Pose2 & delta);
   void record_anomaly(bool is_bad);
@@ -166,6 +175,11 @@ private:
   std::shared_ptr<const MapField> field_;
   std::shared_ptr<const Matcher> matcher_;
   GlobalFn global_fn_;
+  GlobalMultiFn global_multi_fn_;
+  bool builtin_global_enabled_{false};
+  int builtin_beams_sub_{3};
+  double builtin_ang_step_{2.0 * kPi / 180.0};
+  int builtin_n_hyps_{8};
 
   LocState state_{LocState::UNINIT};
   Pose2 last_pose_{};          // map 系

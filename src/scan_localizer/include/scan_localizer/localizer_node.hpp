@@ -140,8 +140,8 @@ private:
     std_srvs::srv::Empty::Response::SharedPtr res);
   void onTfKeepaliveTimer();
 
-  // 执行一次全局搜索（在持有 state_mtx_ 的上下文中调用）
-  bool runGlobalSearchLocked(const Scan & scan, Pose2 & out, double & score);
+  // 执行一次多峰全局搜索（在持有 state_mtx_ 的上下文中调用，候选交由 Core 统一裁决）
+  GlobalResult runGlobalMultiSearchLocked(const Scan & scan);
 
   // 构造快照并在锁外发布 TF / 位姿 / 诊断 / 假设
   OutputSnapshot buildSnapshotLocked(
