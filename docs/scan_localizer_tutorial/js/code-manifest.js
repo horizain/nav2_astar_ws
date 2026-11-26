@@ -1,4 +1,4 @@
-// Complete manifest of all 33 files in src/scan_localizer (baseline commit 98fcd28)
+// Complete manifest of all 36 files in src/scan_localizer (synced after Step 1-4)
 // Consumed by code-index.html, app.js (Cmd+K global symbol search), and source-reference verification.
 (function (global) {
   "use strict";
@@ -16,13 +16,13 @@
     { id: "ch10", num: "10", title: "C++20 × Eigen × ROS 2 代码重建", sub: "语法卡片、关键行填空、源码步进与验收", file: "chapters/ch10.html" },
   ];
 
-  // Exact file & symbol map across all 33 files of src/scan_localizer
+  // Exact file & symbol map across all 36 files of src/scan_localizer
   const FILES = [
     // Group 1: Geometry & Map Representation
     {
       path: "include/scan_localizer/se2.hpp",
       group: "geometry",
-      lines: 119,
+      lines: 154,
       chapter: "ch01",
       role: "公共几何底座：wrap_angle、SE(2) 群位姿 Pose2、点云与缓冲复用 transform_scan",
       symbols: [
@@ -56,7 +56,7 @@
     {
       path: "include/scan_localizer/map_field.hpp",
       group: "geometry",
-      lines: 177,
+      lines: 215,
       chapter: "ch02",
       role: "OccupancyGrid 坐标换算与 MapField（EDT→SDF→似然场→swmax 金字塔）接口",
       symbols: [
@@ -67,7 +67,7 @@
     {
       path: "src/map_field.cpp",
       group: "geometry",
-      lines: 439,
+      lines: 751,
       chapter: "ch02",
       role: "双向 Meijster/FH EDT、SDF 双线性梯度、似然场与 2^k 滑窗最大值栈构建",
       symbols: [
@@ -83,7 +83,7 @@
     {
       path: "include/scan_localizer/matchers.hpp",
       group: "matchers",
-      lines: 159,
+      lines: 189,
       chapter: "ch03",
       role: "五种局部匹配器接口、MatchOptions 参数与 global_correlative 全局搜索声明",
       symbols: [
@@ -95,7 +95,7 @@
     {
       path: "src/matchers.cpp",
       group: "matchers",
-      lines: 1041,
+      lines: 1521,
       chapter: "ch04",
       role: "五种局部匹配器、未阻尼 Hessian 协方差、B&B 全局重定位与工厂实现",
       symbols: [
@@ -136,7 +136,7 @@
     {
       path: "include/scan_localizer/localizer_core.hpp",
       group: "core",
-      lines: 187,
+      lines: 213,
       chapter: "ch07",
       role: "ROS 无关核心状态机：4 状态各向异性 EKF [x,y,θ,b_g]^T、门控与多假设队列",
       symbols: [
@@ -147,7 +147,7 @@
     {
       path: "src/localizer_core.cpp",
       group: "core",
-      lines: 760,
+      lines: 1376,
       chapter: "ch07",
       role: "4D SE(2)+Bias EKF、Joseph 协方差、四道门控、静止锁死松弛与跳变保护实现",
       symbols: [
@@ -163,7 +163,7 @@
     {
       path: "include/scan_localizer/localizer_node.hpp",
       group: "ros",
-      lines: 252,
+      lines: 260,
       chapter: "ch08",
       role: "ROS 2 Jazzy Lifecycle 组件节点接口、回调组、快照与话题服务声明",
       symbols: [
@@ -174,7 +174,7 @@
     {
       path: "src/localizer_node.cpp",
       group: "ros",
-      lines: 1672,
+      lines: 1805,
       chapter: "ch08",
       role: "生命周期治理、锁外构场热切图、TF2 3D 外参、Odom 插值、热调参与 6×6 协方差发布",
       symbols: [
@@ -210,12 +210,12 @@
     {
       path: "CMakeLists.txt",
       group: "ros",
-      lines: 202,
+      lines: 208,
       chapter: "ch08",
       role: "core / sim_lib / node_component / executable / 9 组 gtest 与严格编译告警配置",
       symbols: [
         { name: "scan_localizer_core / scan_localizer_sim_lib", range: "1-120", desc: "生产核与仿真工具解耦与 -Wall -Wextra -Wpedantic" },
-        { name: "BUILD_TESTING gtest + ament_lint", range: "121-202", desc: "9 个 gtest 套件与 lint 目标注册" },
+        { name: "BUILD_TESTING gtest + ament_lint", range: "121-208", desc: "9 个 gtest 套件与 lint 目标注册" },
       ],
     },
     {
@@ -231,11 +231,11 @@
     {
       path: "README.md",
       group: "ros",
-      lines: 293,
+      lines: 300,
       chapter: "ch09",
       role: "scan_localizer 实验驱动设计总结与 E1–E10 选型结论手册",
       symbols: [
-        { name: "E1–E10 实验与架构总结", range: "1-293", desc: "基准复现命令、匹配器决策依据与 52 项参数一览" },
+        { name: "E1–E10 实验与架构总结", range: "1-297", desc: "基准复现命令、匹配器决策依据与 52 项参数一览" },
       ],
     },
     {
@@ -253,7 +253,7 @@
     {
       path: "include/scan_localizer/sim_world.hpp",
       group: "sim_test",
-      lines: 83,
+      lines: 96,
       chapter: "ch09",
       role: "受控仿真环境：仓库/长走廊生成、射线求交与精确角度激光模拟声明",
       symbols: [
@@ -264,7 +264,7 @@
     {
       path: "src/sim_world.cpp",
       group: "sim_test",
-      lines: 313,
+      lines: 525,
       chapter: "ch09",
       role: "DDA/步进光线求交、动态障碍注入、自由空间随机采样与 104m 轨迹生成",
       symbols: [
@@ -307,11 +307,11 @@
     {
       path: "test/test_se2.cpp",
       group: "sim_test",
-      lines: 156,
+      lines: 228,
       chapter: "ch01",
       role: "SE(2) 群运算、wrap_angle NaN/inf 防护与 transform_scan 单元测试",
       symbols: [
-        { name: "SE2 Test Cases", range: "1-156", desc: "群逆恒等式、O(1) 边界角与模板迭代器验证" },
+        { name: "SE2 Test Cases", range: "1-228", desc: "群逆恒等式、O(1) 边界角与模板迭代器验证" },
       ],
     },
     {
@@ -327,21 +327,21 @@
     {
       path: "test/test_map_field.cpp",
       group: "sim_test",
-      lines: 321,
+      lines: 348,
       chapter: "ch02",
       role: "edt1d 负截断边界、未知区 SDF、梯度精度与 swmax 金字塔单测 (10 cases)",
       symbols: [
-        { name: "MapField Test Cases", range: "1-321", desc: "{9,100,4}->8、双向 EDT 与退化图安全防护" },
+        { name: "MapField Test Cases", range: "1-348", desc: "{9,100,4}->8、双向 EDT 与退化图安全防护" },
       ],
     },
     {
       path: "test/test_matchers.cpp",
       group: "sim_test",
-      lines: 397,
+      lines: 482,
       chapter: "ch04",
       role: "五种匹配器收敛、退化走廊协方差、B&B 100%越界与失败回调单测 (8 cases)",
       symbols: [
-        { name: "Matcher Test Cases", range: "60-397", desc: "各向异性特征值比与多假设 NMS 回归验证" },
+        { name: "Matcher Test Cases", range: "60-482", desc: "各向异性特征值比与多假设 NMS 回归验证" },
       ],
     },
     {
@@ -357,11 +357,11 @@
     {
       path: "test/test_localizer_core.cpp",
       group: "sim_test",
-      lines: 816,
+      lines: 1073,
       chapter: "ch07",
       role: "4D EKF 零偏收敛、门控、走廊滑移、静止松弛与对称走廊防误跳单测 (14 cases)",
       symbols: [
-        { name: "4D EKF / Degeneracy / Jump Guard Tests", range: "120-816", desc: "包含 98fcd28 修复的两项回归单测" },
+        { name: "4D EKF / Degeneracy / Jump Guard Tests", range: "120-1073", desc: "包含 98fcd28 修复的两项回归单测" },
       ],
     },
     {
@@ -392,6 +392,36 @@
       role: "核心指标自动化回归门禁（精修误差、走廊协方差、104m 环路与 IMU 消融）",
       symbols: [
         { name: "Benchmark Regression Gates", range: "40-202", desc: "4 项核心指标 CI 守护测试" },
+      ],
+    },
+    {
+      path: "test/test_generalization_matrix.cpp",
+      group: "sim_test",
+      lines: 649,
+      chapter: "ch07",
+      role: "S1–S12 跨场景泛化回归矩阵：同一套默认参数覆盖走廊、对称、动态人群、倾斜走廊与地图先验",
+      symbols: [
+        { name: "Generalization Matrix S1-S12", range: "1-649", desc: "不针对单一场景调参的端到端回归" },
+      ],
+    },
+    {
+      path: "docs/generalization_audit_and_roadmap.md",
+      group: "ros",
+      lines: 59,
+      chapter: "ch07",
+      role: "泛化架构独立审核意见与 Step1–4 演进路线",
+      symbols: [
+        { name: "Audit & Roadmap", range: "1-59", desc: "审核结论、四阶段路线与完成状态" },
+      ],
+    },
+    {
+      path: "docs/corridor_relocalization_notes.md",
+      group: "ros",
+      lines: 58,
+      chapter: "ch07",
+      role: "走廊重定位与退化处理笔记",
+      symbols: [
+        { name: "Corridor Notes", range: "1-58", desc: "走廊重定位问题与对策" },
       ],
     },
   ];

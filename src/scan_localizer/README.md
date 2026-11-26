@@ -6,7 +6,7 @@
 - **五种匹配器 + 粒子滤波**全部实现并在统一基准下对比（**E1–E10**，见下）
 - **4 状态各向异性 EKF** `[x, y, θ, b_g]^T`：在线估计陀螺零偏 `b_g`，支持有/无里程计运行与多假设验证恢复
 - **ROS 2 Jazzy 生命周期组件节点**（默认 `autostart: false` 对齐 Nav2 `lifecycle_manager`），支持 TF2 3D 外参、时间戳对齐的里程计查询/插值、动态参数热更新与 YAML 地图热切换
-- **端到端仿真与完整测试集**：冷启动全局定位 → 104m 仓库环路跟踪（含人群遮挡段），9 组 gtest 单测/集成/回归测试 + 全套 ament lint
+- **端到端仿真与完整测试集**：冷启动全局定位 → 104m 仓库环路跟踪（含人群遮挡段），10 组 gtest 单测/集成/回归测试 + 全套 ament lint
 
 ```
 ┌────────────────────────── LocalizerNode (lifecycle 组件) ──────────────────────┐
@@ -106,14 +106,16 @@
 **结论 6：全局定位用滑窗最大值栈 B&B correlative + top-K 多假设队列，不用粒子滤波。**
 在 1200 m² 仓库中，B&B 单帧耗时 **~20 ms**，速度比 2 万粒子 PF 快 **22 倍**、召回率高 **11 倍**；对称货架区的歧义由 `LocalizerCore` 的多假设队列在后续帧随运动确认消歧。
 
+> Step 1–4 泛化改造后重跑的 E9 数据（地图先验 `use_map_prior`、自适应窗口 `adaptive_window`、法向均衡退化更新均默认开启）。
+
 ### E9 轨迹级架构对比（104m 环路 × 2% 轮滑 × 10 帧人群遮挡，同输入同 MapField σ=0.20m）
 
 | 架构 | 平均误差 | 最大误差 | 采纳率 | CPU 耗时 |
 |---|---|---|---|---|
-| **A: LocalizerCore + composed** (`window_lin=0.25`) | **21.4 mm** | **35.6 mm** | **100.0%** | 11.26 ms/scan（总 1.17 s） |
-| B: 粒子滤波（2000 粒子） | 33.2 mm | 215.8 mm | — | 3.96 ms/scan（总 0.41 s） |
+| **A: LocalizerCore + composed** (`window_lin=0.25`) | **17.6 mm** | **31.4 mm** | **100.0%** | 10.60 ms/scan（总 1.10 s） |
+| B: 粒子滤波（2000 粒子） | 33.2 mm | 215.8 mm | — | 3.80 ms/scan（总 0.40 s） |
 
-**结论 7：`LocalizerCore + composed` 最大误差仅为粒子滤波的 1/6（35.6mm vs 215.8mm）且全程 100% 确定性收敛。**
+**结论 7：`LocalizerCore + composed` 最大误差仅为粒子滤波的 1/7（31.4mm vs 215.8mm）且全程 100% 确定性收敛。**
 E9 中架构 A 放宽了搜索窗（`window_lin=0.25`）且未降采样（720 束）；生产配置 `window_lin=0.15` + `scan_subsample=2` 下 `composed` 耗时约 **3.3 ms/scan**，在算力持平的同时保持显著的精度与最坏情况上界优势。
 
 ### E10 IMU 陀螺航向融合（104m 环路 × 20 帧重度人群遮挡，陀螺零偏 0.02 rad/s + 随机游走）
@@ -150,7 +152,7 @@ source /opt/ros/jazzy/setup.bash
 colcon build --packages-select scan_localizer --cmake-args -DCMAKE_BUILD_TYPE=Release
 source install/setup.bash
 
-# 运行全部 9 组 gtest（含单测、节点集成测试与基准回归测试）+ ament lint
+# 运行全部 10 组 gtest（含单测、节点集成测试与基准回归测试）+ ament lint
 colcon test --packages-select scan_localizer --ctest-args --output-on-failure
 colcon test-result --all --test-result-base build/scan_localizer --verbose
 ```
@@ -247,7 +249,8 @@ scan_localizer/
 │   ├── test_localizer_core.cpp       4D EKF、状态机、多假设、绑架检测与无 odom 单测
 │   ├── test_localizer_node.cpp       生命周期节点、TF2 外参、热切图与服务集成测试
 │   ├── test_sim_world.cpp            仿真射线、DynBox 遮挡与走廊防死循环单测
-│   └── test_benchmark_regression.cpp E1/E4/E5/E8 轻量确定性回归断言
+│   ├── test_benchmark_regression.cpp E1/E4/E5/E8 轻量确定性回归断言
+│   └── test_generalization_matrix.cpp S1–S12 跨场景泛化回归（同一套默认参数）
 ├── config/localizer.yaml     全量生产参数（与 LocalizerNode 声明 100% 一一对应）
 ├── launch/demo.launch.py     组合容器 / 独立进程端到端演示启动文件
 └── docs/

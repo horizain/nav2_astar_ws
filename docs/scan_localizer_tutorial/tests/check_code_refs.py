@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Verify that:
-1) Every file in src/scan_localizer (all 33 files) is indexed in js/code-manifest.js;
+1) Every file in src/scan_localizer (all files) is indexed in js/code-manifest.js;
 2) Every data-file / data-lines / manifest symbol line range points to an existing file
    and valid in-bounds 1-based line numbers.
 """
@@ -102,7 +102,7 @@ def main() -> int:
         return 1
 
     print(
-        f"PASS: 33/33 files covered in code-manifest.js; "
+        f"PASS: all files covered in code-manifest.js; "
         f"{refs_checked} symbol/source line references verified cleanly."
     )
     return 0
