@@ -1292,41 +1292,45 @@ GlobalResult global_correlative(
   return out;
 }
 
-double beam_visibility_consistency(
+BeamPhysicsStats evaluate_beam_physics(
   const MapField & field, const Pose2 & pose, const Scan & scan,
-  bool check_occupied)
+  double inlier_gate, bool check_occupied)
 {
+  BeamPhysicsStats stats;
   if (!field.valid() || !pose_is_finite(pose) || scan.points.empty()) {
-    return 1.0;
+    return stats;
   }
   const auto & grid = field.grid();
   const Eigen::Vector2i og = grid.worldToGridIndex(pose.x, pose.y);
   if (!grid.inside(og.x(), og.y())) {
-    return 0.05;
+    stats.visibility = 0.05;
+    return stats;
   }
   const int8_t oc = grid.cells[
     static_cast<std::size_t>(og.y()) * static_cast<std::size_t>(grid.width) +
     static_cast<std::size_t>(og.x())];
   if (oc < 0 || (check_occupied && oc > 65)) {
-    return 0.15;
+    stats.visibility = 0.15;
+    return stats;
   }
+
+  const double res = grid.resolution;
+  const double sigma = std::max(res, field.sigma_m_);
+  // 所有物理尺度均由地图分辨率与似然平滑尺度 σ 导出，无走廊宽度/米数魔法阈值
+  const double tau_wall = std::max(3.0 * res, 2.5 * sigma);
+  const double clear_m = std::max(2.0 * res, 1.5 * sigma);
+  const double gate = std::isfinite(inlier_gate) ? std::max(res, inlier_gate) : sigma;
 
   const std::size_t n = scan.points.size();
   const std::size_t stride = std::max<std::size_t>(1, n / 256);
   const double c = std::cos(pose.theta);
   const double s = std::sin(pose.theta);
-  const double start_clear = std::max(0.30, 1.5 * grid.resolution);
-  const double end_clear = std::max(0.30, 1.5 * grid.resolution);
-  const double ds = std::max(0.25, 4.0 * grid.resolution);
 
   double total_len = 0.0;
-  double unk_bad_len = 0.0;
-  double occ_bad_len = 0.0;
-  double max_unk_depth = 0.0;
-  double max_occ_depth = 0.0;
-  std::size_t deep_unk_beams = 0;
-  std::size_t deep_occ_beams = 0;
-  std::size_t used = 0;
+  double bad_energy = 0.0;
+  double static_like_sum = 0.0;
+  int used = 0;
+  int inlier_cnt = 0;
 
   for (std::size_t i = 0; i < n; i += stride) {
     const auto & pt = scan.points[i];
@@ -1339,90 +1343,127 @@ double beam_visibility_consistency(
     const double ux = lx / r;
     const double uy = ly / r;
 
-    double unk_len = 0.0;
+    const double ex = pose.x + lx;
+    const double ey = pose.y + ly;
+    const Eigen::Vector2i end_idx = grid.worldToGridIndex(ex, ey);
+    bool end_unknown = !grid.inside(end_idx.x(), end_idx.y());
+    if (!end_unknown) {
+      const int8_t ec = grid.cells[
+        static_cast<std::size_t>(end_idx.y()) * static_cast<std::size_t>(grid.width) +
+        static_cast<std::size_t>(end_idx.x())];
+      end_unknown = (ec < 0);
+    }
+    const Eigen::Vector2d end_gf = grid.worldToGridF(ex, ey);
+    const double d_end = end_unknown ? -tau_wall : field.sdf(end_gf.x(), end_gf.y());
+    const bool end_inlier = !end_unknown && std::isfinite(d_end) && (std::abs(d_end) <= gate);
+    const bool end_on_wall = !end_unknown && std::isfinite(d_end) && (std::abs(d_end) <= tau_wall);
+    const bool end_in_free = !end_unknown && std::isfinite(d_end) && (d_end > tau_wall);
+
+    // 基于精确 SDF 的球面跳跃追踪（自由区按 0.75·SDF 大步跳跃，兼顾精度与低耗时）
+    double unk_len = end_unknown ? (0.5 * sigma) : 0.0;
     double occ_len = 0.0;
-    double first_occ_d = -1.0;
-    if (r > start_clear + end_clear) {
-      for (double d = start_clear; d <= r - end_clear; d += ds) {
-        const Eigen::Vector2i idx = grid.worldToGridIndex(pose.x + d * ux, pose.y + d * uy);
+    double first_occ_t = -1.0;
+    if (r > 2.0 * clear_m) {
+      double t = clear_m;
+      const double t_limit = r - clear_m;
+      while (t <= t_limit) {
+        const Eigen::Vector2i idx = grid.worldToGridIndex(pose.x + t * ux, pose.y + t * uy);
         if (!grid.inside(idx.x(), idx.y())) {
-          unk_len += ds;
+          const double step = std::max(2.0 * res, sigma);
+          unk_len += step;
+          t += step;
           continue;
         }
         const int8_t cell = grid.cells[
           static_cast<std::size_t>(idx.y()) * static_cast<std::size_t>(grid.width) +
           static_cast<std::size_t>(idx.x())];
         if (cell < 0) {
-          unk_len += ds;
+          const double step = std::max(2.0 * res, sigma);
+          unk_len += step;
+          t += step;
         } else if (check_occupied && cell > 65) {
-          occ_len += ds;
-          if (first_occ_d < 0.0) {first_occ_d = d;}
+          const double step = std::max(2.0 * res, 0.75 * sigma);
+          occ_len += step;
+          if (first_occ_t < 0.0) {first_occ_t = t;}
+          t += step;
+        } else {
+          const double d_obs = static_cast<double>(field.cellSdf(idx.x(), idx.y()));
+          const double step = std::clamp(0.75 * d_obs, std::max(2.0 * res, sigma), 0.60);
+          t += step;
         }
       }
     }
-    bool end_unknown = false;
-    const Eigen::Vector2i end_idx = grid.worldToGridIndex(pose.x + lx, pose.y + ly);
-    if (!grid.inside(end_idx.x(), end_idx.y())) {
-      unk_len += 0.5 * ds;
-      end_unknown = true;
-    } else {
-      const int8_t ec = grid.cells[
-        static_cast<std::size_t>(end_idx.y()) * static_cast<std::size_t>(grid.width) +
-        static_cast<std::size_t>(end_idx.x())];
-      if (ec < 0) {
-        unk_len += 0.5 * ds;
-        end_unknown = true;
-      }
-    }
-
-    const double eff_unk_depth =
-      ((unk_len >= 2.5 && end_unknown) || unk_len >= 4.0) ? unk_len : 0.0;
-    const double wall_pierce_depth = (occ_len >= 0.55 && first_occ_d >= 0.0) ?
-      std::max(0.0, r - first_occ_d - 0.45) :
-      0.0;
 
     total_len += r;
-    if (eff_unk_depth > 0.0) {
-      unk_bad_len += std::min(r, eff_unk_depth);
-      ++deep_unk_beams;
-      max_unk_depth = std::max(max_unk_depth, eff_unk_depth);
-    }
-    if (wall_pierce_depth >= 1.5) {
-      occ_bad_len += std::min(r, 0.30 * wall_pierce_depth);
-      ++deep_occ_beams;
-      max_occ_depth = std::max(max_occ_depth, wall_pierce_depth);
-    }
     ++used;
-  }
-
-  if (used == 0 || total_len <= 1e-6) {return 1.0;}
-  const std::size_t min_unk_beams = std::max<std::size_t>(3, used / 50);
-  const std::size_t min_occ_beams = std::max<std::size_t>(12, used / 12);
-
-  double unk_pen = 0.0;
-  if (deep_unk_beams >= min_unk_beams) {
-    const double unk_ratio = unk_bad_len / total_len;
-    const double unk_frac = static_cast<double>(deep_unk_beams) / static_cast<double>(used);
-    unk_pen += 1.8 * std::max(0.0, unk_ratio - 0.06);
-    unk_pen += 1.4 * std::max(0.0, unk_frac - 0.015);
-    if (unk_ratio >= 0.05) {
-      unk_pen += std::min(0.65, 0.08 * std::max(0.0, max_unk_depth - 2.0));
+    if (end_inlier) {
+      ++inlier_cnt;
     }
-  }
 
-  double occ_pen = 0.0;
-  if (deep_occ_beams >= min_occ_beams) {
-    const double occ_ratio = occ_bad_len / total_len;
-    const double occ_frac = static_cast<double>(deep_occ_beams) / static_cast<double>(used);
-    occ_pen += 1.5 * std::max(0.0, occ_ratio - 0.12);
-    occ_pen += 1.2 * std::max(0.0, occ_frac - 0.08);
-    if (occ_ratio >= 0.12) {
-      occ_pen += std::min(0.50, 0.06 * std::max(0.0, max_occ_depth - 2.0));
+    // 四态物理分类
+    if (end_in_free && unk_len == 0.0 && occ_len == 0.0) {
+      // 状态 2：自由空间前景动态遮挡 (z_short)
+      ++stats.n_short;
+      continue;
     }
+    static_like_sum += field.likelihoodAtF(end_gf.x(), end_gf.y());
+    if (end_on_wall && occ_len > 0.0 && unk_len <= tau_wall) {
+      // 状态 3：穿过建图静态残影团块后准确命中远端真实墙面 (clutter pass-through)
+      ++stats.n_clutter_pass;
+      ++stats.n_static;
+      if (occ_len > 3.0 * tau_wall) {
+        bad_energy += 0.5 * (occ_len - 3.0 * tau_wall);
+        ++stats.n_contradict;
+      }
+      continue;
+    }
+
+    const bool unk_spill = (end_unknown && unk_len > 4.0 * tau_wall) ||
+      (unk_len > 7.0 * tau_wall);
+    const bool void_pierce = !end_on_wall && (occ_len >= tau_wall) &&
+      (first_occ_t >= 0.0) && ((r - first_occ_t) > 2.5 * tau_wall);
+    if (unk_spill || void_pierce) {
+      // 状态 4：非物理穿墙悬空或深穿未建图未知灰区 (180° 翻转假峰)
+      const double e_unk = unk_spill ? unk_len : 0.0;
+      const double e_occ = void_pierce ? (r - first_occ_t) : 0.0;
+      bad_energy += std::min(r, std::max(e_unk, e_occ));
+      ++stats.n_contradict;
+      continue;
+    }
+
+    // 状态 1：常规静态墙面观测
+    ++stats.n_static;
   }
 
-  const double vis = 1.0 - std::max(unk_pen, occ_pen);
-  return std::clamp(vis, 0.05, 1.0);
+  if (used == 0 || total_len <= 1e-6) {
+    return stats;
+  }
+
+  // 允许 2% 随机噪点先验 (z_rand)，超额矛盾能量按指数似然平滑衰减
+  const double excess_bad_ratio = std::max(
+    0.0, (bad_energy - 0.025 * total_len) / total_len);
+  const double excess_bad_frac = std::max(
+    0.0, static_cast<double>(stats.n_contradict) / static_cast<double>(used) - 0.02);
+  stats.visibility = std::clamp(
+    std::exp(-4.5 * excess_bad_ratio - 3.5 * excess_bad_frac), 0.05, 1.0);
+
+  // 动态遮挡分母修正：最多扣除 55% 的 z_short 光束，既抗高密人群又防止空旷错位假高分/内点率
+  const double min_explainable = 0.45 * static_cast<double>(used);
+  const double eff_denom = std::max(
+    min_explainable, static_cast<double>(used - stats.n_short));
+  stats.static_score = std::clamp(
+    static_like_sum / std::max(1.0, eff_denom), 0.0, 1.0);
+  stats.static_inlier_ratio = std::clamp(
+    static_cast<double>(inlier_cnt) / std::max(1.0, eff_denom), 0.0, 1.0);
+  return stats;
+}
+
+double beam_visibility_consistency(
+  const MapField & field, const Pose2 & pose, const Scan & scan,
+  bool check_occupied)
+{
+  return evaluate_beam_physics(
+    field, pose, scan, 2.0 * field.sigma_m_, check_occupied).visibility;
 }
 
 // 工厂

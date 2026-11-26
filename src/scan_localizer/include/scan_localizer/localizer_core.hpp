@@ -73,10 +73,11 @@ struct CoreConfig
   double slew_alpha{0.7};          // 保留兼容字段（已由各向异性 EKF 取代）
   double max_update_trans{0.0};    // 可选单帧最大平移修正 (m)，<=0 不限幅
   double max_update_rot{0.0};      // 可选单帧最大航向修正 (rad)，<=0 不限幅
-  // 多假设队列
-  int hyp_confirm_frames{2};             // 单峰候选假设连续通过验证帧数后晋升
-  int hyp_ambiguous_confirm_frames{6};   // 对称多峰竞争（分差不足）时的最小连续确认帧数
-  double hyp_ambiguity_margin{0.08};     // 对称歧义判定分差阈值（低于此值视为多峰接近打平）
+  // 运动门控序贯贝叶斯多假设队列（兼容保留历史确认帧参数以适配外部显式覆写）
+  double hyp_promote_posterior{0.95};    // 贝叶斯后验晋升置信度门槛 (1 - α)
+  int hyp_confirm_frames{2};             // 候选假设最小确认帧数下限
+  int hyp_ambiguous_confirm_frames{6};   // 无真实几何扫描时的兼容歧义确认帧数
+  double hyp_ambiguity_margin{0.08};     // 初始播种多峰平手判定裕度
   double hyp_min_score{0.70};            // 候选假设得分门槛
   double hyp_min_inlier{0.65};           // 候选假设内点率门槛
   std::size_t max_hypotheses{8};         // 候选假设数量上限
@@ -159,6 +160,7 @@ private:
   struct Hypothesis
   {
     Pose2 pose;
+    double log_weight{0.0};
     int confirm_count{0};
     double last_score{0.0};
     double ema_score{0.0};
@@ -167,7 +169,8 @@ private:
 
   void compute_motion_delta(Pose2 & delta, bool & imu_used, double & dt_imu);
   bool handle_recovery_scan(const Scan & active_scan, CoreOutput & out);
-  bool try_promote_hypotheses(const Scan & scan, CoreOutput & out);
+  bool try_promote_hypotheses(
+    const Scan & scan, const Pose2 & motion_delta, CoreOutput & out);
   void propagate_hypotheses(const Pose2 & delta);
   void record_anomaly(bool is_bad);
   int anomaly_count() const;

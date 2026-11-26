@@ -445,5 +445,116 @@ public:
   EXPECT_NEAR(core.last_cov().trace(), trace_before, 1e-9);
 }
 
+TEST(GeneralizationMatrixTest, S10_StationarySymmetryNeverCollapsesUntilMotionBreaksTie)
+{
+  const OccupancyGrid grid = make_twin_rooms(0.05);
+  auto field = std::make_shared<MapField>();
+  ASSERT_TRUE(field->build(grid, 0.20));
+  const sloc::CoreConfig kDefaultCfg{};
+  auto matcher = sloc::make_matcher("composed");
+  sloc::LocalizerCore core(kDefaultCfg);
+  core.set_map(field);
+  core.set_matcher(matcher);
+  core.enable_builtin_global(true);
+
+  ScanSimConfig scfg;
+  scfg.beams = 270;
+  scfg.fov = sloc::kPi;
+  scfg.noise_std = 0.01;
+  scfg.range_max = 12.0;
+
+  std::mt19937 rng(2026);
+  const Pose2 gt(5.0, 4.5, -0.5 * sloc::kPi);
+  Pose2 odom(0.0, 0.0, 0.0);
+  core.on_odom(odom);
+
+  // 静止连续观测 20 帧带噪扫描：运动门控 γ=0 严格阻止静态相关性导致的假自信锁错房
+  for (int f = 0; f < 20; ++f) {
+    const auto scan = make_scan(grid, gt, scfg, rng);
+    const auto out = core.on_scan(scan);
+    EXPECT_FALSE(out.accepted) << "frame=" << f;
+    EXPECT_EQ(out.state, LocState::GLOBAL) << "frame=" << f;
+    EXPECT_GE(core.hypothesis_count(), 2u) << "frame=" << f;
+  }
+
+  const std::vector<Pose2> waypoints = {
+    Pose2(5.0, 4.5, 0.0),
+    Pose2(5.0, 4.5, 0.5 * sloc::kPi),
+    Pose2(5.0, 5.5, 0.5 * sloc::kPi),
+    Pose2(5.0, 6.5, 0.5 * sloc::kPi),
+    Pose2(5.8, 7.6, 0.2),
+    Pose2(6.8, 8.2, 0.0),
+    Pose2(7.5, 8.2, 0.0)
+  };
+
+  Pose2 last_gt = gt;
+  CoreOutput last_out{};
+  for (const auto & wp : waypoints) {
+    odom = odom * (last_gt.inverse() * wp);
+    core.on_odom(odom);
+    last_gt = wp;
+    const auto scan = make_scan(grid, wp, scfg, rng);
+    last_out = core.on_scan(scan);
+  }
+
+  EXPECT_EQ(last_out.state, LocState::TRACKING);
+  EXPECT_LT(std::hypot(last_out.pose.x - last_gt.x, last_out.pose.y - last_gt.y), 0.15);
+  EXPECT_LT(last_out.pose.x, 10.0);
+}
+
+TEST(GeneralizationMatrixTest, S11_HeavyDynamicCrowdOver40PercentOcclusionZeroRejections)
+{
+  const OccupancyGrid grid = make_warehouse(0.05);
+  auto field = std::make_shared<MapField>();
+  ASSERT_TRUE(field->build(grid, 0.20));
+  const sloc::CoreConfig kDefaultCfg{};
+  auto matcher = sloc::make_matcher("composed");
+  sloc::LocalizerCore core(kDefaultCfg);
+  core.set_map(field);
+  core.set_matcher(matcher);
+
+  Pose2 gt(8.0, 14.0, 0.0);
+  Pose2 odom(0.0, 0.0, 0.0);
+  core.on_odom(odom);
+  core.set_initial_pose(gt);
+
+  ScanSimConfig scfg;
+  scfg.beams = 360;
+  scfg.fov = 2.0 * sloc::kPi;
+  scfg.noise_std = 0.01;
+  scfg.range_max = 15.0;
+
+  std::mt19937 rng(2027);
+  CoreOutput last_out{};
+
+  for (int step = 0; step < 12; ++step) {
+    if (step > 0) {
+      gt.x += 0.20;
+      odom = odom * Pose2(0.20 * 1.01, 0.0, 0.0);
+      core.on_odom(odom);
+    }
+
+    const std::vector<DynBox> dyn_boxes = {
+      {gt.x + 0.85, gt.y + 0.25, 0.35, 0.35},
+      {gt.x + 0.85, gt.y - 0.35, 0.35, 0.35},
+      {gt.x - 0.85, gt.y + 0.25, 0.35, 0.35},
+      {gt.x, gt.y + 0.85, 0.35, 0.30}
+    };
+
+    const auto scan = make_scan(grid, gt, scfg, rng, dyn_boxes);
+    if (step == 0) {
+      const auto physics = evaluate_beam_physics(
+        *field, gt, scan, kDefaultCfg.match_opt.inlier_gate, true);
+      EXPECT_GT(physics.n_short, 80);
+    }
+
+    last_out = core.on_scan(scan);
+    EXPECT_TRUE(last_out.accepted);
+    EXPECT_EQ(last_out.state, LocState::TRACKING);
+  }
+
+  EXPECT_LT(std::hypot(last_out.pose.x - gt.x, last_out.pose.y - gt.y), 0.06);
+}
+
 }  // namespace
 }  // namespace sloc::sim

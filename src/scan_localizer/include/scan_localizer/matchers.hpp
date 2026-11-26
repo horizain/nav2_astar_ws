@@ -150,6 +150,26 @@ GlobalResult global_correlative(
   int beams_subsample, double ang_step,
   int n_hypotheses);
 
+// 四态物理波束评估结果（基于精确 SDF 球面跳跃追踪）：
+//   1) STATIC_HIT    : 射线经自由空间命中真实墙面
+//   2) Z_SHORT       : 自由空间内提前截断的新增动态遮挡（从有效静态内点分母中合理扣除）
+//   3) CLUTTER_PASS  : 穿过局部建图残影团块但终点落在后方真实墙面（免除穿墙重罚）
+//   4) CONTRADICTION : 穿墙射入未知灰区或悬空外溢（按超额矛盾比例施加指数似然惩罚）
+struct BeamPhysicsStats
+{
+  double visibility{1.0};           // 物理可见性一致性似然 ∈ [0.05, 1.0]
+  double static_score{0.0};         // 扣除合理 z_short 前景遮挡后的有效静态平均似然 ∈ [0, 1]
+  double static_inlier_ratio{0.0};  // 扣除合理 z_short 前景遮挡后的有效静态内点率 ∈ [0, 1]
+  int n_static{0};
+  int n_short{0};
+  int n_clutter_pass{0};
+  int n_contradict{0};
+};
+
+BeamPhysicsStats evaluate_beam_physics(
+  const MapField & field, const Pose2 & pose, const Scan & scan,
+  double inlier_gate, bool check_occupied = true);
+
 // 光束内部自由空间 / 穿墙 / 未知区一致性因子 ∈ [0.05, 1.0]：
 // 用于识别“仅靠侧墙端点得分虚高、但长光束穿墙或射出地图外未知灰区”的反向/错位假峰。
 double beam_visibility_consistency(

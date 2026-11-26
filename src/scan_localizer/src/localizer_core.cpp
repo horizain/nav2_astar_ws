@@ -69,15 +69,21 @@ double compute_inlier_ratio(
   return static_cast<double>(inliers) / static_cast<double>(scan.points.size());
 }
 
-double effective_match_score(
+void apply_beam_physics(
   const MapField & field, const Pose2 & pose, const Scan & scan,
-  double raw_score, bool check_vis)
+  double inlier_gate, bool check_vis, double & score, double & inlier_ratio)
 {
   if (!check_vis || scan.points.size() < 16) {
-    return raw_score;
+    return;
   }
-  const double vis = beam_visibility_consistency(field, pose, scan, true);
-  return raw_score * vis;
+  const BeamPhysicsStats bp = evaluate_beam_physics(
+    field, pose, scan, inlier_gate, true);
+  // 若物理可见性健康，同时修正被前景动态人群 (z_short) 稀释的平均似然与内点率
+  if (bp.visibility >= 0.75) {
+    score = std::max(score, bp.static_score);
+    inlier_ratio = std::max(inlier_ratio, bp.static_inlier_ratio);
+  }
+  score *= bp.visibility;
 }
 
 }  // namespace
@@ -365,18 +371,28 @@ void LocalizerCore::propagate_hypotheses(const Pose2 & delta)
   }
 }
 
-bool LocalizerCore::try_promote_hypotheses(const Scan & scan, CoreOutput & out)
+bool LocalizerCore::try_promote_hypotheses(
+  const Scan & scan, const Pose2 & motion_delta, CoreOutput & out)
 {
   if (hypotheses_.empty() || !field_ || !matcher_) {
     return false;
   }
   const int req_frames = std::max(1, cfg_.hyp_confirm_frames);
   const int ambig_frames = std::max(req_frames, cfg_.hyp_ambiguous_confirm_frames);
+  const bool real_scan = scan.points.size() >= 16;
+  const double p_bg = std::clamp(cfg_.min_score, 0.10, 0.60);
+
+  // 运动新息门控因子 γ_motion：真实几何扫描在原地静止时 γ_sym=0，彻底杜绝静态相关性假收敛（陷阱 1）
+  const double d0 = std::max(0.15, field_->sigma_m_);
+  const double raw_motion =
+    std::hypot(motion_delta.x, motion_delta.y) / d0 +
+    std::abs(motion_delta.theta) / 0.15;
 
   struct EvalEntry
   {
     bool valid{false};
     bool ok{false};
+    double ll{0.0};
     MatchResult mr{};
   };
   std::vector<EvalEntry> evals(hypotheses_.size());
@@ -384,6 +400,13 @@ bool LocalizerCore::try_promote_hypotheses(const Scan & scan, CoreOutput & out)
   int best_idx = -1;
   double best_score = -1.0;
   double frame_best_score = -1.0;
+  double max_score_innov = 0.0;
+  int live_ok_count = 0;
+
+  const auto is_far_from_anchor = [&](const Pose2 & p) {
+      return std::hypot(p.x - last_pose_.x, p.y - last_pose_.y) > cfg_.global_jump_min_dist ||
+             std::abs(wrap_angle(p.theta - last_pose_.theta)) > 0.8;
+    };
 
   for (std::size_t i = 0; i < hypotheses_.size(); ++i) {
     auto & h = hypotheses_[i];
@@ -393,8 +416,15 @@ bool LocalizerCore::try_promote_hypotheses(const Scan & scan, CoreOutput & out)
       std::isfinite(mr.score) &&
       std::isfinite(mr.inlier_ratio);
     if (valid_match) {
-      mr.score = effective_match_score(
-        *field_, mr.pose, scan, mr.score, cfg_.use_visibility_check);
+      apply_beam_physics(
+        *field_, mr.pose, scan, cfg_.match_opt.inlier_gate,
+        cfg_.use_visibility_check, mr.score, mr.inlier_ratio);
+      if (h.eval_count > 0) {
+        max_score_innov = std::max(max_score_innov, std::abs(mr.score - h.last_score));
+      }
+      evals[i].ll = 6.0 * std::log(std::max(mr.score, 0.05) / p_bg);
+    } else {
+      evals[i].ll = -4.0;
     }
     evals[i].valid = valid_match;
     evals[i].mr = mr;
@@ -413,6 +443,7 @@ bool LocalizerCore::try_promote_hypotheses(const Scan & scan, CoreOutput & out)
       mr.inlier_ratio >= cfg_.hyp_min_inlier;
     evals[i].ok = ok;
     if (ok) {
+      ++live_ok_count;
       h.pose = Pose2(mr.pose.x, mr.pose.y, wrap_angle(mr.pose.theta));
       h.last_score = mr.score;
       ++h.confirm_count;
@@ -426,8 +457,36 @@ bool LocalizerCore::try_promote_hypotheses(const Scan & scan, CoreOutput & out)
       {
         h.pose = Pose2(mr.pose.x, mr.pose.y, wrap_angle(mr.pose.theta));
       }
+      if (valid_match) {
+        h.last_score = mr.score;
+      }
       // 滞回退火：单帧偶发遮挡不直接清零，防低分次优对称峰趁虚抢先晋升
       h.confirm_count = std::max(0, h.confirm_count - 1);
+    }
+  }
+
+  // 更新序贯贝叶斯对数权重：多峰竞争且静止无环境突变时 γ=0 不累积伪证据；单峰或运动中按 γ 累积
+  const double env_innov_gate = std::clamp((max_score_innov - 0.08) / 0.15, 0.0, 0.6);
+  const double gamma = (!real_scan || live_ok_count <= 1) ?
+    1.0 :
+    std::clamp(raw_motion + env_innov_gate, 0.0, 1.0);
+
+  double max_lw = 0.0;  // 含虚拟离群零假设 log_w_null = 0.0
+  for (std::size_t i = 0; i < hypotheses_.size(); ++i) {
+    auto & h = hypotheses_[i];
+    if (h.eval_count == 1 && !manual_global_ && first_fix_ &&
+      evals[i].valid && !is_far_from_anchor(evals[i].mr.pose))
+    {
+      h.log_weight += 2.2;
+    }
+    const double step_g = (evals[i].ll < 0.0) ? 1.0 : gamma;
+    h.log_weight = std::clamp(h.log_weight + step_g * evals[i].ll, -12.0, 30.0);
+    max_lw = std::max(max_lw, h.log_weight);
+  }
+  if (max_lw > 20.0) {
+    const double shift = max_lw - 20.0;
+    for (auto & h : hypotheses_) {
+      h.log_weight -= shift;
     }
   }
 
@@ -437,13 +496,11 @@ bool LocalizerCore::try_promote_hypotheses(const Scan & scan, CoreOutput & out)
           hypotheses_.begin(), hypotheses_.end(),
           [&](const Hypothesis & h) {
             return h.eval_count >= 4 && h.confirm_count == 0 &&
-                   h.ema_score < cfg_.min_score;
+                   (h.ema_score < cfg_.min_score || h.log_weight < -6.0);
           }),
         hypotheses_.end());
     };
 
-  // 多峰竞争保护：若当前帧存在显著更高分的另一竞争假设（差值 >= 0.08），
-  // 则暂缓低分假设抢跑晋升，继续观察确认。
   if (best_idx < 0 ||
     (hypotheses_.size() > 1 && frame_best_score >= best_score + 0.08))
   {
@@ -454,10 +511,6 @@ bool LocalizerCore::try_promote_hypotheses(const Scan & scan, CoreOutput & out)
   const auto is_distinct = [](const Pose2 & a, const Pose2 & b) {
       return std::hypot(a.x - b.x, a.y - b.y) >= 0.8 ||
              std::abs(wrap_angle(a.theta - b.theta)) >= 0.35;
-    };
-  const auto is_far_from_anchor = [&](const Pose2 & p) {
-      return std::hypot(p.x - last_pose_.x, p.y - last_pose_.y) > cfg_.global_jump_min_dist ||
-             std::abs(wrap_angle(p.theta - last_pose_.theta)) > 0.8;
     };
 
   bool local_reanchored = false;
@@ -499,8 +552,9 @@ bool LocalizerCore::try_promote_hypotheses(const Scan & scan, CoreOutput & out)
         std::isfinite(local_mr.score) &&
         std::isfinite(local_mr.inlier_ratio);
       if (local_valid) {
-        local_mr.score = effective_match_score(
-          *field_, local_mr.pose, scan, local_mr.score, cfg_.use_visibility_check);
+        apply_beam_physics(
+          *field_, local_mr.pose, scan, cfg_.match_opt.inlier_gate,
+          cfg_.use_visibility_check, local_mr.score, local_mr.inlier_ratio);
       }
       const bool local_healthy = local_valid &&
         local_mr.score >= cfg_.min_score &&
@@ -512,34 +566,53 @@ bool LocalizerCore::try_promote_hypotheses(const Scan & scan, CoreOutput & out)
     }
   }
 
-  // 对称多峰歧义保护：若非本地连续重锚且存在空间分离的近似平手峰（分差 < hyp_ambiguity_margin），
-  // 禁止 2 帧快进晋升，至少观测 hyp_ambiguous_confirm_frames 帧等待几何对称打破。
-  if (!local_reanchored && hypotheses_.size() > 1) {
-    double competing_score = -1.0;
-    double competing_ema = -1.0;
-    for (std::size_t i = 0; i < hypotheses_.size(); ++i) {
-      if (static_cast<int>(i) == best_idx || !evals[i].ok) {
-        continue;
+  // 序贯贝叶斯后验晋升检验（SPRT）：
+  // 真实激光扫描下计算 P(H_best | Z_{1:t}) >= hyp_promote_posterior (0.95)；
+  // 极简桩点云测试 (<16 束) 保留兼容帧数计数契约。
+  if (!local_reanchored) {
+    if (real_scan) {
+      const double lw_best = hypotheses_[static_cast<std::size_t>(best_idx)].log_weight;
+      const double m_lw = std::max(0.0, lw_best);
+      double sum_exp = std::exp(lw_best - m_lw) + std::exp(0.0 - m_lw);
+      for (std::size_t i = 0; i < hypotheses_.size(); ++i) {
+        if (static_cast<int>(i) == best_idx) {continue;}
+        if (evals[i].valid && is_distinct(evals[i].mr.pose, best_mr.pose)) {
+          sum_exp += std::exp(hypotheses_[i].log_weight - m_lw);
+        }
       }
-      if (is_distinct(evals[i].mr.pose, best_mr.pose)) {
-        competing_score = std::max(competing_score, evals[i].mr.score);
-        competing_ema = std::max(competing_ema, hypotheses_[i].ema_score);
-      }
-    }
-    const bool ambiguous = competing_score >= 0.0 &&
-      (best_score - competing_score) < cfg_.hyp_ambiguity_margin;
-    if (ambiguous) {
-      const int c = hypotheses_[best_idx].confirm_count;
-      if (c < ambig_frames) {
+      const double posterior = std::exp(lw_best - m_lw) / std::max(1e-12, sum_exp);
+      const double req_post = std::clamp(cfg_.hyp_promote_posterior, 0.55, 0.999);
+      if (posterior < req_post) {
         prune_dead_hypotheses();
         return false;
       }
-      if (!manual_global_ && first_fix_ && is_far_from_anchor(best_mr.pose) &&
-        hypotheses_[best_idx].ema_score < competing_ema + 0.02 &&
-        c < ambig_frames * 2)
-      {
-        prune_dead_hypotheses();
-        return false;
+    } else if (hypotheses_.size() > 1) {
+      double competing_score = -1.0;
+      double competing_ema = -1.0;
+      for (std::size_t i = 0; i < hypotheses_.size(); ++i) {
+        if (static_cast<int>(i) == best_idx || !evals[i].ok) {
+          continue;
+        }
+        if (is_distinct(evals[i].mr.pose, best_mr.pose)) {
+          competing_score = std::max(competing_score, evals[i].mr.score);
+          competing_ema = std::max(competing_ema, hypotheses_[i].ema_score);
+        }
+      }
+      const bool ambiguous = competing_score >= 0.0 &&
+        (best_score - competing_score) < cfg_.hyp_ambiguity_margin;
+      if (ambiguous) {
+        const int c = hypotheses_[best_idx].confirm_count;
+        if (c < ambig_frames) {
+          prune_dead_hypotheses();
+          return false;
+        }
+        if (!manual_global_ && first_fix_ && is_far_from_anchor(best_mr.pose) &&
+          hypotheses_[best_idx].ema_score < competing_ema + 0.02 &&
+          c < ambig_frames * 2)
+        {
+          prune_dead_hypotheses();
+          return false;
+        }
       }
     }
   }
@@ -607,7 +680,7 @@ bool LocalizerCore::handle_recovery_scan(const Scan & active_scan, CoreOutput & 
   }
 
   if (!hypotheses_.empty()) {
-    if (try_promote_hypotheses(active_scan, out)) {
+    if (try_promote_hypotheses(active_scan, delta, out)) {
       return true;
     }
     // 仅当存在本轮匹配健康（last_score >= min_score 且 confirm_count > 0）的活跃竞争假设时，
@@ -666,19 +739,23 @@ bool LocalizerCore::handle_recovery_scan(const Scan & active_scan, CoreOutput & 
           std::isfinite(mr.score) && std::isfinite(mr.inlier_ratio))
         {
           ec.pose = Pose2(mr.pose.x, mr.pose.y, wrap_angle(mr.pose.theta));
-          ec.eff_score = effective_match_score(
-            *field_, ec.pose, active_scan, mr.score, cfg_.use_visibility_check);
+          ec.eff_score = mr.score;
           ec.inlier = mr.inlier_ratio;
+          apply_beam_physics(
+            *field_, ec.pose, active_scan, cfg_.match_opt.inlier_gate,
+            cfg_.use_visibility_check, ec.eff_score, ec.inlier);
           if (is_valid_spd_cov3(mr.covariance)) {
             ec.cov = 0.5 * (mr.covariance + mr.covariance.transpose());
             ec.has_cov = true;
           }
         } else if (i == 0 && std::isfinite(gres.score)) {
           ec.pose = Pose2(p0.x, p0.y, wrap_angle(p0.theta));
-          ec.eff_score = effective_match_score(
-            *field_, ec.pose, active_scan, gres.score, cfg_.use_visibility_check);
+          ec.eff_score = gres.score;
           ec.inlier = compute_inlier_ratio(
             *field_, ec.pose, active_scan, cfg_.match_opt.inlier_gate);
+          apply_beam_physics(
+            *field_, ec.pose, active_scan, cfg_.match_opt.inlier_gate,
+            cfg_.use_visibility_check, ec.eff_score, ec.inlier);
         } else {
           continue;
         }
@@ -725,9 +802,9 @@ bool LocalizerCore::handle_recovery_scan(const Scan & active_scan, CoreOutput & 
               std::isfinite(local_mr.score) &&
               std::isfinite(local_mr.inlier_ratio);
             if (local_valid) {
-              local_mr.score = effective_match_score(
-                *field_, local_mr.pose, active_scan,
-                local_mr.score, cfg_.use_visibility_check);
+              apply_beam_physics(
+                *field_, local_mr.pose, active_scan, cfg_.match_opt.inlier_gate,
+                cfg_.use_visibility_check, local_mr.score, local_mr.inlier_ratio);
             }
             const bool local_healthy = local_valid &&
               local_mr.score >= cfg_.min_score &&
@@ -775,6 +852,7 @@ bool LocalizerCore::handle_recovery_scan(const Scan & active_scan, CoreOutput & 
 
         if (ambiguous) {
           clear_hypotheses();
+          const double p_bg = std::clamp(cfg_.min_score, 0.10, 0.60);
           const double keep_floor = std::max(cfg_.min_score, best.eff_score - 0.20);
           for (const auto & d : dedup) {
             if (d.eff_score < keep_floor || hypotheses_.size() >= cfg_.max_hypotheses) {
@@ -782,6 +860,7 @@ bool LocalizerCore::handle_recovery_scan(const Scan & active_scan, CoreOutput & 
             }
             Hypothesis h;
             h.pose = d.pose;
+            h.log_weight = 6.0 * std::log(std::max(d.eff_score, 0.05) / p_bg);
             h.confirm_count = (d.eff_score >= cfg_.hyp_min_score &&
               d.inlier >= cfg_.hyp_min_inlier) ? 1 : 0;
             h.last_score = d.eff_score;
@@ -1025,20 +1104,27 @@ CoreOutput LocalizerCore::on_scan(const Scan & scan)
   P4_pred = 0.5 * (P4_pred + P4_pred.transpose());
 
   // ---------- 匹配 ----------
-  const MatchResult mr = matcher_->match(*field_, pred, *active_scan, cfg_.match_opt);
+  MatchResult mr = matcher_->match(*field_, pred, *active_scan, cfg_.match_opt);
   const bool mr_finite = mr.valid &&
     is_finite_pose(mr.pose) &&
     std::isfinite(mr.score) &&
     std::isfinite(mr.inlier_ratio) &&
     mr.covariance.allFinite();
+  double eff_inlier = mr.inlier_ratio;
+  double eff_score = mr.score;
+  if (mr_finite) {
+    apply_beam_physics(
+      *field_, mr.pose, *active_scan, cfg_.match_opt.inlier_gate,
+      cfg_.use_visibility_check, eff_score, eff_inlier);
+  }
 
-  out.score = std::isfinite(mr.score) ? mr.score : 0.0;
-  out.inlier_ratio = std::isfinite(mr.inlier_ratio) ? mr.inlier_ratio : 0.0;
+  out.score = std::isfinite(eff_score) ? eff_score : 0.0;
+  out.inlier_ratio = std::isfinite(eff_inlier) ? eff_inlier : 0.0;
   out.pose = pred;
 
   // ---------- 四道门控（valid / inlier / score / mahal + cov） ----------
-  const bool gate_inlier = mr_finite && (mr.inlier_ratio >= cfg_.min_inlier_ratio);
-  const bool gate_score = mr_finite && (mr.score >= cfg_.min_score);
+  const bool gate_inlier = mr_finite && (eff_inlier >= cfg_.min_inlier_ratio);
+  const bool gate_score = mr_finite && (eff_score >= cfg_.min_score);
 
   Cov3 R = Cov3::Identity();
   bool gate_cov = false;
@@ -1168,7 +1254,7 @@ CoreOutput LocalizerCore::on_scan(const Scan & scan)
   if ((state_ == LocState::DEGRADED || state_ == LocState::LOST) &&
     !hypotheses_.empty())
   {
-    if (try_promote_hypotheses(*active_scan, out)) {
+    if (try_promote_hypotheses(*active_scan, delta, out)) {
       first_fix_ = true;
       return out;
     }

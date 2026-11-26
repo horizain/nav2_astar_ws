@@ -109,6 +109,16 @@ public:
   // grad: 插值解析梯度（指向 SDF 增大方向，单位 m/m）
   double sdf(double gx, double gy, Eigen::Vector2d * grad = nullptr) const;
 
+  // 整数格 O(1) 精确 SDF 读取（供射线球面跳跃追踪快速步进使用）
+  inline float cellSdf(int ix, int iy) const
+  {
+    if (!valid_ || !grid_->inside(ix, iy)) {return 0.0f;}
+    const std::size_t idx =
+      static_cast<std::size_t>(iy) * static_cast<std::size_t>(grid_->width) +
+      static_cast<std::size_t>(ix);
+    return sdf_cells_[idx];
+  }
+
   // 似然打分：点(栅格系) → [0,1]（build 时未知/灰区已写入 unknown_score_，单次查表）
   inline double likelihood(int ix, int iy) const
   {
