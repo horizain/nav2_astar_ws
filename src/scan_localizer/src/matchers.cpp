@@ -67,15 +67,99 @@ inline void eval_stats(
   inlier_ratio = n > 0 ? inl / n : 0.0;
 }
 
-// 基于特征分解的安全海森求逆协方差（退化方向夹紧至正下界保留大方差，含物理下限）
+// 计算每束激光点的弧长独立观测权重 ν_i ∈ [0.02, 1]、扫描局部轮廓法向与均方根旋转力臂 L_arm (m)
+// 消除等角采样近墙密度偏置，并消除斜向走廊栅格阶梯锯齿伪梯度（任意旋转角下协方差严格各向异性）
+void compute_scan_info_weights(
+  const Scan & scan, double corr_len,
+  std::vector<double> & weights, double & rms_arm,
+  std::vector<Vec2> * contour_normals = nullptr)
+{
+  const std::size_t n = scan.points.size();
+  weights.assign(n, 0.0);
+  if (contour_normals) {
+    contour_normals->assign(n, Vec2::Zero());
+  }
+  const double lc = std::max(0.10, corr_len);
+  double r2_sum = 0.0;
+  double w_sum = 0.0;
+  int valid_cnt = 0;
+  bool has_prev = false;
+  Vec2 prev = Vec2::Zero();
+  for (std::size_t i = 0; i < n; ++i) {
+    const auto & pt = scan.points[i];
+    if (!pt_is_finite(pt)) {continue;}
+    r2_sum += pt.squaredNorm();
+    ++valid_cnt;
+    const double ds = has_prev ? std::min((pt - prev).norm(), lc) : lc;
+    const double w = std::clamp(ds / lc, 0.02, 1.0);
+    weights[i] = w;
+    w_sum += w;
+    prev = pt;
+    has_prev = true;
+  }
+  if (contour_normals && n >= 5) {
+    for (std::size_t i = 0; i < n; ++i) {
+      if (!pt_is_finite(scan.points[i])) {continue;}
+      const double max_chord = std::max(0.60, 0.45 * scan.points[i].norm());
+      // 在前后 ±3 束内寻找共线连续墙面弦向量（兼容远距掠射侧墙，平滑 5cm 栅格阶梯锯齿）
+      int lo = static_cast<int>(i);
+      int hi = static_cast<int>(i);
+      for (int d = 1; d <= 3; ++d) {
+        const int il = static_cast<int>(i) - d;
+        if (il >= 0 && pt_is_finite(scan.points[static_cast<std::size_t>(il)]) &&
+          (scan.points[static_cast<std::size_t>(il)] - scan.points[i]).norm() < max_chord)
+        {
+          lo = il;
+        }
+        const int ir = static_cast<int>(i) + d;
+        if (ir < static_cast<int>(n) &&
+          pt_is_finite(scan.points[static_cast<std::size_t>(ir)]) &&
+          (scan.points[static_cast<std::size_t>(ir)] - scan.points[i]).norm() < max_chord)
+        {
+          hi = ir;
+        }
+      }
+      if (hi > lo) {
+        const Vec2 & plo = scan.points[static_cast<std::size_t>(lo)];
+        const Vec2 & phi = scan.points[static_cast<std::size_t>(hi)];
+        const Vec2 chord = phi - plo;
+        const double cn = chord.norm();
+        if (cn > 0.04) {
+          const Vec2 rel = scan.points[i] - plo;
+          const double line_dist =
+            std::abs(rel.x() * chord.y() - rel.y() * chord.x()) / cn;
+          if (lo == static_cast<int>(i) || hi == static_cast<int>(i) || line_dist < 0.08) {
+            (*contour_normals)[i] = Vec2(-chord.y() / cn, chord.x() / cn);
+          }
+        }
+      }
+    }
+  }
+  rms_arm = (valid_cnt > 0) ?
+    std::max(0.5, std::sqrt(r2_sum / static_cast<double>(valid_cnt))) :
+    2.0;
+  if (valid_cnt >= 5 && w_sum > 1e-9 && w_sum < 5.0) {
+    const double boost = 5.0 / w_sum;
+    for (double & w : weights) {
+      w *= boost;
+    }
+  }
+}
+
+// 量纲一致的可观子空间海森求逆协方差（无需 cond > 6 经验补丁）：
+// 通过均方根力臂 L_arm 将 [x, y, θ] 映射至同量纲米制空间，自动压制栅格锯齿伪刚度并膨胀退化轴方差
 Cov3 cov_from_hessian(
   const Eigen::Matrix3d & H, double res_var,
+  double rms_arm = 2.0,
   double min_var_xy = 1e-4,                       // (1cm)²
   double min_var_th = 1.2e-5,                     // (0.2°)²
   double inflation = 2.0)
 {
   const Eigen::Matrix3d Hsym = 0.5 * (H + H.transpose());
-  Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> es(Hsym);
+  const double inv_arm = 1.0 / std::max(0.5, rms_arm);
+  const Eigen::Vector3d d_vec(1.0, 1.0, inv_arm);
+  const Eigen::Matrix3d Hm = d_vec.asDiagonal() * Hsym * d_vec.asDiagonal();
+  Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> es(0.5 * (Hm + Hm.transpose()));
   if (es.info() != Eigen::Success) {
     Cov3 fallback = Cov3::Zero();
     fallback(0, 0) = 1.0;
@@ -84,29 +168,21 @@ Cov3 cov_from_hessian(
     return fallback;
   }
   constexpr double kMinEig = 1e-4;
-  const Eigen::Vector3d eigs = es.eigenvalues().cwiseMax(kMinEig);
+  constexpr double kObsSupport = 1.0;  // 至少约 1 个独立墙面段支撑才视为真实几何约束
+  Eigen::Vector3d inv_eigs;
+  for (int k = 0; k < 3; ++k) {
+    const double lam = std::max(0.0, es.eigenvalues()(k));
+    const double obs_gate = std::clamp(lam / kObsSupport, 0.0, 1.0);
+    const double eff_lam = std::max(lam * obs_gate * obs_gate, kMinEig);
+    inv_eigs(k) = 1.0 / eff_lam;
+  }
+  const Eigen::Matrix3d Hm_inv =
+    es.eigenvectors() * inv_eigs.asDiagonal() * es.eigenvectors().transpose();
   const Eigen::Matrix3d H_inv =
-    es.eigenvectors() * eigs.cwiseInverse().asDiagonal() *
-    es.eigenvectors().transpose();
+    d_vec.asDiagonal() * Hm_inv * d_vec.asDiagonal();
   const double scale = std::max(res_var, min_var_xy) * inflation;
   Cov3 cov = scale * H_inv;
   cov = 0.5 * (cov + cov.transpose()).eval();
-
-  // 长走廊纵向退化感知：若 2D 平移 Hessian 条件数显著失衡，仅沿弱约束主轴叠加
-  // 方差下界，既防止 MAHAL_GATE 因纵向微差锁死，也避免 EKF 吸收地图离散滑移。
-  const Eigen::Matrix2d Hxy = Hsym.topLeftCorner<2, 2>();
-  Eigen::SelfAdjointEigenSolver<Eigen::Matrix2d> es_xy(Hxy);
-  if (es_xy.info() == Eigen::Success && es_xy.eigenvalues().size() == 2) {
-    const double lmin = es_xy.eigenvalues()(0);
-    const double lmax = es_xy.eigenvalues()(1);
-    const double cond = lmax / std::max(lmin, 1e-6);
-    if (lmax > 1.0 && cond > 6.0) {
-      const double extra = std::min(0.04, 0.002 * (cond - 6.0));
-      const Eigen::Vector2d vmin = es_xy.eigenvectors().col(0);
-      const Eigen::Vector3d v3(vmin.x(), vmin.y(), 0.0);
-      cov += extra * (v3 * v3.transpose());
-    }
-  }
 
   cov(0, 0) = std::max(cov(0, 0), min_var_xy);
   cov(1, 1) = std::max(cov(1, 1), min_var_xy);
@@ -156,6 +232,10 @@ MatchResult CorrelativeMatcher::match(
   const double max_gx = static_cast<double>(grid->width - 1);
   const double max_gy = static_cast<double>(grid->height - 1);
 
+  const double prior_th = wrap_angle(prior.theta);
+  const double prior_sig_lin2 = std::max(0.04, 4.0 * opt.window_lin * opt.window_lin);
+  const double prior_sig_ang2 = std::max(0.01, 4.0 * opt.window_ang * opt.window_ang);
+
   const int max_rounds = opt.correlative_two_stage ? 2 : 1;
   for (int round = 0; round < max_rounds; ++round) {
     if (round == 1) {
@@ -174,7 +254,7 @@ MatchResult CorrelativeMatcher::match(
       std::max(1.0, std::ceil(2.0 * wang / ang_step)) + 1);
     const double cx = round == 0 ? prior.x : best_x;
     const double cy = round == 0 ? prior.y : best_y;
-    const double cth = round == 0 ? wrap_angle(prior.theta) : best_th;
+    const double cth = round == 0 ? prior_th : best_th;
     if (round == 0) {
       coarse_poses.reserve(
         static_cast<std::size_t>(n_a) *
@@ -185,6 +265,7 @@ MatchResult CorrelativeMatcher::match(
     for (int ai = 0; ai < n_a; ++ai) {
       const double th =
         wrap_angle(cth - 0.5 * (n_a - 1) * ang_step + ai * ang_step);
+      const double dth = wrap_angle(th - prior_th);
       const double c = std::cos(th), s = std::sin(th);
       cells.clear();
       for (const auto & p : valid_pts) {
@@ -224,8 +305,11 @@ MatchResult CorrelativeMatcher::match(
           if (round == 0) {
             coarse_poses.push_back({sc, cand_x, cand_y, th});
           }
-          if (sc > best_s) {
-            best_s = sc;
+          // 弱运动先验破平局（MAP tie-breaker）：非退化峰差 >0.20 不受影响，走廊平底谷锚定在先验处
+          const double map_sc = sc - 0.002 * (
+            (dx * dx + dy * dy) / prior_sig_lin2 + (dth * dth) / prior_sig_ang2);
+          if (map_sc > best_s) {
+            best_s = map_sc;
             best_x = cand_x;
             best_y = cand_y;
             best_th = th;
@@ -300,17 +384,40 @@ MatchResult FieldGnMatcher::match(
   const int n = static_cast<int>(scan.points.size());
   if (n < 5) {return res;}
 
+  const double corr_len = std::max(2.0 * grid->resolution, field.sigma_m_);
+  std::vector<double> arc_w;
+  std::vector<Vec2> contour_n;
+  double rms_arm = 2.0;
+  compute_scan_info_weights(scan, corr_len, arc_w, rms_arm, &contour_n);
+
+  struct PtObs
+  {
+    Eigen::Vector3d J_sdf;
+    Eigen::Vector3d J_geom;
+    double r;
+    double nu_w;
+    int bin;
+  };
+  std::vector<PtObs> obs_buf;
+  obs_buf.reserve(scan.points.size());
+
   auto eval_pose = [&](
-    const Pose2 & pose, Eigen::Matrix3d & H, Eigen::Vector3d & b,
-    double & ravg, int & used)
+    const Pose2 & pose, Eigen::Matrix3d & H, Eigen::Matrix3d & H_info,
+    Eigen::Vector3d & b, double & ravg, int & used)
     {
+      constexpr int kNormalBins = 8;
+      constexpr double kMaxIndepPerAxis = 12.0;
       const double c = std::cos(pose.theta), s = std::sin(pose.theta);
       H.setZero();
+      H_info.setZero();
       b.setZero();
-      double rsum = 0.0, rw = 0.0;
+      obs_buf.clear();
+      std::array<double, kNormalBins> bin_sum{};
       used = 0;
-      for (const auto & pt : scan.points) {
-        if (!pt_is_finite(pt)) {continue;}
+
+      for (std::size_t i = 0; i < scan.points.size(); ++i) {
+        const auto & pt = scan.points[i];
+        if (!pt_is_finite(pt) || arc_w[i] <= 0.0) {continue;}
         const double lx = pt.x(), ly = pt.y();
         const double wx = pose.x + c * lx - s * ly;
         const double wy = pose.y + s * lx + c * ly;
@@ -319,18 +426,55 @@ MatchResult FieldGnMatcher::match(
         const double r = field.sdf(g.x(), g.y(), &grad);
         if (std::abs(r) > opt.trim_dist) {continue;}
         const double ar = std::abs(r);
-        const double w = ar <= opt.huber_delta ?
+        const double w_huber = ar <= opt.huber_delta ?
           1.0 :
           opt.huber_delta / std::max(ar, 1e-9);
-          // ∂w/∂p = [gx, gy, gx·(-(wy-py)) + gy·(wx-px)]
-        const double jth = grad.x() * (-(wy - pose.y)) +
+
+        // 若存在连续扫描轮廓法向，旋转至世界系消除栅格阶梯锯齿；孤立角点则回退 SDF 梯度
+        Eigen::Vector2d n_world = grad;
+        const Vec2 & cn = contour_n[i];
+        if (cn.squaredNorm() > 0.5) {
+          Eigen::Vector2d wn(c * cn.x() - s * cn.y(), s * cn.x() + c * cn.y());
+          if (wn.dot(grad) < 0.0) {wn = -wn;}
+          n_world = wn;
+        }
+        const double nnorm = n_world.norm();
+        int bin = 0;
+        if (nnorm > 1e-6) {
+          double ang = std::atan2(n_world.y(), n_world.x());
+          if (ang < 0.0) {ang += kPi;}
+          bin = std::clamp(
+            static_cast<int>(ang * (static_cast<double>(kNormalBins) / kPi)),
+            0, kNormalBins - 1);
+        }
+        const double nu_w = arc_w[i] * w_huber;
+        bin_sum[static_cast<std::size_t>(bin)] += nu_w;
+        const double jth_sdf = grad.x() * (-(wy - pose.y)) +
           grad.y() * (wx - pose.x);
-        const Eigen::Vector3d J(grad.x(), grad.y(), jth);
-        H += w * J * J.transpose();
-        b += w * J * r;
-        rsum += w * r * r;
-        rw += w;
+        const double jth_geom = n_world.x() * (-(wy - pose.y)) +
+          n_world.y() * (wx - pose.x);
+        obs_buf.push_back({
+          Eigen::Vector3d(grad.x(), grad.y(), jth_sdf),
+          Eigen::Vector3d(n_world.x(), n_world.y(), jth_geom),
+          r, nu_w, bin});
         ++used;
+      }
+
+      std::array<double, kNormalBins> alpha{};
+      for (int bi = 0; bi < kNormalBins; ++bi) {
+        const double bs = bin_sum[static_cast<std::size_t>(bi)];
+        alpha[static_cast<std::size_t>(bi)] =
+          (bs > kMaxIndepPerAxis) ? (kMaxIndepPerAxis / bs) : 1.0;
+      }
+
+      double rsum = 0.0, rw = 0.0;
+      for (const auto & ob : obs_buf) {
+        const double w = ob.nu_w * alpha[static_cast<std::size_t>(ob.bin)];
+        H += w * ob.J_sdf * ob.J_sdf.transpose();
+        H_info += w * ob.J_geom * ob.J_geom.transpose();
+        b += w * ob.J_sdf * ob.r;
+        rsum += w * ob.r * ob.r;
+        rw += w;
       }
       ravg = rw > 0.0 ? rsum / rw : std::numeric_limits<double>::infinity();
     };
@@ -341,14 +485,16 @@ MatchResult FieldGnMatcher::match(
   Pose2 best_pose = p;
   Eigen::Matrix3d best_H = Eigen::Matrix3d::Zero();
   double best_var = 1e-6;
-  int best_used = 0;
+  const double inv_arm = 1.0 / std::max(0.5, rms_arm);
+  const Eigen::Vector3d d_vec(1.0, 1.0, inv_arm);
 
   for (int it = 0; it < opt.max_iterations; ++it) {
     Eigen::Matrix3d H;
+    Eigen::Matrix3d H_info;
     Eigen::Vector3d b;
     double ravg = 0.0;
     int used = 0;
-    eval_pose(p, H, b, ravg, used);
+    eval_pose(p, H, H_info, b, ravg, used);
     if (used < 5) {break;}
 
       // 应用步长前，先用当前位姿 p 与其自身残差 ravg 更新历史最优
@@ -356,15 +502,31 @@ MatchResult FieldGnMatcher::match(
       has_valid_iter = true;
       best_ravg = ravg;
       best_pose = p;
-      best_H = H;
+      best_H = H_info;
       best_var = std::max(ravg, 1e-6);
-      best_used = used;
     }
 
-      // LM 阻尼只用于解步；协方差用未阻尼 Hessian（退化方向如实膨胀）
+      // 量纲一致可观子空间解映射（由无锯齿轮廓信息矩阵 H_info 判定可观子空间，在 H 上解步）
+    const Eigen::Matrix3d Hm_info = d_vec.asDiagonal() * H_info * d_vec.asDiagonal();
+    Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> es_info(
+      0.5 * (Hm_info + Hm_info.transpose()));
+    if (es_info.info() != Eigen::Success) {break;}
+
     Eigen::Matrix3d Hd = H;
-    Hd.diagonal().array() += 1e-6 * H.diagonal().array().max(1.0);
-    const Eigen::Vector3d dp = Hd.ldlt().solve(-b);
+    Hd.diagonal().array() += 1e-5 * H.diagonal().array().max(1.0);
+    const Eigen::Vector3d dp_raw = Hd.ldlt().solve(-b);
+    if (!dp_raw.allFinite()) {break;}
+
+    const Eigen::Vector3d dp_raw_m = d_vec.cwiseInverse().cwiseProduct(dp_raw);
+    Eigen::Vector3d dp_m = Eigen::Vector3d::Zero();
+    for (int k = 0; k < 3; ++k) {
+      const double lam = std::max(0.0, es_info.eigenvalues()(k));
+      const double eta = std::clamp((lam - 0.35) / 0.85, 0.0, 1.0);
+      if (eta <= 0.0) {continue;}
+      const Eigen::Vector3d vk = es_info.eigenvectors().col(k);
+      dp_m += eta * vk.dot(dp_raw_m) * vk;
+    }
+    const Eigen::Vector3d dp = d_vec.cwiseProduct(dp_m);
     if (!dp.allFinite()) {break;}
       // 步长护栏：单次迭代 ≤0.2m / 0.1rad
     const double nl = dp.head<2>().norm();
@@ -389,23 +551,24 @@ MatchResult FieldGnMatcher::match(
     // 评估循环结束后的最终位姿 p，若残差更优则采纳
   {
     Eigen::Matrix3d H_end;
+    Eigen::Matrix3d H_info_end;
     Eigen::Vector3d b_end;
     double ravg_end = 0.0;
     int used_end = 0;
-    eval_pose(p, H_end, b_end, ravg_end, used_end);
+    eval_pose(p, H_end, H_info_end, b_end, ravg_end, used_end);
     if (used_end >= 5 && ravg_end < best_ravg) {
       best_ravg = ravg_end;
       best_pose = p;
-      best_H = H_end;
+      best_H = H_info_end;
       best_var = std::max(ravg_end, 1e-6);
-      best_used = used_end;
     }
   }
 
   res.pose = best_pose;
-  // 相邻激光点沿墙面高度空间相关，按约 24 个有效独立观测聚类缩放，防 N 点叠加过度自信
-  const double eff_scale = std::max(1.0, static_cast<double>(best_used) / 24.0);
-  res.covariance = cov_from_hessian(best_H, best_var * eff_scale);
+  // H 已由弧长独立权重与法向空间分桶归一化至真实独立观测尺度，叠加半胞元几何离散方差底
+  const double quant_var = 0.25 * grid->resolution * grid->resolution;
+  res.covariance = cov_from_hessian(
+    best_H, std::max(best_var, quant_var), rms_arm);
   eval_stats(field, res.pose, scan, opt.inlier_gate, res.score,
     res.inlier_ratio);
   res.valid = true;
@@ -490,13 +653,18 @@ MatchResult IcpP2pMatcher::match(
     return res;
   }
 
-    // 基于最终位姿处的表面法向信息矩阵计算几何协方差（如实反映走廊等滑移退化）
+    // 基于最终位姿处的法向均衡信息矩阵计算几何协方差（如实反映走廊等滑移退化）
+  const double corr_len = std::max(2.0 * grid->resolution, field.sigma_m_);
+  std::vector<double> arc_w;
+  double rms_arm = 2.0;
+  compute_scan_info_weights(scan, corr_len, arc_w, rms_arm);
   Eigen::Matrix3d H_geom = Eigen::Matrix3d::Zero();
   {
     const double c = std::cos(p.theta), s = std::sin(p.theta);
     int used_g = 0;
-    for (const auto & pt : scan.points) {
-      if (!pt_is_finite(pt)) {continue;}
+    for (std::size_t i = 0; i < scan.points.size(); ++i) {
+      const auto & pt = scan.points[i];
+      if (!pt_is_finite(pt) || arc_w[i] <= 0.0) {continue;}
       const double wx = p.x + c * pt.x() - s * pt.y();
       const double wy = p.y + s * pt.x() + c * pt.y();
       const auto g = grid->worldToGridF(wx, wy);
@@ -505,7 +673,7 @@ MatchResult IcpP2pMatcher::match(
       if (std::abs(r) > opt.trim_dist) {continue;}
       const double jth = grad.x() * (-(wy - p.y)) + grad.y() * (wx - p.x);
       const Eigen::Vector3d Jg(grad.x(), grad.y(), jth);
-      H_geom += Jg * Jg.transpose();
+      H_geom += arc_w[i] * Jg * Jg.transpose();
       ++used_g;
     }
     if (used_g < 5) {
@@ -514,7 +682,8 @@ MatchResult IcpP2pMatcher::match(
   }
 
   res.pose = p;
-  res.covariance = cov_from_hessian(H_geom, last_var);
+  const double quant_var = 0.25 * grid->resolution * grid->resolution;
+  res.covariance = cov_from_hessian(H_geom, std::max(last_var, quant_var), rms_arm);
   eval_stats(field, res.pose, scan, opt.inlier_gate, res.score,
     res.inlier_ratio);
   res.valid = true;
@@ -724,6 +893,35 @@ MatchResult ComposedMatcher::match(
   MatchResult fine = fine_->match(field, coarse.pose, scan, opt);
     // 门限：精修需有效且似然不应显著低于粗匹配（防精修跑飞）
   if (!fine.valid || fine.score + 0.05 < coarse.score) {return coarse;}
+
+    // 可观子空间回投：若精修海森协方差表明某平移主轴严重退化（如走廊纵向），
+    // 将粗搜在该不可观方向上的残余漂移回投至运动先验，保证走廊纵向平滑无乱跳
+  Eigen::SelfAdjointEigenSolver<Eigen::Matrix2d> es_xy(
+    0.5 * (fine.covariance.topLeftCorner<2, 2>() +
+    fine.covariance.topLeftCorner<2, 2>().transpose()));
+  if (es_xy.info() == Eigen::Success) {
+    Eigen::Vector2d dxy(fine.pose.x - prior.x, fine.pose.y - prior.y);
+    bool remapped = false;
+    for (int k = 0; k < 2; ++k) {
+      const double eig_var = es_xy.eigenvalues()(k);
+      if (eig_var > 0.20) {
+        const double blend = std::clamp((eig_var - 0.20) / 0.80, 0.0, 1.0);
+        const Eigen::Vector2d vk = es_xy.eigenvectors().col(k);
+        dxy -= blend * dxy.dot(vk) * vk;
+        remapped = true;
+      }
+    }
+    if (remapped) {
+      Pose2 proj_pose(prior.x + dxy.x(), prior.y + dxy.y(), fine.pose.theta);
+      double proj_sc = 0.0, proj_inl = 0.0;
+      eval_stats(field, proj_pose, scan, opt.inlier_gate, proj_sc, proj_inl);
+      if (proj_sc + 0.02 >= fine.score) {
+        fine.pose = proj_pose;
+        fine.score = proj_sc;
+        fine.inlier_ratio = proj_inl;
+      }
+    }
+  }
   return fine;
 }
 

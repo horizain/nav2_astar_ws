@@ -348,5 +348,102 @@ TEST(GeneralizationMatrixTest, S7_ZombieHypothesisEvictionDoesNotBlockFreshCandi
   EXPECT_LT(std::hypot(out.pose.x - gt.x, out.pose.y - gt.y), 0.15);
 }
 
+TEST(GeneralizationMatrixTest, S8_TiltedStaircaseCorridorAndComposedZeroJump)
+{
+  // 1) ComposedMatcher 在严格退化走廊不得出现粗搜无约束 18cm 乱跳
+  const OccupancyGrid cgrid = make_corridor(0.05);
+  auto cfield = std::make_shared<MapField>();
+  ASSERT_TRUE(cfield->build(cgrid, 0.20));
+  auto comp = sloc::make_matcher("composed");
+
+  std::mt19937 rng(808);
+  ScanSimConfig scfg;
+  scfg.beams = 360;
+  scfg.noise_std = 0.005;
+  const Pose2 gt(15.0, 1.5, 0.0);
+  const auto cscan = make_scan(cgrid, gt, scfg, rng);
+  const Pose2 prior(15.03, 1.52, 0.01);
+  const auto cres = comp->match(*cfield, prior, cscan, MatchOptions{});
+  ASSERT_TRUE(cres.valid);
+  EXPECT_LT(std::abs(cres.pose.x - prior.x), 0.03);
+  EXPECT_LT(std::abs(cres.pose.y - gt.y), 0.02);
+
+  // 2) 18° 斜交栅格锯齿长走廊（30m 长使两端墙超 12m 量程不可见，检验无 cond>6 补丁下的旋转不变性）
+  OccupancyGrid tgrid;
+  tgrid.resolution = 0.05;
+  tgrid.width = 720;
+  tgrid.height = 360;
+  tgrid.origin_x = 0.0;
+  tgrid.origin_y = 0.0;
+  tgrid.cells.assign(static_cast<std::size_t>(tgrid.width) * tgrid.height, -1);
+  const double th = 18.0 * sloc::kPi / 180.0;
+  const double ct = std::cos(th);
+  const double st = std::sin(th);
+  for (int y = 0; y < tgrid.height; ++y) {
+    for (int x = 0; x < tgrid.width; ++x) {
+      const auto w = tgrid.gridToWorld(x, y);
+      const double dx = w.x() - 2.0;
+      const double dy = w.y() - 2.0;
+      const double u = ct * dx + st * dy;
+      const double v = -st * dx + ct * dy;
+      if (u >= 0.0 && u <= 30.0 && std::abs(v) <= 1.25) {
+        tgrid.cells[static_cast<std::size_t>(y) * tgrid.width + x] = 0;
+      } else if (u >= -0.15 && u <= 30.15 && std::abs(v) <= 1.40) {
+        tgrid.cells[static_cast<std::size_t>(y) * tgrid.width + x] = 100;
+      }
+    }
+  }
+
+  auto tfield = std::make_shared<MapField>();
+  ASSERT_TRUE(tfield->build(tgrid, 0.20));
+
+  const Pose2 tgt(2.0 + ct * 15.0, 2.0 + st * 15.0, th);
+  const auto tscan = make_scan(tgrid, tgt, scfg, rng);
+  const auto tres = comp->match(*tfield, tgt, tscan, MatchOptions{});
+  ASSERT_TRUE(tres.valid);
+  Eigen::SelfAdjointEigenSolver<Eigen::Matrix2d> es(tres.covariance.topLeftCorner<2, 2>());
+  ASSERT_EQ(es.info(), Eigen::Success);
+  EXPECT_GT(es.eigenvalues()(1), 10.0 * es.eigenvalues()(0));
+}
+
+TEST(GeneralizationMatrixTest, S9_FarSymmetricJumpMahalRejectionDoesNotInflateCov)
+{
+  class FarJumpMatcher : public sloc::Matcher {
+public:
+    sloc::MatchResult match(
+      const sloc::MapField &, const sloc::Pose2 & prior,
+      const sloc::Scan &, const sloc::MatchOptions &) const override
+    {
+      sloc::MatchResult r;
+      r.valid = true;
+      r.pose = sloc::Pose2(prior.x + 1.8, prior.y, prior.theta);
+      r.score = 0.92;
+      r.inlier_ratio = 0.95;
+      r.covariance = sloc::Cov3::Identity() * 1e-3;
+      return r;
+    }
+  };
+
+  const OccupancyGrid grid = make_warehouse(0.05);
+  auto field = std::make_shared<MapField>();
+  ASSERT_TRUE(field->build(grid, 0.20));
+
+  sloc::LocalizerCore core(sloc::CoreConfig{});
+  core.set_map(field);
+  core.set_matcher(std::make_shared<FarJumpMatcher>());
+  core.on_odom(Pose2(0.0, 0.0, 0.0));
+  core.set_initial_pose(Pose2(5.0, 5.0, 0.0), sloc::Cov3::Identity() * 1e-3);
+
+  Scan dummy;
+  for (int i = 0; i < 8; ++i) {
+    dummy.points.emplace_back(1.0 + 0.1 * i, 0.0);
+  }
+  const double trace_before = core.last_cov().trace();
+  const auto out = core.on_scan(dummy);
+  EXPECT_FALSE(out.accepted);
+  // 远距离跨峰马氏拒绝绝不能触发旧版 P*=2.5 协方差膨胀
+  EXPECT_NEAR(core.last_cov().trace(), trace_before, 1e-9);
+}
+
 }  // namespace
 }  // namespace sloc::sim

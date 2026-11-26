@@ -82,6 +82,9 @@ private:
   {
     rclcpp::Time stamp;
     Pose2 pose;
+    double vx{0.0};
+    double vy{0.0};
+    double wz{0.0};
   };
 
   struct OutputSnapshot
@@ -199,7 +202,12 @@ private:
   bool map_received_{false};
   int stable_tracking_count_{0};
 
+  // 辅助函数与状态
+  void estimateTwistAtLocked(
+    const rclcpp::Time & stamp, double & vx, double & vy, double & wz) const;
+
   double imu_yaw_{0.0};
+  double last_imu_wz_{0.0};
   bool imu_started_{false};
   rclcpp::Time last_imu_stamp_{0, 0, RCL_ROS_TIME};
 

@@ -1006,6 +1006,14 @@ CoreOutput LocalizerCore::on_scan(const Scan & scan)
   Q_body(0, 0) = q_trans;
   Q_body(1, 1) = q_trans;
   Q_body(2, 2) = q_rot;
+  // 速度耦合时序抖动噪声 Q_sync = (σ_t/Δt)² · Δu · Δuᵀ：静止时严格为 0，高速/急转时仅沿运动矢量放宽
+  if (has_odom_ && cfg_.sync_jitter_ratio > 0.0 &&
+    (cfg_.odom_trans_var_per_m > 0.0 || cfg_.odom_rot_var_per_rad > 0.0))
+  {
+    const double s2 = cfg_.sync_jitter_ratio * cfg_.sync_jitter_ratio;
+    const Eigen::Vector3d du(delta.x, delta.y, delta.theta);
+    Q_body += s2 * (du * du.transpose());
+  }
 
   Eigen::Matrix4d Q4 = Eigen::Matrix4d::Zero();
   Q4.topLeftCorner<3, 3>() = G * Q_body * G.transpose();
@@ -1130,13 +1138,17 @@ CoreOutput LocalizerCore::on_scan(const Scan & scan)
   // ---------- 拒绝分支：纯预测外推 + 状态降级 + 多假设/绑架检测 ----------
   last_pose_ = pred;
   P4_ = P4_pred;
-  // 若匹配本身高分高内点率且协方差有效，仅因马氏门控过紧被拒（典型场景：静止/原地旋转时
-  // dtrans≈0 导致 P4_pred 过小），适度松弛先验协方差以打破马氏锁死。
+  // 局部吸引盆秩 1 经验贝叶斯松弛：仅当高分匹配落在本地跟踪窗邻域内却因短时滞后触发马氏拒绝时，
+  // 严格沿当前新息方向叠加有界秩 1 协方差；远距离对称假峰绝不触发任何协方差膨胀（替代旧 P*=2.5）
   if (mr_finite && gate_inlier && gate_score && gate_cov && !gate_mahal) {
-    P4_.topLeftCorner<3, 3>() *= 2.5;
-    P4_(0, 0) = std::min(P4_(0, 0) + 4e-3, 0.25);
-    P4_(1, 1) = std::min(P4_(1, 1) + 4e-3, 0.25);
-    P4_(2, 2) = std::min(P4_(2, 2) + 5e-4, 0.10);
+    const double innov_xy = std::hypot(innov(0), innov(1));
+    const double max_local_xy = std::max(0.20, 1.5 * cfg_.match_opt.window_lin);
+    const double max_local_th = std::max(0.15, 1.5 * cfg_.match_opt.window_ang);
+    if (innov_xy <= max_local_xy && std::abs(innov(2)) <= max_local_th) {
+      P4_.topLeftCorner<3, 3>() += 0.6 * (innov * innov.transpose());
+      P4_.topLeftCorner<3, 3>() =
+        0.5 * (P4_.topLeftCorner<3, 3>() + P4_.topLeftCorner<3, 3>().transpose());
+    }
   }
   stable_tracking_streak_ = 0;
   ++reject_streak_;

@@ -153,4 +153,76 @@ TEST(Se2Test, TransformScanIteratorsAndBufferReuse)
   EXPECT_NEAR(buf[0].y(), -4.0, kEps);
 }
 
+TEST(Se2Test, DeskewScanCompensatesSpinAndTranslationDistortion)
+{
+  const double vx = 0.8;
+  const double vy = 0.0;
+  const double wz = 1.2;
+  const double total_time = 0.10;
+  const int num_beams = 36;
+  const double dt_beam = total_time / static_cast<double>(num_beams);
+
+  sloc::Scan raw;
+  raw.points.reserve(num_beams);
+  std::vector<double> rel_times;
+  rel_times.reserve(num_beams);
+
+  for (int i = 0; i < num_beams; ++i) {
+    const double dt_i = static_cast<double>(i) * dt_beam;
+    rel_times.push_back(dt_i);
+
+    // Simulate robot pose at dt_i
+    const double dth = wz * dt_i;
+    const double c = std::cos(dth);
+    const double s = std::sin(dth);
+    const double rx = vx * dt_i;
+    const double ry = vy * dt_i;
+
+    // A static wall at x = 3.0 in world frame
+    // In robot frame at dt_i, wall point position:
+    // T_world_to_robot = inv(T_robot)
+    // Here we just generate ray pointing towards x = 3.0 in world frame
+    const double world_x = 3.0;
+    const double world_y = 0.0 + static_cast<double>(i) * 0.05;
+
+    // Transform world point into robot frame at dt_i
+    const double dx = world_x - rx;
+    const double dy = world_y - ry;
+    const double local_x = c * dx + s * dy;
+    const double local_y = -s * dx + c * dy;
+    raw.points.emplace_back(local_x, local_y);
+  }
+
+  // 未去畸变的原始本体系点若直接当作 t=0 锚点系观测，2D 旋转+平移总畸变误差 > 0.25m
+  double max_raw_error = 0.0;
+  for (int i = 0; i < num_beams; ++i) {
+    const auto & pt = raw.points[static_cast<std::size_t>(i)];
+    const double wy_true = static_cast<double>(i) * 0.05;
+    const double err = std::hypot(pt.x() - 3.0, pt.y() - wy_true);
+    max_raw_error = std::max(max_raw_error, err);
+  }
+  EXPECT_GT(max_raw_error, 0.25);
+
+  // Apply deskew_scan
+  const sloc::Scan deskewed = sloc::deskew_scan(raw, rel_times, vx, vy, wz);
+  ASSERT_EQ(deskewed.points.size(), raw.points.size());
+
+  std::vector<double> errors;
+  errors.reserve(num_beams);
+  for (int i = 0; i < num_beams; ++i) {
+    const auto & pt = deskewed.points[i];
+    // Compensated back to anchor time (dt = 0), so robot pose is (0,0,0)
+    // World x should be pt.x()
+    const double err = std::abs(pt.x() - 3.0);
+    errors.push_back(err);
+  }
+
+  std::sort(errors.begin(), errors.end());
+  const double median_error = errors[num_beams / 2];
+  const double max_deskew_error = errors.back();
+
+  EXPECT_LT(median_error, 0.02);
+  EXPECT_LT(max_deskew_error, 0.02);
+}
+
 }  // namespace

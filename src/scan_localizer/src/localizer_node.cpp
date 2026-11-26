@@ -687,6 +687,7 @@ void LocalizerNode::resetResources()
   fine_on_ = false;
   stable_tracking_count_ = 0;
   imu_yaw_ = 0.0;
+  last_imu_wz_ = 0.0;
   imu_started_ = false;
   last_imu_stamp_ = rclcpp::Time(0, 0, get_clock()->get_clock_type());
   odom_buffer_.clear();
@@ -720,6 +721,7 @@ LocalizerNode::CallbackReturn LocalizerNode::on_configure(
     map_received_ = false;
     stable_tracking_count_ = 0;
     imu_yaw_ = 0.0;
+    last_imu_wz_ = 0.0;
     imu_started_ = false;
     last_imu_stamp_ = rclcpp::Time(0, 0, get_clock()->get_clock_type());
     odom_buffer_.clear();
@@ -1029,6 +1031,9 @@ void LocalizerNode::onOdom(const nav_msgs::msg::Odometry::SharedPtr m)
 {
   if (!m) {return;}
   const Pose2 pose = odomToPose(*m);
+  const double vx = m->twist.twist.linear.x;
+  const double vy = m->twist.twist.linear.y;
+  const double wz = m->twist.twist.angular.z;
   rclcpp::Time stamp(m->header.stamp);
   if (stamp.nanoseconds() == 0) {
     stamp = now();
@@ -1040,7 +1045,7 @@ void LocalizerNode::onOdom(const nav_msgs::msg::Odometry::SharedPtr m)
   if (!odom_buffer_.empty() && stamp < odom_buffer_.back().stamp) {
     odom_buffer_.clear();
   }
-  odom_buffer_.push_back({stamp, pose});
+  odom_buffer_.push_back({stamp, pose, vx, vy, wz});
   while (odom_buffer_.size() > kMaxOdomBufferSize) {
     odom_buffer_.pop_front();
   }
@@ -1061,6 +1066,7 @@ void LocalizerNode::onImu(const sensor_msgs::msg::Imu::SharedPtr m)
   if (!imu_started_) {
     imu_started_ = true;
     last_imu_stamp_ = stamp;
+    last_imu_wz_ = wz;
     return;
   }
   const double dt = (stamp - last_imu_stamp_).seconds();
@@ -1070,9 +1076,11 @@ void LocalizerNode::onImu(const sensor_msgs::msg::Imu::SharedPtr m)
       "dropping IMU sample with invalid dt=%.4f s (max=%.3f s)",
       dt, max_imu_dt_);
     last_imu_stamp_ = stamp;
+    last_imu_wz_ = wz;
     return;
   }
   last_imu_stamp_ = stamp;
+  last_imu_wz_ = wz;
   imu_yaw_ += wz * dt;
   core_->on_imu_yaw(imu_yaw_, dt);
 }
@@ -1201,6 +1209,70 @@ bool LocalizerNode::lookupOdomAt(
   return true;
 }
 
+void LocalizerNode::estimateTwistAtLocked(
+  const rclcpp::Time & stamp, double & vx, double & vy, double & wz) const
+{
+  vx = 0.0;
+  vy = 0.0;
+  wz = 0.0;
+  if (odom_buffer_.empty()) {
+    return;
+  }
+  if (odom_buffer_.size() == 1) {
+    vx = odom_buffer_.back().vx;
+    vy = odom_buffer_.back().vy;
+    wz = odom_buffer_.back().wz;
+  } else {
+    // 寻找包围 stamp 的 odom 采样对 (a, b)，或使用最近两样本格外推
+    const auto & last = odom_buffer_.back();
+    const auto & prev = odom_buffer_[odom_buffer_.size() - 2];
+    const TimedPose * a_ptr = &prev;
+    const TimedPose * b_ptr = &last;
+
+    if (stamp < last.stamp) {
+      for (std::size_t i = 0; i + 1 < odom_buffer_.size(); ++i) {
+        if (odom_buffer_[i].stamp <= stamp && stamp <= odom_buffer_[i + 1].stamp) {
+          a_ptr = &odom_buffer_[i];
+          b_ptr = &odom_buffer_[i + 1];
+          break;
+        }
+      }
+    }
+
+    const double dt = (b_ptr->stamp - a_ptr->stamp).seconds();
+    if (dt > 1e-4 && dt <= 1.0) {
+      const double dx = b_ptr->pose.x - a_ptr->pose.x;
+      const double dy = b_ptr->pose.y - a_ptr->pose.y;
+      const double dth = wrap_angle(b_ptr->pose.theta - a_ptr->pose.theta);
+      const double c = std::cos(a_ptr->pose.theta);
+      const double s = std::sin(a_ptr->pose.theta);
+      const double fd_vx = (c * dx + s * dy) / dt;
+      const double fd_vy = (-s * dx + c * dy) / dt;
+      const double fd_wz = dth / dt;
+
+      if (std::hypot(b_ptr->vx, b_ptr->vy) > 1e-4 || std::abs(b_ptr->wz) > 1e-4) {
+        vx = b_ptr->vx;
+        vy = b_ptr->vy;
+        wz = b_ptr->wz;
+      } else {
+        vx = fd_vx;
+        vy = fd_vy;
+        wz = fd_wz;
+      }
+    } else {
+      vx = last.vx;
+      vy = last.vy;
+      wz = last.wz;
+    }
+  }
+
+  if (core_cfg_.use_imu_yaw && imu_started_ &&
+    (stamp - last_imu_stamp_).seconds() < max_imu_dt_)
+  {
+    wz = last_imu_wz_ - (core_ ? core_->gyro_bias() : 0.0);
+  }
+}
+
 void LocalizerNode::onScan(const sensor_msgs::msg::LaserScan::SharedPtr m)
 {
   if (!active_.load() || !m) {return;}
@@ -1286,6 +1358,26 @@ void LocalizerNode::onScan(const sensor_msgs::msg::LaserScan::SharedPtr m)
   const int step = std::max(1, subsample);
   scan.points.reserve(static_cast<std::size_t>(n / step + 1));
 
+  double beam_dt = 0.0;
+  const bool valid_inc = std::isfinite(m->time_increment) &&
+    m->time_increment > 0.0f &&
+    static_cast<double>(n) * static_cast<double>(m->time_increment) <= 0.5;
+  const bool valid_scan_t = std::isfinite(m->scan_time) &&
+    m->scan_time > 0.0f && m->scan_time <= 0.5 && n > 1;
+  if (valid_inc) {
+    beam_dt = static_cast<double>(m->time_increment);
+  } else if (valid_scan_t) {
+    beam_dt = static_cast<double>(m->scan_time) / static_cast<double>(n);
+  }
+
+  double vx = 0.0;
+  double vy = 0.0;
+  double wz = 0.0;
+  if (beam_dt > 0.0) {
+    std::lock_guard<std::mutex> lk(state_mtx_);
+    estimateTwistAtLocked(scan_stamp, vx, vy, wz);
+  }
+
   const double lc = std::cos(lth);
   const double ls = std::sin(lth);
   for (int i = 0; i < n; i += step) {
@@ -1297,13 +1389,22 @@ void LocalizerNode::onScan(const sensor_msgs::msg::LaserScan::SharedPtr m)
     if (!std::isfinite(a)) {continue;}
     const double px = r * std::cos(a);
     const double py = r * std::sin(a);
+    double bx = 0.0;
+    double by = 0.0;
     if (use_3d_tf) {
       const Eigen::Vector3d p_base = R_bl * Eigen::Vector3d(px, py, 0.0) + t_bl;
-      scan.points.emplace_back(p_base.x(), p_base.y());
+      bx = p_base.x();
+      by = p_base.y();
     } else {
-      scan.points.emplace_back(
-        lx + lc * px - ls * py,
-        ly + ls * px + lc * py);
+      bx = lx + lc * px - ls * py;
+      by = ly + ls * px + lc * py;
+    }
+    if (beam_dt > 0.0) {
+      const Vec2 deskewed = deskew_point(
+        Vec2(bx, by), static_cast<double>(i) * beam_dt, vx, vy, wz);
+      scan.points.emplace_back(deskewed.x(), deskewed.y());
+    } else {
+      scan.points.emplace_back(bx, by);
     }
   }
 

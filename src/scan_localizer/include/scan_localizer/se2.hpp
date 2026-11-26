@@ -113,6 +113,41 @@ inline std::vector<Vec2> transform_scan(const Pose2 & pose, const Scan & scan)
   return out;
 }
 
+// 单点常速度 SE(2) 运动去畸变：将相对扫描锚点时刻 dt_s 采样的本体系点补偿回锚点时刻
+inline Vec2 deskew_point(
+  const Vec2 & pt, double dt_s, double vx, double vy, double wz)
+{
+  if (!std::isfinite(dt_s) || dt_s == 0.0) {
+    return pt;
+  }
+  const double dth = wz * dt_s;
+  const double c = std::cos(dth);
+  const double s = std::sin(dth);
+  return {
+    c * pt.x() - s * pt.y() + vx * dt_s,
+    s * pt.x() + c * pt.y() + vy * dt_s
+  };
+}
+
+// 整帧扫描去畸变（rel_times_s 与 raw.points 等长；若为空或尺寸不匹配则原样返回）
+inline Scan deskew_scan(
+  const Scan & raw, const std::vector<double> & rel_times_s,
+  double vx, double vy, double wz)
+{
+  if (rel_times_s.size() != raw.points.size() ||
+    (!std::isfinite(vx) || !std::isfinite(vy) || !std::isfinite(wz)) ||
+    (std::abs(vx) < 1e-9 && std::abs(vy) < 1e-9 && std::abs(wz) < 1e-9))
+  {
+    return raw;
+  }
+  Scan out;
+  out.points.reserve(raw.points.size());
+  for (std::size_t i = 0; i < raw.points.size(); ++i) {
+    out.points.push_back(deskew_point(raw.points[i], rel_times_s[i], vx, vy, wz));
+  }
+  return out;
+}
+
 // 3x3 位姿协方差（x, y, θ），Eigen 默认列主序
 using Cov3 = Eigen::Matrix3d;
 

@@ -49,11 +49,12 @@ struct CoreConfig
   double min_score{0.35};
   double mahal_gate{9.0};          // χ²(3) 3σ ≈ 9.35
   double max_cov_eig{1.0};         // 匹配协方差最小特征值上限 (m²)
-  // 预测协方差（odom 滑移模型）：覆盖 ~2% 尺度滑移与原地旋转偏心/畸变平移不确定度
+  // 预测协方差（odom 滑移 + 速度耦合时序抖动物理模型）
   double odom_trans_var_per_m{4e-4};     // (0.02m/m)²
   double odom_trans_var_per_rad{2e-3};   // 原地旋转引起的横向平移过程噪声 (m²/rad)
   double odom_rot_var_per_rad{1e-3};
   double odom_rot_var_per_m{2e-3};
+  double sync_jitter_ratio{0.15};        // 传感器-里程计时钟相对抖动比例 σ_t / Δt
   // IMU 融合（可选）：陀螺积分 Δyaw 替换轮式 Δθ（平移仍取轮式）
   bool use_imu_yaw{false};
   double imu_rot_var_per_rad{2e-5};      // MEMS 陀螺短时精度高两个数量级
