@@ -1292,6 +1292,33 @@ GlobalResult global_correlative(
   return out;
 }
 
+double compute_adaptive_ang_step(const MapField & field, const Scan & scan)
+{
+  constexpr double kMinStep = 0.75 * kPi / 180.0;
+  constexpr double kMaxStep = 3.0 * kPi / 180.0;
+  constexpr double kFallback = 2.0 * kPi / 180.0;
+  if (!field.valid() || scan.points.empty()) {
+    return kFallback;
+  }
+  std::vector<double> ranges;
+  ranges.reserve(scan.points.size());
+  for (const auto & pt : scan.points) {
+    if (pt_is_finite(pt)) {
+      const double r = pt.norm();
+      if (r > 1e-3) {ranges.push_back(r);}
+    }
+  }
+  if (ranges.empty()) {return kFallback;}
+  const std::size_t idx90 = (ranges.size() * 9) / 10;
+  std::nth_element(
+    ranges.begin(),
+    ranges.begin() + static_cast<std::ptrdiff_t>(idx90),
+    ranges.end());
+  const double r_p90 = std::max(1.5, ranges[idx90]);
+  const double sigma = std::max(field.grid().resolution, field.sigma_m_);
+  return std::clamp(0.85 * sigma / r_p90, kMinStep, kMaxStep);
+}
+
 BeamPhysicsStats evaluate_beam_physics(
   const MapField & field, const Pose2 & pose, const Scan & scan,
   double inlier_gate, bool check_occupied)

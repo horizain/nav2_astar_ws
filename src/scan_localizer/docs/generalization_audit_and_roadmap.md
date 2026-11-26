@@ -53,7 +53,7 @@
 
 ## 四、四阶段工程落地路线（Step 1 ~ Step 4）
 
-- **Step 1**：收拢 `LocalizerCore` 多峰/可见性/外部假设/淘汰闭环 + 空间分桶 NMS + 搭建 6 场景泛化回归矩阵（仓库、长走廊、对称孪生房、半建图外溢走廊、建图残影+高动态人群、开阔大厅），同一套默认参数全通过。
-- **Step 2**：法向空间均衡加权 + `CorrelativeMatcher`/`FieldGnMatcher` 弱先验正则 + 可观子空间 EKF 更新与软门控（移除 `cond > 6` 与 `P *= 2.5`）+ 激光运动去畸变与 $Q_{\text{sync}}$。
-- **Step 3**：SDF 球面追踪四态物理波束模型 + 运动门控序贯贝叶斯多假设晋升（移除帧数/分差经验常数）。
-- **Step 4**：`<20ms` `MapPrior` 自动地图先验加速 + $\sigma/r_{p90}$ 自适应粗搜角步长 + 协方差驱动自适应跟踪搜窗。
+- **Step 1 [已完成]**：收拢 `LocalizerCore` 多峰/可见性/外部假设/淘汰闭环 + 空间分桶 NMS + 搭建 6 场景泛化回归矩阵（仓库、长走廊、对称孪生房、半建图外溢走廊、建图残影+高动态人群、开阔大厅），同一套默认参数全通过（`GlobalMultiFn` 闭环验证）。
+- **Step 2 [已完成]**：法向空间均衡加权 + `CorrelativeMatcher`/`FieldGnMatcher` 弱先验正则 + 可观子空间 EKF 更新与软门控（移除 `cond > 6` 与 `P *= 2.5`）+ 激光运动去畸变与 $Q_{\text{sync}}$（`compute_scan_info_weights` 验证）。
+- **Step 3 [已完成]**：SDF 球面追踪四态物理波束模型 + 运动门控序贯贝叶斯多假设晋升（移除帧数/分差经验常数）（`evaluate_beam_physics` 验证）。
+- **Step 4 [已完成]**：`<20ms` `MapPrior` 自动地图先验加速 + $\sigma/r_{p90}$ 自适应粗搜角步长 + 协方差驱动自适应跟踪搜窗（`LocalMapPrior` / `compute_adaptive_ang_step` 验证）。

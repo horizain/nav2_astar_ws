@@ -80,7 +80,20 @@ struct OccupancyGrid
   }
 };
 
-// ---------- 带符号距离场 + 似然场 + 金字塔 ----------
+// 地图局部几何先验（MapField::build 时自动在 <20ms 内离线生成，零人工调参）：
+//   · localizability  : 结构张量特征值比 κ = λ_min/λ_max ∈ [0,1]（0=走廊/单墙退化，1=满约束）
+//   · degenerate_axis : 最小刚度主轴单位向量（如走廊纵向方向）
+//   · has_twins       : 是否存在远距离（>=3m）360° 几何轮廓自相似孪生区
+//   · twin_positions  : 自相似孪生锚点世界坐标列表（供多假设主动播种防漏峰）
+struct LocalMapPrior
+{
+  double localizability{1.0};
+  Eigen::Vector2d degenerate_axis{1.0, 0.0};
+  bool has_twins{false};
+  std::vector<Eigen::Vector2d> twin_positions;
+};
+
+// ---------- 带符号距离场 + 似然场 + 金字塔 + 自动地图先验 ----------
 class MapField {
 public:
   // sigma_m: 似然场平滑尺度(m)；支持自定义占据/自由阈值、最大金字塔层数与可选跳过逆向 EDT
@@ -163,10 +176,15 @@ public:
              static_cast<std::size_t>(px)];
   }
 
+  // O(1) 查询世界坐标 (wx, wy) 处的地图可定位性、退化主轴与对称孪生区先验
+  LocalMapPrior queryPrior(double wx, double wy) const;
+
   double sigma_m_{0.20};
   double unknown_score_{0.10};
 
 private:
+  void buildMapPrior();
+
   std::shared_ptr<const OccupancyGrid> grid_;
   bool valid_{false};
   int occupied_thresh_{65};
@@ -175,6 +193,18 @@ private:
   std::vector<float> like_;          // [0,1]
   struct SWGrid { int width{0}, height{0}; std::vector<float> data; };
   std::vector<SWGrid> swmax_;        // [0]=like，[k]=2^k 滑窗最大值
+
+  struct PriorCell
+  {
+    float kappa{1.0f};
+    float deg_x{1.0f};
+    float deg_y{0.0f};
+    std::vector<Eigen::Vector2f> twins;
+  };
+  double prior_block_m_{1.0};
+  int prior_w_{0};
+  int prior_h_{0};
+  std::vector<PriorCell> prior_grid_;
 };
 
 // 构建辅助：从世界系线段栅格化出占据单元（仿真/工具用）

@@ -88,9 +88,11 @@ struct CoreConfig
   // 自动全局重定位远距离跳变安全保护（防对称走廊误跳）
   double global_jump_min_dist{1.0};       // 远距离跳变判定阈值 (m)
   double global_jump_score_margin{0.10};  // 远距离候选需显著优于当前局部匹配的得分裕度
-  // 射线物理可见性一致性校验（抑制半建图边界反朝向翻转与穿墙假峰）
+  // 射线物理可见性一致性校验与自动地图先验/自适应搜窗
   bool use_visibility_check{true};
-  // 匹配器选项（跟踪窗口）
+  bool use_map_prior{true};        // 启用 MapField 离线结构张量退化先验与孪生主动播种
+  bool adaptive_window{true};      // 按先验协方差 sqrt(P_pred) 动态缩放局部粗搜窗
+  // 匹配器选项（跟踪窗口基准）
   MatchOptions match_opt{};
 };
 
@@ -126,9 +128,10 @@ public:
     std::function<GlobalResult(const Scan &)>;
   void set_global_fn(GlobalFn fn);
   void set_global_multi_fn(GlobalMultiFn fn);
+  // ang_step <= 0.0 表示按扫描量程 p90 与 σ 自动推导物理角步长
   void enable_builtin_global(
     bool enable = true, int beams_subsample = 3,
-    double ang_step = 2.0 * kPi / 180.0, int n_hypotheses = 8);
+    double ang_step = 0.0, int n_hypotheses = 8);
 
   // 多假设候选队列（随 odom/IMU 传播，DEGRADED/LOST/GLOBAL 下多帧验证晋升）
   void add_hypotheses(const std::vector<Pose2> & hyps);
@@ -182,7 +185,7 @@ private:
   GlobalMultiFn global_multi_fn_;
   bool builtin_global_enabled_{false};
   int builtin_beams_sub_{3};
-  double builtin_ang_step_{2.0 * kPi / 180.0};
+  double builtin_ang_step_{0.0};
   int builtin_n_hyps_{8};
 
   LocState state_{LocState::UNINIT};

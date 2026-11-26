@@ -18,6 +18,7 @@
 #include "scan_localizer/map_field.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -157,6 +158,9 @@ bool MapField::build(
   sdf_cells_.clear();
   like_.clear();
   swmax_.clear();
+  prior_grid_.clear();
+  prior_w_ = 0;
+  prior_h_ = 0;
 
   if (!grid || grid->width <= 0 || grid->height <= 0) {return false;}
   if (!std::isfinite(grid->resolution) || grid->resolution <= 0.0) {
@@ -278,7 +282,312 @@ bool MapField::build(
   }
 
   valid_ = true;
+  buildMapPrior();
   return true;
+}
+
+void MapField::buildMapPrior()
+{
+  if (!valid_ || !grid_ || grid_->width <= 0 || grid_->height <= 0) {
+    return;
+  }
+  const int w = grid_->width;
+  const int h = grid_->height;
+  const double res = grid_->resolution;
+  prior_block_m_ = 1.0;
+  prior_w_ = std::max(1, static_cast<int>(std::ceil(w * res / prior_block_m_)));
+  prior_h_ = std::max(1, static_cast<int>(std::ceil(h * res / prior_block_m_)));
+  const std::size_t n_coarse =
+    static_cast<std::size_t>(prior_w_) * static_cast<std::size_t>(prior_h_);
+  prior_grid_.assign(n_coarse, PriorCell{});
+
+  // 1) 障碍近表面 SDF 梯度结构张量 M = Σ n·nᵀ（粗网格 1m 分箱 + ±5m 积分滑窗，耗时 ~1ms）
+  struct TensorAcc { double sxx{0.0}, sxy{0.0}, syy{0.0}, cnt{0.0}; };
+  std::vector<TensorAcc> raw_t(n_coarse);
+  const float surf_band = static_cast<float>(std::max(0.25, 4.0 * res));
+  const std::size_t uw = static_cast<std::size_t>(w);
+
+  if (w >= 3 && h >= 3) {
+    for (int y = 1; y < h - 1; ++y) {
+      const int by = std::clamp(
+        static_cast<int>((y * res) / prior_block_m_), 0, prior_h_ - 1);
+      const std::size_t row = static_cast<std::size_t>(y) * uw;
+      for (int x = 1; x < w - 1; ++x) {
+        const float d = sdf_cells_[row + static_cast<std::size_t>(x)];
+        if (d < 0.01f || d > surf_band) {continue;}
+        const double gx = static_cast<double>(
+          sdf_cells_[row + static_cast<std::size_t>(x + 1)] -
+          sdf_cells_[row + static_cast<std::size_t>(x - 1)]);
+        const double gy = static_cast<double>(
+          sdf_cells_[static_cast<std::size_t>(y + 1) * uw + static_cast<std::size_t>(x)] -
+          sdf_cells_[static_cast<std::size_t>(y - 1) * uw + static_cast<std::size_t>(x)]);
+        const double gn = std::hypot(gx, gy);
+        if (gn < 1e-4) {continue;}
+        const double nx = gx / gn;
+        const double ny = gy / gn;
+        const int bx = std::clamp(
+          static_cast<int>((x * res) / prior_block_m_), 0, prior_w_ - 1);
+        auto & acc = raw_t[static_cast<std::size_t>(by) *
+            static_cast<std::size_t>(prior_w_) + static_cast<std::size_t>(bx)];
+        acc.sxx += nx * nx;
+        acc.sxy += nx * ny;
+        acc.syy += ny * ny;
+        acc.cnt += 1.0;
+      }
+    }
+  }
+
+  constexpr int kVisRad = 5;  // ±5m 局部可见邻域
+  std::vector<TensorAcc> horiz_t(n_coarse);
+  for (int by = 0; by < prior_h_; ++by) {
+    for (int bx = 0; bx < prior_w_; ++bx) {
+      TensorAcc sum;
+      const int x0 = std::max(0, bx - kVisRad);
+      const int x1 = std::min(prior_w_ - 1, bx + kVisRad);
+      for (int xx = x0; xx <= x1; ++xx) {
+        const auto & c = raw_t[static_cast<std::size_t>(by) *
+            static_cast<std::size_t>(prior_w_) + static_cast<std::size_t>(xx)];
+        sum.sxx += c.sxx;
+        sum.sxy += c.sxy;
+        sum.syy += c.syy;
+        sum.cnt += c.cnt;
+      }
+      horiz_t[static_cast<std::size_t>(by) *
+        static_cast<std::size_t>(prior_w_) + static_cast<std::size_t>(bx)] = sum;
+    }
+  }
+
+  for (int by = 0; by < prior_h_; ++by) {
+    for (int bx = 0; bx < prior_w_; ++bx) {
+      TensorAcc sum;
+      const int y0 = std::max(0, by - kVisRad);
+      const int y1 = std::min(prior_h_ - 1, by + kVisRad);
+      for (int yy = y0; yy <= y1; ++yy) {
+        const auto & c = horiz_t[static_cast<std::size_t>(yy) *
+            static_cast<std::size_t>(prior_w_) + static_cast<std::size_t>(bx)];
+        sum.sxx += c.sxx;
+        sum.sxy += c.sxy;
+        sum.syy += c.syy;
+        sum.cnt += c.cnt;
+      }
+      auto & pc = prior_grid_[static_cast<std::size_t>(by) *
+          static_cast<std::size_t>(prior_w_) + static_cast<std::size_t>(bx)];
+      if (sum.cnt < 3.0) {
+        pc.kappa = 1.0f;
+        pc.deg_x = 1.0f;
+        pc.deg_y = 0.0f;
+        continue;
+      }
+      const double tr = sum.sxx + sum.syy;
+      const double det_disc = std::hypot(sum.sxx - sum.syy, 2.0 * sum.sxy);
+      const double lmax = 0.5 * (tr + det_disc);
+      const double lmin = std::max(0.0, 0.5 * (tr - det_disc));
+      pc.kappa = static_cast<float>(std::clamp(lmin / std::max(lmax, 1e-6), 0.0, 1.0));
+      double vx = sum.sxy;
+      double vy = lmin - sum.sxx;
+      double vn = std::hypot(vx, vy);
+      if (vn < 1e-8) {
+        if (sum.sxx <= sum.syy) {
+          vx = 1.0;
+          vy = 0.0;
+        } else {
+          vx = 0.0;
+          vy = 1.0;
+        }
+      } else {
+        vx /= vn;
+        vy /= vn;
+      }
+      pc.deg_x = static_cast<float>(vx);
+      pc.deg_y = static_cast<float>(vy);
+    }
+  }
+
+  // 2) 稀疏自由空间节点 36 束球面追踪旋转不变傅里叶轮廓描述符（自动识别孪生区，耗时 <5ms）
+  constexpr int kNumRays = 36;
+  constexpr double kMaxDescRange = 12.0;
+  std::array<double, kNumRays> ray_cos{};
+  std::array<double, kNumRays> ray_sin{};
+  for (int m = 0; m < kNumRays; ++m) {
+    const double a = m * (kTwoPi / static_cast<double>(kNumRays));
+    ray_cos[static_cast<std::size_t>(m)] = std::cos(a);
+    ray_sin[static_cast<std::size_t>(m)] = std::sin(a);
+  }
+
+  struct AnchorDesc
+  {
+    int bx{0}, by{0};
+    float wx{0.0f}, wy{0.0f};
+    std::array<double, 8> feat{};
+    double norm{1.0};
+  };
+  std::vector<AnchorDesc> anchors;
+  const int stride_b = std::max(
+    2, static_cast<int>(std::ceil(std::sqrt(static_cast<double>(n_coarse) / 360.0))));
+
+  for (int by = 0; by < prior_h_; by += stride_b) {
+    for (int bx = 0; bx < prior_w_; bx += stride_b) {
+      const double cx_w = grid_->origin_x + (bx + 0.5 * stride_b) * prior_block_m_;
+      const double cy_w = grid_->origin_y + (by + 0.5 * stride_b) * prior_block_m_;
+      const Eigen::Vector2i gi = grid_->worldToGridIndex(cx_w, cy_w);
+      int best_ix = -1, best_iy = -1;
+      float best_clearance = 0.30f;
+      const int search_r = std::max(1, static_cast<int>(std::ceil(0.8 / res)));
+      for (int dy = -search_r; dy <= search_r; ++dy) {
+        for (int dx = -search_r; dx <= search_r; ++dx) {
+          const int ix = gi.x() + dx;
+          const int iy = gi.y() + dy;
+          if (!grid_->inside(ix, iy)) {continue;}
+          const std::size_t idx = static_cast<std::size_t>(iy) * uw +
+            static_cast<std::size_t>(ix);
+          const int8_t c = grid_->cells[idx];
+          if (c >= 0 && c <= free_thresh_ && sdf_cells_[idx] > best_clearance) {
+            best_clearance = sdf_cells_[idx];
+            best_ix = ix;
+            best_iy = iy;
+          }
+        }
+      }
+      if (best_ix < 0) {continue;}
+
+      const Eigen::Vector2d aw = grid_->gridToWorld(best_ix, best_iy);
+      std::array<double, kNumRays> ranges{};
+      double r_sum = 0.0;
+      double r_min = kMaxDescRange;
+      for (int m = 0; m < kNumRays; ++m) {
+        const double ux = ray_cos[static_cast<std::size_t>(m)];
+        const double uy = ray_sin[static_cast<std::size_t>(m)];
+        double t = res;
+        while (t < kMaxDescRange) {
+          const Eigen::Vector2i ridx = grid_->worldToGridIndex(
+            aw.x() + t * ux, aw.y() + t * uy);
+          if (!grid_->inside(ridx.x(), ridx.y())) {break;}
+          const std::size_t cidx = static_cast<std::size_t>(ridx.y()) * uw +
+            static_cast<std::size_t>(ridx.x());
+          const int8_t cell = grid_->cells[cidx];
+          if (cell > occupied_thresh_ || cell < 0) {break;}
+          const double d_obs = static_cast<double>(sdf_cells_[cidx]);
+          t += std::clamp(0.8 * d_obs, std::max(res, 0.10), 0.80);
+        }
+        const double rm = std::min(t, kMaxDescRange);
+        ranges[static_cast<std::size_t>(m)] = rm;
+        r_sum += rm;
+        r_min = std::min(r_min, rm);
+      }
+
+      AnchorDesc ad;
+      ad.bx = std::clamp(
+        static_cast<int>((aw.x() - grid_->origin_x) / prior_block_m_), 0, prior_w_ - 1);
+      ad.by = std::clamp(
+        static_cast<int>((aw.y() - grid_->origin_y) / prior_block_m_), 0, prior_h_ - 1);
+      ad.wx = static_cast<float>(aw.x());
+      ad.wy = static_cast<float>(aw.y());
+
+      const double r_mean = r_sum / static_cast<double>(kNumRays);
+      double var_sum = 0.0;
+      for (double rm : ranges) {
+        var_sum += (rm - r_mean) * (rm - r_mean);
+      }
+      std::array<double, kNumRays> sorted_r = ranges;
+      std::nth_element(sorted_r.begin(), sorted_r.begin() + kNumRays / 2, sorted_r.end());
+      ad.feat[0] = r_mean;
+      ad.feat[1] = std::sqrt(var_sum / static_cast<double>(kNumRays));
+      ad.feat[2] = r_min;
+      ad.feat[3] = sorted_r[kNumRays / 2];
+
+      // 前 4 阶旋转不变傅里叶幅值 |F_1|..|F_4|
+      for (int k = 1; k <= 4; ++k) {
+        double re = 0.0, im = 0.0;
+        for (int m = 0; m < kNumRays; ++m) {
+          const double ang = (kTwoPi * k * m) / static_cast<double>(kNumRays);
+          re += ranges[static_cast<std::size_t>(m)] * std::cos(ang);
+          im += ranges[static_cast<std::size_t>(m)] * std::sin(ang);
+        }
+        ad.feat[static_cast<std::size_t>(3 + k)] =
+          std::hypot(re, im) / static_cast<double>(kNumRays);
+      }
+      double fn2 = 0.0;
+      for (double v : ad.feat) {
+        fn2 += v * v;
+      }
+      ad.norm = std::max(1.0, std::sqrt(fn2));
+      anchors.push_back(ad);
+    }
+  }
+
+  // 两两检索远距（>=3.0m）高相似孪生对并写入邻域先验格
+  for (std::size_t i = 0; i < anchors.size(); ++i) {
+    struct TwinHit { double dist_f; float wx, wy; };
+    std::vector<TwinHit> hits;
+    for (std::size_t j = 0; j < anchors.size(); ++j) {
+      if (i == j) {continue;}
+      const double spatial_d = std::hypot(
+        anchors[i].wx - anchors[j].wx, anchors[i].wy - anchors[j].wy);
+      if (spatial_d < 3.0) {continue;}
+      double diff2 = 0.0;
+      for (std::size_t f = 0; f < 8; ++f) {
+        const double df = anchors[i].feat[f] - anchors[j].feat[f];
+        diff2 += df * df;
+      }
+      const double rel_diff =
+        std::sqrt(diff2) / (0.5 * (anchors[i].norm + anchors[j].norm));
+      if (rel_diff < 0.065) {
+        hits.push_back({rel_diff, anchors[j].wx, anchors[j].wy});
+      }
+    }
+    if (hits.empty()) {continue;}
+    std::sort(hits.begin(), hits.end(),
+      [](const TwinHit & a, const TwinHit & b) {return a.dist_f < b.dist_f;});
+
+    for (int dy = -1; dy <= 1; ++dy) {
+      for (int dx = -1; dx <= 1; ++dx) {
+        const int nbx = anchors[i].bx + dx;
+        const int nby = anchors[i].by + dy;
+        if (nbx < 0 || nby < 0 || nbx >= prior_w_ || nby >= prior_h_) {continue;}
+        auto & pc = prior_grid_[static_cast<std::size_t>(nby) *
+            static_cast<std::size_t>(prior_w_) + static_cast<std::size_t>(nbx)];
+        for (const auto & th : hits) {
+          if (pc.twins.size() >= 4) {break;}
+          bool dup = false;
+          for (const auto & ex : pc.twins) {
+            if (std::hypot(ex.x() - th.wx, ex.y() - th.wy) < 2.0f) {
+              dup = true;
+              break;
+            }
+          }
+          if (!dup) {
+            pc.twins.emplace_back(th.wx, th.wy);
+          }
+        }
+      }
+    }
+  }
+}
+
+LocalMapPrior MapField::queryPrior(double wx, double wy) const
+{
+  LocalMapPrior out;
+  if (!valid_ || !grid_ || prior_w_ <= 0 || prior_h_ <= 0 ||
+    prior_grid_.empty() || !std::isfinite(wx) || !std::isfinite(wy))
+  {
+    return out;
+  }
+  const int bx = std::clamp(
+    static_cast<int>(std::floor((wx - grid_->origin_x) / prior_block_m_)),
+    0, prior_w_ - 1);
+  const int by = std::clamp(
+    static_cast<int>(std::floor((wy - grid_->origin_y) / prior_block_m_)),
+    0, prior_h_ - 1);
+  const auto & pc = prior_grid_[static_cast<std::size_t>(by) *
+      static_cast<std::size_t>(prior_w_) + static_cast<std::size_t>(bx)];
+  out.localizability = static_cast<double>(pc.kappa);
+  out.degenerate_axis = Eigen::Vector2d(pc.deg_x, pc.deg_y);
+  out.has_twins = !pc.twins.empty();
+  out.twin_positions.reserve(pc.twins.size());
+  for (const auto & t : pc.twins) {
+    out.twin_positions.emplace_back(t.x(), t.y());
+  }
+  return out;
 }
 
 double MapField::sdf(double gx, double gy, Eigen::Vector2d * grad) const

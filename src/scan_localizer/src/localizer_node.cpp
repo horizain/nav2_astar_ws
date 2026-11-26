@@ -1541,8 +1541,9 @@ GlobalResult LocalizerNode::runGlobalMultiSearchLocked(const Scan & scan)
       best_s, kExternalHypMinScore);
   }
 
-  // 2) 回退：空间分桶多样性 B&B 全局搜索，全部备选峰交由 Core 多假设与可见性闭环管理
-  const auto g = global_correlative(*field_, scan, 3, 2.0 * kPi / 180.0, 8);
+  // 2) 回退：空间分桶多样性 + 量程自适应角步长 B&B 全局搜索，全部备选峰交由 Core 闭环管理
+  const double ang_step = compute_adaptive_ang_step(*field_, scan);
+  const auto g = global_correlative(*field_, scan, 3, ang_step, 8);
   if (!g.valid) {return out;}
 
   global_alternates_.clear();

@@ -556,5 +556,94 @@ TEST(GeneralizationMatrixTest, S11_HeavyDynamicCrowdOver40PercentOcclusionZeroRe
   EXPECT_LT(std::hypot(last_out.pose.x - gt.x, last_out.pose.y - gt.y), 0.06);
 }
 
+TEST(GeneralizationMatrixTest, S12_MapPriorTwinDiscoveryAndAdaptiveAngStep)
+{
+  const OccupancyGrid grid = make_twin_rooms(0.05);
+  auto field = std::make_shared<MapField>();
+  ASSERT_TRUE(field->build(grid, 0.20));
+
+  const auto mp_left = field->queryPrior(5.0, 4.0);
+  EXPECT_TRUE(mp_left.has_twins);
+  bool found_right_twin = false;
+  for (const auto & tp : mp_left.twin_positions) {
+    if (tp.x() > 14.0) {
+      found_right_twin = true;
+      break;
+    }
+  }
+  EXPECT_TRUE(found_right_twin);
+
+  std::mt19937 rng(42);
+  ScanSimConfig scfg_short;
+  scfg_short.beams = 360;
+  scfg_short.range_max = 3.5;
+  const auto scan_short = make_scan(grid, Pose2(5.0, 4.0, 0.0), scfg_short, rng);
+  const double ang_step_short = compute_adaptive_ang_step(*field, scan_short);
+
+  const OccupancyGrid corr_grid = make_corridor(0.05);
+  auto corr_field = std::make_shared<MapField>();
+  ASSERT_TRUE(corr_field->build(corr_grid, 0.20));
+  ScanSimConfig scfg_long;
+  scfg_long.beams = 360;
+  scfg_long.range_max = 20.0;
+  const auto scan_long = make_scan(corr_grid, Pose2(2.0, 1.5, 0.0), scfg_long, rng);
+  const double ang_step_long = compute_adaptive_ang_step(*corr_field, scan_long);
+
+  EXPECT_LT(ang_step_long, ang_step_short);
+  const double min_bound = 0.70 * sloc::kPi / 180.0;
+  const double max_bound = 3.1 * sloc::kPi / 180.0;
+  EXPECT_GE(ang_step_short, min_bound);
+  EXPECT_LE(ang_step_short, max_bound);
+  EXPECT_GE(ang_step_long, min_bound);
+  EXPECT_LE(ang_step_long, max_bound);
+
+  const OccupancyGrid wh_grid = make_warehouse(0.05);
+  auto wh_field = std::make_shared<MapField>();
+  ASSERT_TRUE(wh_field->build(wh_grid, 0.20));
+
+  CoreConfig fixed_cfg{};
+  fixed_cfg.adaptive_window = false;
+  LocalizerCore core_fixed(fixed_cfg);
+  LocalizerCore core_adapt(CoreConfig{});
+  for (LocalizerCore * c : {&core_fixed, &core_adapt}) {
+    c->set_map(wh_field);
+    c->set_matcher(make_matcher("composed"));
+    c->on_odom(Pose2(0.0, 0.0, 0.0));
+    c->set_initial_pose(Pose2(6.0, 13.5, 0.0));
+  }
+
+  Pose2 true_pose(6.0, 13.5, 0.0);
+  ScanSimConfig scfg_wh;
+  scfg_wh.beams = 360;
+  scfg_wh.range_max = 12.0;
+  scfg_wh.noise_std = 0.005;
+  const auto initial_scan = make_scan(wh_grid, true_pose, scfg_wh, rng);
+  EXPECT_TRUE(core_fixed.on_scan(initial_scan).accepted);
+  EXPECT_TRUE(core_adapt.on_scan(initial_scan).accepted);
+
+  // 1 帧全遮挡拒收 + 里程计打滑 0.28m（超出默认静态粗搜窗 0.20m，落入自适应扩窗 <=0.40m 内）
+  Scan bad_scan;
+  for (int i = 0; i < 12; ++i) {
+    bad_scan.points.emplace_back(0.05, 0.01 * i);
+  }
+  const Pose2 odom_cmd(1.20, 0.0, 0.0);
+  true_pose.x += 1.20 + 0.28;
+  for (LocalizerCore * c : {&core_fixed, &core_adapt}) {
+    c->on_odom(odom_cmd);
+    EXPECT_FALSE(c->on_scan(bad_scan).accepted);
+  }
+
+  const auto clean_scan = make_scan(wh_grid, true_pose, scfg_wh, rng);
+  const auto out_fixed = core_fixed.on_scan(clean_scan);
+  const auto out_adapt = core_adapt.on_scan(clean_scan);
+  EXPECT_TRUE(out_adapt.accepted);
+  const double err_fixed =
+    std::hypot(out_fixed.pose.x - true_pose.x, out_fixed.pose.y - true_pose.y);
+  const double err_adapt =
+    std::hypot(out_adapt.pose.x - true_pose.x, out_adapt.pose.y - true_pose.y);
+  EXPECT_LT(err_adapt, 0.05);
+  EXPECT_LE(err_adapt, err_fixed + 1e-3);
+}
+
 }  // namespace
 }  // namespace sloc::sim

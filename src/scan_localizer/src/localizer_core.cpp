@@ -191,8 +191,7 @@ void LocalizerCore::enable_builtin_global(
 {
   builtin_global_enabled_ = enable;
   builtin_beams_sub_ = std::max(1, beams_subsample);
-  builtin_ang_step_ = (std::isfinite(ang_step) && ang_step > 0.0) ?
-    ang_step : (2.0 * kPi / 180.0);
+  builtin_ang_step_ = (std::isfinite(ang_step) && ang_step > 0.0) ? ang_step : 0.0;
   builtin_n_hyps_ = std::max(1, n_hypotheses);
 }
 
@@ -701,11 +700,13 @@ bool LocalizerCore::handle_recovery_scan(const Scan & active_scan, CoreOutput & 
   }
 
   if (global_multi_fn_ || builtin_global_enabled_) {
+    const double eff_ang_step = (builtin_ang_step_ > 0.0) ?
+      builtin_ang_step_ : compute_adaptive_ang_step(*field_, active_scan);
     const GlobalResult gres = global_multi_fn_ ?
       global_multi_fn_(active_scan) :
       global_correlative(
         *field_, active_scan,
-        builtin_beams_sub_, builtin_ang_step_, builtin_n_hyps_);
+        builtin_beams_sub_, eff_ang_step, builtin_n_hyps_);
     if (gres.valid && is_finite_pose(gres.pose)) {
       std::vector<Pose2> raw_cands;
       raw_cands.reserve(1 + gres.alternates.size());
@@ -727,6 +728,7 @@ bool LocalizerCore::handle_recovery_scan(const Scan & active_scan, CoreOutput & 
         double inlier{0.0};
         Cov3 cov{Cov3::Identity() * 0.04};
         bool has_cov{false};
+        bool from_twin{false};
       };
       std::vector<EvalCand> cands;
       cands.reserve(raw_cands.size());
@@ -787,6 +789,56 @@ bool LocalizerCore::handle_recovery_scan(const Scan & active_scan, CoreOutput & 
       }
 
       if (!dedup.empty()) {
+        // MapPrior 孪生区主动交叉验证：最优候选落在自相似区时，
+        // 主动探测全部孪生锚点，防止 B&B 漏峰
+        if (cfg_.use_map_prior && active_scan.points.size() >= 16) {
+          const LocalMapPrior mp = field_->queryPrior(dedup[0].pose.x, dedup[0].pose.y);
+          if (mp.has_twins) {
+            for (const auto & tp : mp.twin_positions) {
+              for (int m = 0; m < 4; ++m) {
+                const Pose2 tseed(
+                  tp.x(), tp.y(), wrap_angle(dedup[0].pose.theta + m * (0.5 * kPi)));
+                bool already_near = false;
+                for (const auto & k : dedup) {
+                  if (std::hypot(tseed.x - k.pose.x, tseed.y - k.pose.y) < 1.2 &&
+                    std::abs(wrap_angle(tseed.theta - k.pose.theta)) < 0.45)
+                  {
+                    already_near = true;
+                    break;
+                  }
+                }
+                if (already_near) {continue;}
+                const MatchResult tmr = matcher_->match(
+                  *field_, tseed, active_scan, cand_opt);
+                if (!tmr.valid || !is_finite_pose(tmr.pose) ||
+                  !std::isfinite(tmr.score) || !std::isfinite(tmr.inlier_ratio))
+                {
+                  continue;
+                }
+                EvalCand tc;
+                tc.from_twin = true;
+                tc.pose = Pose2(tmr.pose.x, tmr.pose.y, wrap_angle(tmr.pose.theta));
+                tc.eff_score = tmr.score;
+                tc.inlier = tmr.inlier_ratio;
+                apply_beam_physics(
+                  *field_, tc.pose, active_scan, cfg_.match_opt.inlier_gate,
+                  cfg_.use_visibility_check, tc.eff_score, tc.inlier);
+                if (tc.eff_score >= cfg_.min_score) {
+                  if (is_valid_spd_cov3(tmr.covariance)) {
+                    tc.cov = 0.5 * (tmr.covariance + tmr.covariance.transpose());
+                    tc.has_cov = true;
+                  }
+                  dedup.push_back(tc);
+                }
+              }
+            }
+            std::sort(dedup.begin(), dedup.end(),
+              [](const EvalCand & a, const EvalCand & b) {
+                return a.eff_score > b.eff_score;
+              });
+          }
+        }
+
         const auto & best = dedup[0];
 
         if (first_fix_ && !manual_global_) {
@@ -841,7 +893,7 @@ bool LocalizerCore::handle_recovery_scan(const Scan & active_scan, CoreOutput & 
           const bool distinct =
             std::hypot(dedup[i].pose.x - best.pose.x, dedup[i].pose.y - best.pose.y) >= 0.8 ||
             std::abs(wrap_angle(dedup[i].pose.theta - best.pose.theta)) >= 0.35;
-          if (distinct && dedup[i].eff_score >= cfg_.min_score &&
+          if (distinct && !dedup[i].from_twin && dedup[i].eff_score >= cfg_.min_score &&
             dedup[i].inlier >= cfg_.min_inlier_ratio * 0.85)
           {
             competing_eff = std::max(competing_eff, dedup[i].eff_score);
@@ -902,6 +954,18 @@ bool LocalizerCore::handle_recovery_scan(const Scan & active_scan, CoreOutput & 
         first_fix_ = true;
         clear_hypotheses();
         anomaly_window_.clear();
+        {
+          // 孪生锚点仅作为后备假设，由运动门控 SPRT 证伪或晋升，不阻塞首次锁定
+          std::vector<Pose2> twin_hyps;
+          for (const auto & d : dedup) {
+            if (d.from_twin && d.eff_score >= best.eff_score - cfg_.hyp_ambiguity_margin) {
+              twin_hyps.push_back(d.pose);
+            }
+          }
+          if (!twin_hyps.empty()) {
+            add_hypotheses(twin_hyps);
+          }
+        }
 
         out.pose = last_pose_;
         out.covariance = last_cov();
@@ -1096,6 +1160,17 @@ CoreOutput LocalizerCore::on_scan(const Scan & scan)
 
   Eigen::Matrix4d Q4 = Eigen::Matrix4d::Zero();
   Q4.topLeftCorner<3, 3>() = G * Q_body * G.transpose();
+  // MapPrior 退化区前瞻整形：进入走廊/单墙低可定位区时，
+  // 仅沿退化主轴温和放宽过程不确定度，横向强轴保持紧锁
+  if (cfg_.use_map_prior && has_odom_ && q_trans > 0.0) {
+    const LocalMapPrior mp = field_->queryPrior(pred.x, pred.y);
+    if (mp.localizability < 0.15) {
+      const double deg_ratio = 1.0 - mp.localizability / 0.15;
+      const double q_deg = 0.5 * deg_ratio * q_trans;
+      Q4.topLeftCorner<2, 2>() +=
+        q_deg * (mp.degenerate_axis * mp.degenerate_axis.transpose());
+    }
+  }
   if (imu_used && dt_imu > 0.0) {
     Q4(3, 3) = std::max(0.0, cfg_.gyro_bias_rw_var_per_s) * dt_imu;
   }
@@ -1103,8 +1178,27 @@ CoreOutput LocalizerCore::on_scan(const Scan & scan)
   Cov4 P4_pred = F4 * P4_ * F4.transpose() + Q4;
   P4_pred = 0.5 * (P4_pred + P4_pred.transpose());
 
-  // ---------- 匹配 ----------
-  MatchResult mr = matcher_->match(*field_, pred, *active_scan, cfg_.match_opt);
+  // ---------- 协方差驱动自适应搜窗 + 匹配 ----------
+  MatchOptions active_opt = cfg_.match_opt;
+  if (cfg_.adaptive_window && has_odom_) {
+    const double base_wlin = cfg_.match_opt.window_lin;
+    const double base_wang = cfg_.match_opt.window_ang;
+    const double pos_std = std::sqrt(
+      std::max(0.0, std::max(P4_pred(0, 0), P4_pred(1, 1))));
+    const double ang_std = std::sqrt(std::max(0.0, P4_pred(2, 2)));
+    if (state_ == LocState::TRACKING && reject_streak_ == 0) {
+      active_opt.window_lin = std::clamp(
+        3.5 * pos_std + 0.03, std::max(0.06, 0.55 * base_wlin), base_wlin);
+      active_opt.window_ang = std::clamp(
+        3.5 * ang_std + 0.02, std::max(0.04, 0.55 * base_wang), base_wang);
+    } else {
+      active_opt.window_lin = std::clamp(
+        3.5 * pos_std + 0.05, base_wlin, 2.0 * base_wlin);
+      active_opt.window_ang = std::clamp(
+        3.5 * ang_std + 0.04, base_wang, 2.0 * base_wang);
+    }
+  }
+  MatchResult mr = matcher_->match(*field_, pred, *active_scan, active_opt);
   const bool mr_finite = mr.valid &&
     is_finite_pose(mr.pose) &&
     std::isfinite(mr.score) &&

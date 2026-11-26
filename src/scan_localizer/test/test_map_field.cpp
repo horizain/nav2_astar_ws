@@ -15,6 +15,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -316,6 +317,32 @@ TEST(MapFieldTest, NoUseAfterFreeWhenCallerGridDestroyed)
   EXPECT_EQ(ob.x(), 5);
   EXPECT_EQ(ob.y(), 5);
   EXPECT_NEAR(field.poolScore(0, 5, 5), 1.0, 1e-5);
+}
+
+TEST(MapFieldTest, MapPriorDetectsCorridorDegeneracyAndCornerLocalizability)
+{
+  auto g = make_grid(480, 160, 0.05, 0);
+  sloc::rasterize_segment(g, 1.0, 1.0, 16.0, 1.0);
+  sloc::rasterize_segment(g, 1.0, 3.5, 16.0, 3.5);
+  sloc::rasterize_segment(g, 18.0, 1.0, 23.0, 1.0);
+  sloc::rasterize_segment(g, 23.0, 1.0, 23.0, 7.0);
+  sloc::rasterize_segment(g, 23.0, 7.0, 18.0, 7.0);
+  sloc::rasterize_segment(g, 18.0, 7.0, 18.0, 1.0);
+
+  const auto t0 = std::chrono::steady_clock::now();
+  sloc::MapField field;
+  ASSERT_TRUE(field.build(g, 0.20));
+  const auto t1 = std::chrono::steady_clock::now();
+  const double build_ms =
+    std::chrono::duration<double, std::milli>(t1 - t0).count();
+  EXPECT_LT(build_ms, 100.0);
+
+  const auto p_corr = field.queryPrior(8.5, 2.2);
+  EXPECT_LT(p_corr.localizability, 0.12);
+  EXPECT_GT(std::abs(p_corr.degenerate_axis.x()), 0.90);
+
+  const auto p_room = field.queryPrior(20.5, 4.0);
+  EXPECT_GT(p_room.localizability, 0.40);
 }
 
 }  // namespace

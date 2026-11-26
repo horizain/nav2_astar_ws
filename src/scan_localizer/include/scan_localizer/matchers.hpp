@@ -150,6 +150,9 @@ GlobalResult global_correlative(
   int beams_subsample, double ang_step,
   int n_hypotheses);
 
+// 按扫描有效量程 p90 与似然场平滑尺度 σ 物理推导全局粗搜自适应角步长 ∈ [0.75°, 3.0°]
+double compute_adaptive_ang_step(const MapField & field, const Scan & scan);
+
 // 四态物理波束评估结果（基于精确 SDF 球面跳跃追踪）：
 //   1) STATIC_HIT    : 射线经自由空间命中真实墙面
 //   2) Z_SHORT       : 自由空间内提前截断的新增动态遮挡（从有效静态内点分母中合理扣除）
