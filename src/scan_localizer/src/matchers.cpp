@@ -18,6 +18,10 @@
 #include "scan_localizer/matchers.hpp"
 
 #include <algorithm>
+#include <chrono>
+#if defined(__ARM_NEON) || defined(__aarch64__)
+#include <arm_neon.h>
+#endif
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -934,11 +938,66 @@ MatchResult ComposedMatcher::match(
 // · 固定容量 top-K + 空间/角度 NMS 维护剪枝下界 worst_kept；
 // · 末端小窗口细修（±2 格 / ±半角步长），产出交给跟踪匹配器。
 // ============================================================================
+namespace
+{
+
+// 内部全命中无分支 uint8 似然累加 + 部分和上界早停（ARM64 启用 NEON，x86 走 4 路展开）
+inline std::uint32_t eval_u8_inbounds_early_exit(
+  const std::uint8_t * base, const std::int32_t * offs,
+  int n, std::uint32_t min_sum_u8)
+{
+  std::uint32_t sum = 0u;
+  int i = 0;
+#if defined(__ARM_NEON) || defined(__aarch64__)
+  uint32x4_t acc = vdupq_n_u32(0u);
+  for (; i + 8 <= n; i += 8) {
+    const std::uint8_t v[8] = {
+      base[offs[i]], base[offs[i + 1]], base[offs[i + 2]], base[offs[i + 3]],
+      base[offs[i + 4]], base[offs[i + 5]], base[offs[i + 6]], base[offs[i + 7]]
+    };
+    const uint8x8_t v8 = vld1_u8(v);
+    acc = vpadalq_u16(acc, vpaddl_u8(v8));
+    if (((i + 8) & 15) == 0 && min_sum_u8 > 0u) {
+      const std::uint32_t cur = vaddvq_u32(acc);
+      if (cur + static_cast<std::uint32_t>(n - (i + 8)) * 255u <= min_sum_u8) {
+        return 0u;
+      }
+    }
+  }
+  sum = vaddvq_u32(acc);
+#else
+  for (; i + 4 <= n; i += 4) {
+    sum += static_cast<std::uint32_t>(base[offs[i]]) +
+      static_cast<std::uint32_t>(base[offs[i + 1]]) +
+      static_cast<std::uint32_t>(base[offs[i + 2]]) +
+      static_cast<std::uint32_t>(base[offs[i + 3]]);
+    if (((i + 4) & 15) == 0 && min_sum_u8 > 0u) {
+      if (sum + static_cast<std::uint32_t>(n - (i + 4)) * 255u <= min_sum_u8) {
+        return 0u;
+      }
+    }
+  }
+#endif
+  for (; i < n; ++i) {
+    sum += static_cast<std::uint32_t>(base[offs[i]]);
+  }
+  return sum;
+}
+
+}  // namespace
+
 GlobalResult global_correlative(
   const MapField & field, const Scan & scan,
   int beams_subsample, double ang_step,
-  int n_hypotheses)
+  int n_hypotheses, double max_time_ms)
 {
+  const auto t_start = std::chrono::steady_clock::now();
+  const auto elapsed_ms = [&]() {
+      return std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - t_start).count();
+    };
+  const bool use_time_budget = std::isfinite(max_time_ms) && max_time_ms > 0.0;
+
   GlobalResult out;
   if (!field.valid() || scan.points.empty() ||
     !std::isfinite(ang_step) || ang_step <= 0.0)
@@ -991,10 +1050,12 @@ GlobalResult global_correlative(
   const int n_ang = static_cast<int>(std::ceil(kTwoPi / ang_step));
   if (n_ang <= 0) {return out;}
 
-    // 每角度：整数胞元 c_i + 机器人合法偏移范围
+    // 每角度：整数胞元 c_i + 1D 扁平偏移 + 范围包围盒（供内部全命中无分支快路径使用）
   struct AngData
   {
     std::vector<Eigen::Vector2i> cells;
+    std::vector<std::int32_t> flat_offs;
+    int min_cx{0}, max_cx{0}, min_cy{0}, max_cy{0};
     int dx_min{0}, dx_max{0}, dy_min{0}, dy_max{0};
   };
   std::vector<AngData> ang(static_cast<std::size_t>(n_ang));
@@ -1003,12 +1064,25 @@ GlobalResult global_correlative(
     const double cc = std::cos(th), ss = std::sin(th);
     auto & A = ang[static_cast<std::size_t>(a)];
     A.cells.reserve(sub_pts.size());
+    A.flat_offs.reserve(sub_pts.size());
+    bool first_pt = true;
     for (const auto & pt : sub_pts) {
       const int cx = static_cast<int>(std::lround(
           (cc * pt.x() - ss * pt.y()) / grid->resolution));
       const int cy = static_cast<int>(std::lround(
           (ss * pt.x() + cc * pt.y()) / grid->resolution));
       A.cells.push_back({cx, cy});
+      A.flat_offs.push_back(static_cast<std::int32_t>(cy * W + cx));
+      if (first_pt) {
+        A.min_cx = A.max_cx = cx;
+        A.min_cy = A.max_cy = cy;
+        first_pt = false;
+      } else {
+        A.min_cx = std::min(A.min_cx, cx);
+        A.max_cx = std::max(A.max_cx, cx);
+        A.min_cy = std::min(A.min_cy, cy);
+        A.max_cy = std::max(A.max_cy, cy);
+      }
     }
     A.dx_min = free_xmin;
     A.dx_max = free_xmax;
@@ -1016,9 +1090,48 @@ GlobalResult global_correlative(
     A.dy_max = free_ymax;
   }
 
-    // 块上界打分：整块完全越界的光束严格记 0（避免 poolScore 边界夹紧导致虚高上界）
-  auto eval_block_bound = [&](int level, int bx, int by, const AngData & A)
+  const double inv_n255 = 1.0 / (255.0 * static_cast<double>(n));
+
+    // 块上界打分：优先走 uint8 量化金字塔 + 内部无分支快路径 + 部分和早停
+  auto eval_block_bound = [&](int level, int bx, int by, const AngData & A, double min_bound)
     {
+      const std::uint8_t * plane = field.poolDataU8(level);
+      const std::uint32_t min_sum_u8 = (min_bound > 0.0) ?
+        static_cast<std::uint32_t>(std::floor(min_bound * 255.0 * static_cast<double>(n))) : 0u;
+      if (plane != nullptr) {
+        if (bx + A.min_cx >= 0 && bx + A.max_cx < W &&
+          by + A.min_cy >= 0 && by + A.max_cy < H)
+        {
+          const std::uint8_t * base =
+            plane + static_cast<std::size_t>(by) * static_cast<std::size_t>(W) +
+            static_cast<std::size_t>(bx);
+          const std::uint32_t sum = eval_u8_inbounds_early_exit(
+            base, A.flat_offs.data(), n, min_sum_u8);
+          return static_cast<double>(sum) * inv_n255;
+        }
+        const int span = 1 << level;
+        std::uint32_t sum = 0u;
+        for (int i = 0; i < n; ++i) {
+          const auto & c = A.cells[static_cast<std::size_t>(i)];
+          const int px = c.x() + bx;
+          const int py = c.y() + by;
+          if (px >= W || px + span <= 0 || py >= H || py + span <= 0) {
+            if (min_sum_u8 > 0u &&
+              sum + static_cast<std::uint32_t>(n - 1 - i) * 255u <= min_sum_u8)
+            {
+              return 0.0;
+            }
+            continue;
+          }
+          const int cx = std::max(px, 0);
+          const int cy = std::max(py, 0);
+          sum += static_cast<std::uint32_t>(
+            plane[static_cast<std::size_t>(cy) * static_cast<std::size_t>(W) +
+            static_cast<std::size_t>(cx)]);
+        }
+        return static_cast<double>(sum) * inv_n255;
+      }
+
       const int span = 1 << level;
       double sc = 0.0;
       for (const auto & c : A.cells) {
@@ -1051,7 +1164,7 @@ GlobalResult global_correlative(
         std::floor(A.dy_min / static_cast<double>(G))) * G;
       for (int by = y0; by <= A.dy_max; by += G) {
         for (int bx = x0; bx <= A.dx_max; bx += G) {
-          const double sc = eval_block_bound(K, bx, by, A);
+          const double sc = eval_block_bound(K, bx, by, A, 0.05);
           if (sc > 0.05) {pq.push({sc, K, bx, by, a});}
         }
       }
@@ -1164,12 +1277,28 @@ GlobalResult global_correlative(
       if (origin_cell < 0 || origin_cell > 65) {
         continue;
       }
-        // 精确重评分（出界点 0 分，无滑窗膨胀）
+        // 精确重评分（出界点 0 分，优先走 uint8 内部快路径 + 早停）
       double sc = 0.0;
-      for (const auto & c : A.cells) {
-        sc += field.likelihood(c.x() + nd.bx, c.y() + nd.by);
+      const double min_need = std::max(0.10, worst_kept);
+      const std::uint8_t * like_u8 = field.likeDataU8();
+      if (like_u8 != nullptr &&
+        nd.bx + A.min_cx >= 0 && nd.bx + A.max_cx < W &&
+        nd.by + A.min_cy >= 0 && nd.by + A.max_cy < H)
+      {
+        const std::uint32_t min_sum_u8 = static_cast<std::uint32_t>(
+          std::floor(min_need * 255.0 * static_cast<double>(n)));
+        const std::uint8_t * base =
+          like_u8 + static_cast<std::size_t>(nd.by) * static_cast<std::size_t>(W) +
+          static_cast<std::size_t>(nd.bx);
+        const std::uint32_t sum = eval_u8_inbounds_early_exit(
+          base, A.flat_offs.data(), n, min_sum_u8);
+        sc = static_cast<double>(sum) * inv_n255;
+      } else {
+        for (const auto & c : A.cells) {
+          sc += field.likelihood(c.x() + nd.bx, c.y() + nd.by);
+        }
+        sc /= n;
       }
-      sc /= n;
       if (sc > 0.10 && sc > worst_kept) {
         const Hyp cand{sc, nd.bx, nd.by, nd.aidx};
         bool merged = false;
@@ -1224,12 +1353,18 @@ GlobalResult global_correlative(
         {
           continue;
         }
-        const double sc = eval_block_bound(nd.level - 1, bx, by, A);
+        const double sc = eval_block_bound(
+          nd.level - 1, bx, by, A, std::max(0.05, worst_kept));
         if (sc > 0.05 && sc > worst_kept) {
           pq.push({sc, nd.level - 1, bx, by, nd.aidx});
         }
         ++expanded;
       }
+    }
+    if (use_time_budget && (expanded & 2047LL) == 0 && !hyps.empty() &&
+      elapsed_ms() >= 0.75 * max_time_ms)
+    {
+      break;  // 墙钟熔断：保留 25% 预算给末端精修，锁死边缘端 P99 耗时
     }
     if (expanded > 30000000LL) {break;}        // 防御性上限
   }
@@ -1241,10 +1376,21 @@ GlobalResult global_correlative(
   refined.reserve(hyps.size());
   std::vector<Eigen::Vector2d> rot_pts;
   rot_pts.reserve(valid_pts.size());
+  // 按粗分降序排列，确保时间熔断触发时优先精修最高分候选
+  std::sort(hyps.begin(), hyps.end(),
+    [](const Hyp & a, const Hyp & b) {return a.score > b.score;});
+  const std::size_t min_polish = std::min<std::size_t>(hyps.size(), 6u);
   FieldGnMatcher gn_refiner;
   MatchOptions gn_opt;
   gn_opt.max_iterations = 10;
-  for (const auto & hyp : hyps) {
+  for (std::size_t hi = 0; hi < hyps.size(); ++hi) {
+    if (use_time_budget && hi >= 1u && elapsed_ms() >= max_time_ms) {
+      break;
+    }
+    if (use_time_budget && hi >= min_polish && elapsed_ms() >= 0.90 * max_time_ms) {
+      break;
+    }
+    const auto & hyp = hyps[hi];
     const double th0 = hyp.aidx * ang_step;
     const Eigen::Vector2d w0 = grid->gridToWorld(hyp.dx, hyp.dy);
     double best_sc = -1.0;

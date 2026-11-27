@@ -158,6 +158,7 @@ bool MapField::build(
   sdf_cells_.clear();
   like_.clear();
   swmax_.clear();
+  swmax_u8_.clear();
   prior_grid_.clear();
   prior_w_ = 0;
   prior_h_ = 0;
@@ -279,6 +280,18 @@ bool MapField::build(
       }
     }
     swmax_.push_back(std::move(dst));
+  }
+
+  // 构建 uint8 量化上界金字塔（使用 ceil 严格保持 B&B 上界可采纳性，体积缩至 1/4）
+  swmax_u8_.resize(swmax_.size());
+  for (std::size_t lv = 0; lv < swmax_.size(); ++lv) {
+    const auto & src = swmax_[lv].data;
+    auto & dst = swmax_u8_[lv];
+    dst.resize(src.size());
+    for (std::size_t i = 0; i < src.size(); ++i) {
+      const int q = static_cast<int>(std::ceil(src[i] * 255.0f));
+      dst[i] = static_cast<std::uint8_t>(std::clamp(q, 0, 255));
+    }
   }
 
   valid_ = true;
