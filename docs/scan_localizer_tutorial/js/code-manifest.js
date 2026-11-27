@@ -95,7 +95,7 @@
     {
       path: "src/matchers.cpp",
       group: "matchers",
-      lines: 1743,
+      lines: 1748,
       chapter: "ch04",
       role: "五种局部匹配器、未阻尼 Hessian 协方差、B&B 全局重定位与工厂实现",
       symbols: [
@@ -337,7 +337,7 @@
     {
       path: "test/test_matchers.cpp",
       group: "sim_test",
-      lines: 664,
+      lines: 672,
       chapter: "ch04",
       role: "五种匹配器收敛、退化走廊协方差、B&B 100%越界与失败回调单测 (8 cases)",
       symbols: [
