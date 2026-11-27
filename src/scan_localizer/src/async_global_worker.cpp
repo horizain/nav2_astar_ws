@@ -29,41 +29,6 @@
 
 namespace sloc
 {
-namespace
-{
-
-double resolve_adaptive_ang_step(
-  const MapField & field, const Scan & scan, double configured_ang_step)
-{
-  if (std::isfinite(configured_ang_step) && configured_ang_step > 0.0) {
-    return configured_ang_step;
-  }
-  std::vector<double> ranges;
-  ranges.reserve(scan.points.size());
-  for (const auto & pt : scan.points) {
-    if (std::isfinite(pt.x()) && std::isfinite(pt.y())) {
-      const double r = pt.norm();
-      if (r > 1e-3) {
-        ranges.push_back(r);
-      }
-    }
-  }
-  double r_p90 = 5.0;
-  if (!ranges.empty()) {
-    const std::size_t idx = (ranges.size() * 9u) / 10u;
-    std::nth_element(
-      ranges.begin(),
-      ranges.begin() + static_cast<std::ptrdiff_t>(idx),
-      ranges.end());
-    r_p90 = std::max(1.5, ranges[idx]);
-  }
-  const double sigma = std::max(field.grid().resolution, field.sigma_m_);
-  // 末端弦长误差 <= 1.2 * sigma，夹紧到 [2.5 deg, 7.5 deg]
-  return std::clamp(1.2 * sigma / r_p90, 0.0436332, 0.1308997);
-}
-
-}  // namespace
-
 AsyncGlobalWorker::AsyncGlobalWorker(GlobalWorkerConfig cfg)
 : cfg_(std::move(cfg))
 {
@@ -188,8 +153,10 @@ void AsyncGlobalWorker::worker_loop()
     const auto t0 = std::chrono::steady_clock::now();
     GlobalResult gres;
     if (job.field && job.field->valid() && !job.scan.points.empty()) {
-      const double ang_step = resolve_adaptive_ang_step(
-        *job.field, job.scan, local_cfg.ang_step);
+      const double ang_step =
+        (std::isfinite(local_cfg.ang_step) && local_cfg.ang_step > 0.0) ?
+        local_cfg.ang_step :
+        compute_adaptive_ang_step(*job.field, job.scan);
       gres = global_correlative(
         *job.field, job.scan,
         local_cfg.beams_subsample,

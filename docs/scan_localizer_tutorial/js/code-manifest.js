@@ -471,12 +471,12 @@
     {
       path: "src/async_global_worker.cpp",
       group: "core",
-      lines: 218,
+      lines: 185,
       chapter: "ch08",
       role: "AsyncGlobalWorker 实现：pthread_setaffinity_np 绑核、setpriority 降权与自适应角步长",
       symbols: [
-        { name: "AsyncGlobalWorker::apply_thread_isolation", range: "123-155", desc: "Linux 绑核与线程 nice 降权（静默降级安全）" },
-        { name: "AsyncGlobalWorker::worker_loop", range: "157-200", desc: "单槽最新帧消费并透传 max_time_ms 墙钟预算" },
+        { name: "AsyncGlobalWorker::apply_thread_isolation", range: "102-133", desc: "Linux 绑核与线程 nice 降权（静默降级安全）" },
+        { name: "AsyncGlobalWorker::worker_loop", range: "135-183", desc: "单槽最新帧消费并透传 max_time_ms 墙钟预算" },
       ],
     },
     {
