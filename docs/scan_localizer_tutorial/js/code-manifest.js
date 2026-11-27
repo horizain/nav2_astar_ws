@@ -438,7 +438,7 @@
     {
       path: "src/blackbox_recorder.cpp",
       group: "core",
-      lines: 559,
+      lines: 561,
       chapter: "ch07",
       role: "黑匣子环形缓冲、SLOCBB01 二进制读写、JSON 摘要与后台配额轮转实现",
       symbols: [
