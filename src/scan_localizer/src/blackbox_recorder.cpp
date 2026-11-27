@@ -46,6 +46,11 @@ bool read_pod(std::istream & is, T & val)
   return is.good();
 }
 
+double json_safe(double v)
+{
+  return std::isfinite(v) ? v : 0.0;
+}
+
 const char * loc_state_name(LocState st)
 {
   switch (st) {
@@ -282,6 +287,9 @@ BlackboxRecorder::BlackboxRecorder(BlackboxConfig cfg)
 
 BlackboxRecorder::~BlackboxRecorder()
 {
+  if (cfg_.enabled) {
+    flush_and_wait(true);
+  }
   {
     std::lock_guard<std::mutex> lk(job_mtx_);
     stop_writer_ = true;
@@ -295,7 +303,11 @@ BlackboxRecorder::~BlackboxRecorder()
 void BlackboxRecorder::record_odom(
   double stamp_s, const Pose2 & odom_pose, double imu_yaw, bool has_imu)
 {
-  if (!cfg_.enabled || odom_ring_.empty()) {
+  if (!cfg_.enabled) {
+    return;
+  }
+  std::lock_guard<std::mutex> rlk(ring_mtx_);
+  if (odom_ring_.empty()) {
     return;
   }
   auto & slot = odom_ring_[odom_head_];
@@ -312,7 +324,11 @@ void BlackboxRecorder::record_odom(
 void BlackboxRecorder::record_scan(
   double stamp_s, const Scan & scan, const CoreOutput & out)
 {
-  if (!cfg_.enabled || scan_ring_.empty()) {
+  if (!cfg_.enabled) {
+    return;
+  }
+  std::lock_guard<std::mutex> rlk(ring_mtx_);
+  if (scan_ring_.empty()) {
     return;
   }
   auto & slot = scan_ring_[scan_head_];
@@ -366,6 +382,7 @@ void BlackboxRecorder::trigger(double stamp_s, BlackboxTrigger reason)
   if (!cfg_.enabled || reason == BlackboxTrigger::kNone) {
     return;
   }
+  std::lock_guard<std::mutex> rlk(ring_mtx_);
   start_capture(stamp_s, reason);
   if (capturing_post_ && cfg_.post_seconds <= 0.0) {
     dispatch_snapshot();
@@ -426,13 +443,22 @@ void BlackboxRecorder::dispatch_snapshot()
   job_cv_.notify_one();
 }
 
+bool BlackboxRecorder::is_capturing_post() const
+{
+  std::lock_guard<std::mutex> rlk(ring_mtx_);
+  return capturing_post_;
+}
+
 void BlackboxRecorder::flush_and_wait(bool force_finalize)
 {
   if (!cfg_.enabled) {
     return;
   }
-  if (force_finalize && capturing_post_) {
-    dispatch_snapshot();
+  if (force_finalize) {
+    std::lock_guard<std::mutex> rlk(ring_mtx_);
+    if (capturing_post_) {
+      dispatch_snapshot();
+    }
   }
   std::unique_lock<std::mutex> lk(job_mtx_);
   idle_cv_.wait(lk, [&]() {return !job_pending_ && !writer_busy_;});
@@ -482,48 +508,70 @@ bool BlackboxRecorder::write_bundle_to_disk(const BlackboxBundle & job)
   base << "bb_" << std::setw(13) << std::setfill('0') << std::max<std::int64_t>(0, stamp_ms)
        << "_" << blackbox_trigger_name(job.reason);
   const fs::path bin_path = fs::path(cfg_.output_dir) / (base.str() + ".slocbb");
+  const fs::path bin_tmp = fs::path(cfg_.output_dir) / (base.str() + ".slocbb.tmp");
   const fs::path json_path = fs::path(cfg_.output_dir) / (base.str() + ".json");
+  const fs::path json_tmp = fs::path(cfg_.output_dir) / (base.str() + ".json.tmp");
 
-  if (!save_blackbox_bundle(bin_path.string(), job)) {
+  if (!save_blackbox_bundle(bin_tmp.string(), job)) {
+    fs::remove(bin_tmp, ec);
+    return false;
+  }
+  fs::rename(bin_tmp, bin_path, ec);
+  if (ec) {
+    fs::remove(bin_tmp, ec);
     return false;
   }
 
-  // 写出人类可读 JSON 摘要，便于现场 1 秒定位触发原因与门控位掩码
-  std::ofstream jfs(json_path, std::ios::trunc);
-  if (jfs.is_open()) {
-    jfs << std::fixed << std::setprecision(4);
-    jfs << "{\n"
-        << "  \"trigger_stamp_s\": " << job.trigger_stamp_s << ",\n"
-        << "  \"reason\": \"" << blackbox_trigger_name(job.reason) << "\",\n"
-        << "  \"num_scans\": " << job.scans.size() << ",\n"
-        << "  \"num_odoms\": " << job.odoms.size() << ",\n"
-        << "  \"binary_file\": \"" << bin_path.filename().string() << "\"";
-    if (!job.scans.empty()) {
-      const auto it = std::min_element(
-        job.scans.begin(), job.scans.end(),
-        [&](const PackedScanRecord & a, const PackedScanRecord & b) {
-          return std::abs(a.stamp_s - job.trigger_stamp_s) <
-                 std::abs(b.stamp_s - job.trigger_stamp_s);
-        });
-      jfs << ",\n  \"trigger_frame\": {\n"
-          << "    \"stamp_s\": " << it->stamp_s << ",\n"
-          << "    \"state\": \"" << loc_state_name(it->state) << "\",\n"
-          << "    \"accepted\": " << (it->accepted ? "true" : "false") << ",\n"
-          << "    \"score\": " << it->score << ",\n"
-          << "    \"inlier_ratio\": " << it->inlier_ratio << ",\n"
-          << "    \"reject_streak\": " << it->reject_streak << ",\n"
-          << "    \"reject_flags\": " << it->diag.reject_flags << ",\n"
-          << "    \"raw_score\": " << it->diag.raw_score << ",\n"
-          << "    \"wall_visibility\": " << it->diag.wall_visibility << ",\n"
-          << "    \"frontier_visibility\": " << it->diag.frontier_visibility << ",\n"
-          << "    \"short_ratio\": " << it->diag.short_ratio << ",\n"
-          << "    \"frontier_ratio\": " << it->diag.frontier_ratio << ",\n"
-          << "    \"mahal_dist\": " << it->diag.mahal_dist << "\n"
-          << "  }\n";
-    } else {
-      jfs << "\n";
+  // 写出人类可读 JSON 摘要（过滤 NaN/Inf + 临时文件原子替换）
+  bool json_ok = false;
+  {
+    std::ofstream jfs(json_tmp, std::ios::trunc);
+    if (jfs.is_open()) {
+      jfs << std::fixed << std::setprecision(4);
+      jfs << "{\n"
+          << "  \"trigger_stamp_s\": " << json_safe(job.trigger_stamp_s) << ",\n"
+          << "  \"reason\": \"" << blackbox_trigger_name(job.reason) << "\",\n"
+          << "  \"num_scans\": " << job.scans.size() << ",\n"
+          << "  \"num_odoms\": " << job.odoms.size() << ",\n"
+          << "  \"binary_file\": \"" << bin_path.filename().string() << "\"";
+      if (!job.scans.empty()) {
+        const auto it = std::min_element(
+          job.scans.begin(), job.scans.end(),
+          [&](const PackedScanRecord & a, const PackedScanRecord & b) {
+            return std::abs(a.stamp_s - job.trigger_stamp_s) <
+                   std::abs(b.stamp_s - job.trigger_stamp_s);
+          });
+        jfs << ",\n  \"trigger_frame\": {\n"
+            << "    \"stamp_s\": " << json_safe(it->stamp_s) << ",\n"
+            << "    \"state\": \"" << loc_state_name(it->state) << "\",\n"
+            << "    \"accepted\": " << (it->accepted ? "true" : "false") << ",\n"
+            << "    \"score\": " << json_safe(it->score) << ",\n"
+            << "    \"inlier_ratio\": " << json_safe(it->inlier_ratio) << ",\n"
+            << "    \"reject_streak\": " << it->reject_streak << ",\n"
+            << "    \"reject_flags\": " << it->diag.reject_flags << ",\n"
+            << "    \"raw_score\": " << json_safe(it->diag.raw_score) << ",\n"
+            << "    \"wall_visibility\": " << json_safe(it->diag.wall_visibility) << ",\n"
+            << "    \"frontier_visibility\": "
+            << json_safe(it->diag.frontier_visibility) << ",\n"
+            << "    \"short_ratio\": " << json_safe(it->diag.short_ratio) << ",\n"
+            << "    \"frontier_ratio\": " << json_safe(it->diag.frontier_ratio) << ",\n"
+            << "    \"mahal_dist\": " << json_safe(it->diag.mahal_dist) << "\n"
+            << "  }\n";
+      } else {
+        jfs << "\n";
+      }
+      jfs << "}\n";
+      jfs.flush();
+      json_ok = jfs.good();
     }
-    jfs << "}\n";
+  }
+  if (json_ok) {
+    fs::rename(json_tmp, json_path, ec);
+    if (ec) {
+      fs::remove(json_tmp, ec);
+    }
+  } else {
+    fs::remove(json_tmp, ec);
   }
   return true;
 }

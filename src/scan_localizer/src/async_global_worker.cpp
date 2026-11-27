@@ -52,8 +52,19 @@ AsyncGlobalWorker::~AsyncGlobalWorker()
 
 void AsyncGlobalWorker::update_config(const GlobalWorkerConfig & cfg)
 {
-  std::lock_guard<std::mutex> lk(mtx_);
-  cfg_ = cfg;
+  bool need_reapply = false;
+  {
+    std::lock_guard<std::mutex> lk(mtx_);
+    need_reapply = (cfg.cpu_affinity != cfg_.cpu_affinity) ||
+      (cfg.nice_value != cfg_.nice_value);
+    cfg_ = cfg;
+    if (need_reapply) {
+      isolation_dirty_ = true;
+    }
+  }
+  if (need_reapply) {
+    job_cv_.notify_one();
+  }
 }
 
 std::uint64_t AsyncGlobalWorker::submit(
@@ -140,16 +151,31 @@ void AsyncGlobalWorker::worker_loop()
   while (true) {
     Job job;
     GlobalWorkerConfig local_cfg;
+    bool reapply_iso = false;
     {
       std::unique_lock<std::mutex> lk(mtx_);
-      job_cv_.wait(lk, [&]() {return stop_ || has_pending_;});
+      job_cv_.wait(lk, [&]() {return stop_ || has_pending_ || isolation_dirty_;});
       if (stop_) {
         break;
+      }
+      if (isolation_dirty_) {
+        isolation_dirty_ = false;
+        reapply_iso = true;
+      }
+      if (!has_pending_) {
+        lk.unlock();
+        if (reapply_iso) {
+          apply_thread_isolation();
+        }
+        continue;
       }
       job = std::move(pending_job_);
       has_pending_ = false;
       local_cfg = cfg_;
       busy_.store(true, std::memory_order_release);
+    }
+    if (reapply_iso) {
+      apply_thread_isolation();
     }
 
     const auto t0 = std::chrono::steady_clock::now();

@@ -17,6 +17,7 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -286,6 +287,46 @@ TEST(BlackboxRecorderTest, IgnoresColdStartGlobalAndInvalidMatchFlag)
   rec.record_scan(1.6, scan, tracking);
   rec.flush_and_wait();
   EXPECT_EQ(rec.dump_count(), 1u);
+}
+
+TEST(BlackboxRecorderTest, DestructorFlushesInFlightCaptureAndSanitizesJsonNan)
+{
+  ScopedTempDir tmp("dtor_nan");
+  {
+    sloc::BlackboxConfig cfg;
+    cfg.output_dir = tmp.path.string();
+    cfg.pre_seconds = 0.5;
+    cfg.post_seconds = 30.0;  // Still in post window when destroyed
+    cfg.cooldown_s = 1.0;
+
+    sloc::BlackboxRecorder rec(cfg);
+    const sloc::Scan scan = make_ring_scan(36, 3.0);
+    sloc::CoreOutput out;
+    out.state = sloc::LocState::TRACKING;
+    out.score = std::numeric_limits<double>::quiet_NaN();
+    out.diag.mahal_dist = std::numeric_limits<double>::infinity();
+    out.diag.reject_flags = sloc::GateFlag::kWallPhys;
+    rec.record_scan(5.0, scan, out);
+    EXPECT_TRUE(rec.is_capturing_post());
+  }
+
+  std::vector<fs::path> bins;
+  std::vector<fs::path> jsons;
+  std::size_t tmp_files = 0;
+  for (const auto & e : fs::directory_iterator(tmp.path)) {
+    if (e.path().extension() == ".slocbb") {bins.push_back(e.path());}
+    if (e.path().extension() == ".json") {jsons.push_back(e.path());}
+    if (e.path().extension() == ".tmp") {++tmp_files;}
+  }
+  EXPECT_EQ(tmp_files, 0u);
+  ASSERT_EQ(bins.size(), 1u);
+  ASSERT_EQ(jsons.size(), 1u);
+
+  std::ifstream ifs(jsons[0]);
+  const std::string jtxt(
+    (std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
+  EXPECT_EQ(jtxt.find("nan"), std::string::npos);
+  EXPECT_EQ(jtxt.find("inf"), std::string::npos);
 }
 
 }  // namespace

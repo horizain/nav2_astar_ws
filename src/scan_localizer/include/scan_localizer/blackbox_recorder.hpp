@@ -127,7 +127,7 @@ public:
   void flush_and_wait(bool force_finalize = false);
 
   std::size_t dump_count() const {return dump_count_.load(std::memory_order_acquire);}
-  bool is_capturing_post() const {return capturing_post_;}
+  bool is_capturing_post() const;
 
 private:
   void start_capture(double stamp_s, BlackboxTrigger reason);
@@ -137,6 +137,7 @@ private:
   void enforce_disk_quota();
 
   BlackboxConfig cfg_;
+  mutable std::mutex ring_mtx_;
   std::vector<PackedScanRecord> scan_ring_;
   std::vector<PackedOdomRecord> odom_ring_;
   std::size_t scan_head_{0};

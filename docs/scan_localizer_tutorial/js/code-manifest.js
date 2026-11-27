@@ -427,7 +427,7 @@
     {
       path: "include/scan_localizer/blackbox_recorder.hpp",
       group: "core",
-      lines: 166,
+      lines: 167,
       chapter: "ch07",
       role: "低内存环形缓冲黑匣子接口：固定尺寸扫描/里程计快照、紧凑二进制读写与触发状态机",
       symbols: [
@@ -438,7 +438,7 @@
     {
       path: "src/blackbox_recorder.cpp",
       group: "core",
-      lines: 561,
+      lines: 609,
       chapter: "ch07",
       role: "黑匣子环形缓冲、SLOCBB01 二进制读写、JSON 摘要与后台配额轮转实现",
       symbols: [
@@ -449,7 +449,7 @@
     {
       path: "test/test_blackbox_recorder.cpp",
       group: "tests",
-      lines: 291,
+      lines: 332,
       chapter: "ch09",
       role: "黑匣子模块单元测试：二进制往返、前后窗切片、大点云降采样、冷却防风暴与磁盘配额",
       symbols: [
@@ -460,7 +460,7 @@
     {
       path: "include/scan_localizer/async_global_worker.hpp",
       group: "core",
-      lines: 111,
+      lines: 112,
       chapter: "ch08",
       role: "异步全局重定位隔离工作线程接口：Latest-Only 单槽覆盖、Linux 绑核与 nice 降权",
       symbols: [
@@ -471,18 +471,18 @@
     {
       path: "src/async_global_worker.cpp",
       group: "core",
-      lines: 187,
+      lines: 213,
       chapter: "ch08",
       role: "AsyncGlobalWorker 实现：pthread_setaffinity_np 绑核、setpriority 降权与自适应角步长",
       symbols: [
-        { name: "AsyncGlobalWorker::apply_thread_isolation", range: "104-135", desc: "Linux 绑核与线程 nice 降权（静默降级安全）" },
-        { name: "AsyncGlobalWorker::worker_loop", range: "137-185", desc: "单槽最新帧消费并透传 max_time_ms 墙钟预算" },
+        { name: "AsyncGlobalWorker::apply_thread_isolation", range: "115-146", desc: "Linux 绑核与线程 nice 降权（静默降级安全）" },
+        { name: "AsyncGlobalWorker::worker_loop", range: "148-211", desc: "单槽最新帧消费并透传 max_time_ms 墙钟预算" },
       ],
     },
     {
       path: "test/test_async_global_worker.cpp",
       group: "tests",
-      lines: 128,
+      lines: 157,
       chapter: "ch09",
       role: "AsyncGlobalWorker 单元测试：绑核降权重定位精度与高频突发提交单槽覆盖验证",
       symbols: [
