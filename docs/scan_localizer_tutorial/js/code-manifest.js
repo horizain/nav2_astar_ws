@@ -147,7 +147,7 @@
     {
       path: "src/localizer_core.cpp",
       group: "core",
-      lines: 1480,
+      lines: 1483,
       chapter: "ch07",
       role: "4D SE(2)+Bias EKF、Joseph 协方差、四道门控、静止锁死松弛与跳变保护实现",
       symbols: [
@@ -438,7 +438,7 @@
     {
       path: "src/blackbox_recorder.cpp",
       group: "core",
-      lines: 555,
+      lines: 559,
       chapter: "ch07",
       role: "黑匣子环形缓冲、SLOCBB01 二进制读写、JSON 摘要与后台配额轮转实现",
       symbols: [
@@ -449,7 +449,7 @@
     {
       path: "test/test_blackbox_recorder.cpp",
       group: "tests",
-      lines: 249,
+      lines: 291,
       chapter: "ch09",
       role: "黑匣子模块单元测试：二进制往返、前后窗切片、大点云降采样、冷却防风暴与磁盘配额",
       symbols: [

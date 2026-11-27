@@ -246,4 +246,46 @@ TEST(BlackboxRecorderTest, DisabledRecorderWritesNothing)
   EXPECT_EQ(rec.dump_count(), 0u);
 }
 
+TEST(BlackboxRecorderTest, IgnoresColdStartGlobalAndInvalidMatchFlag)
+{
+  ScopedTempDir tmp("coldstart_invalid");
+  sloc::BlackboxConfig cfg;
+  cfg.output_dir = tmp.path.string();
+  cfg.pre_seconds = 0.5;
+  cfg.post_seconds = 0.2;
+  cfg.cooldown_s = 1.0;
+
+  sloc::BlackboxRecorder rec(cfg);
+  const sloc::Scan scan = make_ring_scan(36, 3.0);
+
+  // Cold start UNINIT -> GLOBAL must not trigger a false-positive incident dump
+  sloc::CoreOutput cold_global;
+  cold_global.state = sloc::LocState::GLOBAL;
+  rec.record_scan(1.0, scan, cold_global);
+  EXPECT_FALSE(rec.is_capturing_post());
+
+  // Enter normal tracking
+  sloc::CoreOutput tracking;
+  tracking.state = sloc::LocState::TRACKING;
+  tracking.accepted = true;
+  rec.record_scan(1.1, scan, tracking);
+
+  // Invalid match frame must not masquerade as kWallPhysReject
+  sloc::CoreOutput invalid_out;
+  invalid_out.state = sloc::LocState::TRACKING;
+  invalid_out.diag.reject_flags = sloc::GateFlag::kInvalid | sloc::GateFlag::kWallPhys;
+  rec.record_scan(1.2, scan, invalid_out);
+  EXPECT_FALSE(rec.is_capturing_post());
+
+  // Genuine wall-piercing rejection (without kInvalid) must still trigger
+  sloc::CoreOutput wall_out;
+  wall_out.state = sloc::LocState::TRACKING;
+  wall_out.diag.reject_flags = sloc::GateFlag::kWallPhys;
+  rec.record_scan(1.3, scan, wall_out);
+  EXPECT_TRUE(rec.is_capturing_post());
+  rec.record_scan(1.6, scan, tracking);
+  rec.flush_and_wait();
+  EXPECT_EQ(rec.dump_count(), 1u);
+}
+
 }  // namespace
