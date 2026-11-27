@@ -14,6 +14,7 @@
 
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <cmath>
 #include <limits>
 #include <memory>
@@ -659,6 +660,13 @@ TEST(MatchersTest, GlobalCorrelativeRespectsWallClockTimeBudget)
   ASSERT_TRUE(res.valid);
   EXPECT_LT(std::hypot(res.pose.x - gt.x, res.pose.y - gt.y), 0.30);
   EXPECT_LT(std::abs(sloc::wrap_angle(res.pose.theta - gt.theta)), 0.20);
+
+  // Tight budget must terminate promptly even when expanded skips multiples of 2048
+  const auto t0 = std::chrono::steady_clock::now();
+  (void)sloc::global_correlative(field, scan, 3, 1.0 * kDeg, 8, 5.0);
+  const double dt_ms =
+    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+  EXPECT_LT(dt_ms, 200.0);
 }
 
 }  // namespace

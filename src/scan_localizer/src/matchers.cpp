@@ -1253,6 +1253,7 @@ GlobalResult global_correlative(
 
     // B&B 主循环
   std::int64_t expanded = 0;
+  std::int64_t next_time_check = 2048;
   while (!pq.empty()) {
     const Node nd = pq.top();
     pq.pop();
@@ -1356,10 +1357,14 @@ GlobalResult global_correlative(
         ++expanded;
       }
     }
-    if (use_time_budget && (expanded & 2047LL) == 0 && !hyps.empty() &&
-      elapsed_ms() >= 0.75 * max_time_ms)
-    {
-      break;  // 墙钟熔断：保留 25% 预算给末端精修，锁死边缘端 P99 耗时
+    if (use_time_budget && expanded >= next_time_check) {
+      next_time_check = expanded + 2048;
+      const double el = elapsed_ms();
+      if ((!hyps.empty() && el >= 0.75 * max_time_ms) ||
+        el >= max_time_ms)
+      {
+        break;  // 墙钟熔断：有候选时保留 25% 给精修；无候选时到总预算硬止损
+      }
     }
     if (expanded > 30000000LL) {break;}        // 防御性上限
   }
