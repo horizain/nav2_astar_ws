@@ -158,7 +158,8 @@ public:
   // ang_step <= 0.0 表示按扫描量程 p90 与 σ 自动推导物理角步长
   void enable_builtin_global(
     bool enable = true, int beams_subsample = 3,
-    double ang_step = 0.0, int n_hypotheses = 8);
+    double ang_step = 0.0, int n_hypotheses = 8,
+    double max_time_ms = 0.0);
 
   // 多假设候选队列（随 odom/IMU 传播，DEGRADED/LOST/GLOBAL 下多帧验证晋升）
   void add_hypotheses(const std::vector<Pose2> & hyps);
@@ -214,6 +215,7 @@ private:
   int builtin_beams_sub_{3};
   double builtin_ang_step_{0.0};
   int builtin_n_hyps_{8};
+  double builtin_max_time_ms_{0.0};
 
   LocState state_{LocState::UNINIT};
   Pose2 last_pose_{};          // map 系

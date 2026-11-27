@@ -212,12 +212,14 @@ void LocalizerCore::set_global_multi_fn(GlobalMultiFn fn)
 }
 
 void LocalizerCore::enable_builtin_global(
-  bool enable, int beams_subsample, double ang_step, int n_hypotheses)
+  bool enable, int beams_subsample, double ang_step, int n_hypotheses,
+  double max_time_ms)
 {
   builtin_global_enabled_ = enable;
   builtin_beams_sub_ = std::max(1, beams_subsample);
   builtin_ang_step_ = (std::isfinite(ang_step) && ang_step > 0.0) ? ang_step : 0.0;
   builtin_n_hyps_ = std::max(1, n_hypotheses);
+  builtin_max_time_ms_ = (std::isfinite(max_time_ms) && max_time_ms > 0.0) ? max_time_ms : 0.0;
 }
 
 void LocalizerCore::add_hypotheses(const std::vector<Pose2> & hyps)
@@ -780,7 +782,8 @@ bool LocalizerCore::handle_recovery_scan(const Scan & active_scan, CoreOutput & 
       global_multi_fn_(active_scan) :
       global_correlative(
         *field_, active_scan,
-        builtin_beams_sub_, eff_ang_step, builtin_n_hyps_);
+        builtin_beams_sub_, eff_ang_step, builtin_n_hyps_,
+        builtin_max_time_ms_);
     if (gres.valid && is_finite_pose(gres.pose)) {
       std::vector<Pose2> raw_cands;
       raw_cands.reserve(1 + gres.alternates.size());

@@ -91,6 +91,11 @@ LocalizerNode::LocalizerNode(const rclcpp::NodeOptions & opts)
   declare_parameter<double>("likelihood_sigma", likelihood_sigma_);
   declare_parameter<double>("ndt_voxel", ndt_voxel_);
   declare_parameter<bool>("use_global_search", use_global_search_);
+  declare_parameter<bool>("global_async", global_async_);
+  declare_parameter<double>("global_max_time_ms", global_max_time_ms_);
+  declare_parameter<int>("global_worker_nice", global_worker_nice_);
+  declare_parameter<bool>("blackbox_enabled", blackbox_enabled_);
+  declare_parameter<std::string>("blackbox_output_dir", blackbox_output_dir_);
 
   // TF 与扫描预处理
   declare_parameter<double>("transform_tolerance", transform_tolerance_);
@@ -236,6 +241,14 @@ bool LocalizerNode::readAndValidateParameters()
   const double likelihood_sigma = get_parameter("likelihood_sigma").as_double();
   const double ndt_voxel = get_parameter("ndt_voxel").as_double();
   const bool use_global_search = get_parameter("use_global_search").as_bool();
+  const bool global_async = get_parameter("global_async").as_bool();
+  const double global_max_time_ms =
+    get_parameter("global_max_time_ms").as_double();
+  const int global_worker_nice =
+    static_cast<int>(get_parameter("global_worker_nice").as_int());
+  const bool blackbox_enabled = get_parameter("blackbox_enabled").as_bool();
+  const std::string blackbox_output_dir =
+    get_parameter("blackbox_output_dir").as_string();
   const double transform_tolerance =
     get_parameter("transform_tolerance").as_double();
   const bool tf_broadcast = get_parameter("tf_broadcast").as_bool();
@@ -292,6 +305,7 @@ bool LocalizerNode::readAndValidateParameters()
     !isFiniteNonNegative(tf_lookup_timeout) ||
     scan_subsample < 1 || min_scan_points < 3 ||
     !isFiniteNonNegative(range_max) ||
+    !isFiniteNonNegative(global_max_time_ms) ||
     !isFinitePositive(max_imu_dt) || !isFinitePositive(odom_timeout) ||
     !std::isfinite(laser_x) || !std::isfinite(laser_y) ||
     !std::isfinite(laser_theta))
@@ -345,6 +359,11 @@ bool LocalizerNode::readAndValidateParameters()
   likelihood_sigma_ = likelihood_sigma;
   ndt_voxel_ = ndt_voxel;
   use_global_search_ = use_global_search;
+  global_async_ = global_async;
+  global_max_time_ms_ = global_max_time_ms;
+  global_worker_nice_ = global_worker_nice;
+  blackbox_enabled_ = blackbox_enabled;
+  blackbox_output_dir_ = blackbox_output_dir;
   transform_tolerance_ = transform_tolerance;
   tf_broadcast_ = tf_broadcast;
   tf_publish_rate_ = tf_publish_rate;
@@ -678,25 +697,31 @@ void LocalizerNode::resetResources()
   tf_listener_.reset();
   tf_buffer_.reset();
 
-  std::lock_guard<std::mutex> lk(state_mtx_);
-  core_.reset();
-  field_.reset();
-  grid_.reset();
-  matcher_.reset();
-  map_received_ = false;
-  fine_on_ = false;
-  stable_tracking_count_ = 0;
-  imu_yaw_ = 0.0;
-  last_imu_wz_ = 0.0;
-  imu_started_ = false;
-  last_imu_stamp_ = rclcpp::Time(0, 0, get_clock()->get_clock_type());
-  odom_buffer_.clear();
-  has_odom_sample_ = false;
-  last_odom_stamp_ = rclcpp::Time(0, 0, get_clock()->get_clock_type());
-  last_scan_.points.clear();
-  has_last_scan_ = false;
-  pending_hypotheses_.clear();
-  global_alternates_.clear();
+  std::unique_ptr<AsyncGlobalWorker> old_worker;
+  std::unique_ptr<BlackboxRecorder> old_blackbox;
+  {
+    std::lock_guard<std::mutex> lk(state_mtx_);
+    old_worker = std::move(global_worker_);
+    old_blackbox = std::move(blackbox_);
+    core_.reset();
+    field_.reset();
+    grid_.reset();
+    matcher_.reset();
+    map_received_ = false;
+    fine_on_ = false;
+    stable_tracking_count_ = 0;
+    imu_yaw_ = 0.0;
+    last_imu_wz_ = 0.0;
+    imu_started_ = false;
+    last_imu_stamp_ = rclcpp::Time(0, 0, get_clock()->get_clock_type());
+    odom_buffer_.clear();
+    has_odom_sample_ = false;
+    last_odom_stamp_ = rclcpp::Time(0, 0, get_clock()->get_clock_type());
+    last_scan_.points.clear();
+    has_last_scan_ = false;
+    pending_hypotheses_.clear();
+    global_alternates_.clear();
+  }
 }
 
 LocalizerNode::CallbackReturn LocalizerNode::on_configure(
@@ -717,6 +742,25 @@ LocalizerNode::CallbackReturn LocalizerNode::on_configure(
       [this](const Scan & s) {
         return use_global_search_ ? runGlobalMultiSearchLocked(s) : GlobalResult{};
       });
+    if (use_global_search_ && global_async_) {
+      GlobalWorkerConfig wcfg;
+      wcfg.beams_subsample = 3;
+      wcfg.ang_step = 0.0;
+      wcfg.n_hypotheses = 8;
+      wcfg.max_time_ms = global_max_time_ms_;
+      wcfg.nice_value = global_worker_nice_;
+      global_worker_ = std::make_unique<AsyncGlobalWorker>(wcfg);
+    } else {
+      global_worker_.reset();
+    }
+    if (blackbox_enabled_) {
+      BlackboxConfig bbcfg;
+      bbcfg.enabled = true;
+      bbcfg.output_dir = blackbox_output_dir_;
+      blackbox_ = std::make_unique<BlackboxRecorder>(bbcfg);
+    } else {
+      blackbox_.reset();
+    }
     fine_on_ = false;
     map_received_ = false;
     stable_tracking_count_ = 0;
@@ -1052,6 +1096,9 @@ void LocalizerNode::onOdom(const nav_msgs::msg::Odometry::SharedPtr m)
   last_odom_stamp_ = stamp;
   has_odom_sample_ = true;
   core_->on_odom(pose);
+  if (blackbox_) {
+    blackbox_->record_odom(stamp.seconds(), pose, imu_yaw_, imu_started_);
+  }
 }
 
 void LocalizerNode::onImu(const sensor_msgs::msg::Imu::SharedPtr m)
@@ -1432,6 +1479,11 @@ void LocalizerNode::onScan(const sensor_msgs::msg::LaserScan::SharedPtr m)
     has_last_scan_ = true;
 
     const CoreOutput out = core_->on_scan(scan);
+    if (blackbox_) {
+      const rclcpp::Time eff_stamp =
+        scan_stamp.nanoseconds() == 0 ? now() : scan_stamp;
+      blackbox_->record_scan(eff_stamp.seconds(), scan, out);
+    }
     if (out.state == LocState::TRACKING && out.accepted &&
       out.reject_streak == 0)
     {
@@ -1541,9 +1593,22 @@ GlobalResult LocalizerNode::runGlobalMultiSearchLocked(const Scan & scan)
       best_s, kExternalHypMinScore);
   }
 
-  // 2) 回退：空间分桶多样性 + 量程自适应角步长 B&B 全局搜索，全部备选峰交由 Core 闭环管理
-  const double ang_step = compute_adaptive_ang_step(*field_, scan);
-  const auto g = global_correlative(*field_, scan, 3, ang_step, 8);
+  // 2) 优先走非阻塞异步全局重定位线程（避免持 state_mtx_ 阻塞主回调）
+  GlobalResult g;
+  if (global_async_ && global_worker_) {
+    GlobalWorkerResult wres;
+    if (global_worker_->poll_result(wres) && wres.result.valid) {
+      g = std::move(wres.result);
+    } else {
+      global_worker_->submit(now().seconds(), field_, scan);
+      return out;
+    }
+  } else {
+    // 同步回退：透传墙钟预算 max_time_ms 锁死长尾耗时
+    const double ang_step = compute_adaptive_ang_step(*field_, scan);
+    g = global_correlative(
+      *field_, scan, 3, ang_step, 8, global_max_time_ms_);
+  }
   if (!g.valid) {return out;}
 
   global_alternates_.clear();
@@ -1574,6 +1639,9 @@ void LocalizerNode::onGlobalRelocalize(
   const bool ok = core_->request_global();
   if (ok) {
     stable_tracking_count_ = 0;
+    if (blackbox_) {
+      blackbox_->trigger(now().seconds(), BlackboxTrigger::kExternalRequest);
+    }
   }
   res->success = ok;
   res->message = ok ?
@@ -1784,6 +1852,24 @@ void LocalizerNode::publishOutputs(
     st.values.push_back(kv);
     kv.key = "reject_streak";
     kv.value = std::to_string(snap.out.reject_streak);
+    st.values.push_back(kv);
+    kv.key = "reject_flags";
+    kv.value = std::to_string(snap.out.diag.reject_flags);
+    st.values.push_back(kv);
+    kv.key = "raw_score";
+    kv.value = std::to_string(snap.out.diag.raw_score);
+    st.values.push_back(kv);
+    kv.key = "wall_visibility";
+    kv.value = std::to_string(snap.out.diag.wall_visibility);
+    st.values.push_back(kv);
+    kv.key = "frontier_visibility";
+    kv.value = std::to_string(snap.out.diag.frontier_visibility);
+    st.values.push_back(kv);
+    kv.key = "short_ratio";
+    kv.value = std::to_string(snap.out.diag.short_ratio);
+    st.values.push_back(kv);
+    kv.key = "mahal_dist";
+    kv.value = std::to_string(snap.out.diag.mahal_dist);
     st.values.push_back(kv);
     kv.key = "fine_mode";
     kv.value = snap.fine_on ? "1" : "0";

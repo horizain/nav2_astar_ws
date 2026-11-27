@@ -60,6 +60,8 @@
 #include <tf2_ros/transform_broadcaster.hpp>
 #include <tf2_ros/transform_listener.hpp>
 
+#include "scan_localizer/async_global_worker.hpp"
+#include "scan_localizer/blackbox_recorder.hpp"
 #include "scan_localizer/localizer_core.hpp"
 #include "scan_localizer/matchers.hpp"
 
@@ -180,6 +182,11 @@ private:
   double likelihood_sigma_{0.20};
   double ndt_voxel_{0.5};
   bool use_global_search_{true};
+  bool global_async_{true};
+  double global_max_time_ms_{250.0};
+  int global_worker_nice_{10};
+  bool blackbox_enabled_{false};
+  std::string blackbox_output_dir_{"/tmp/scan_localizer_blackbox"};
   double transform_tolerance_{0.1};
   bool tf_broadcast_{true};
   double tf_publish_rate_{10.0};
@@ -225,6 +232,8 @@ private:
   std::shared_ptr<OccupancyGrid> grid_;
   std::shared_ptr<Matcher> matcher_;
   std::unique_ptr<LocalizerCore> core_;
+  std::unique_ptr<AsyncGlobalWorker> global_worker_;
+  std::unique_ptr<BlackboxRecorder> blackbox_;
 
   // ---------- ROS 实体 ----------
   rclcpp::TimerBase::SharedPtr autostart_timer_;

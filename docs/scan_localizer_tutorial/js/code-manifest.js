@@ -136,7 +136,7 @@
     {
       path: "include/scan_localizer/localizer_core.hpp",
       group: "core",
-      lines: 240,
+      lines: 242,
       chapter: "ch07",
       role: "ROS 无关核心状态机：4 状态各向异性 EKF [x,y,θ,b_g]^T、门控与多假设队列",
       symbols: [
@@ -147,7 +147,7 @@
     {
       path: "src/localizer_core.cpp",
       group: "core",
-      lines: 1483,
+      lines: 1486,
       chapter: "ch07",
       role: "4D SE(2)+Bias EKF、Joseph 协方差、四道门控、静止锁死松弛与跳变保护实现",
       symbols: [
@@ -163,7 +163,7 @@
     {
       path: "include/scan_localizer/localizer_node.hpp",
       group: "ros",
-      lines: 260,
+      lines: 269,
       chapter: "ch08",
       role: "ROS 2 Jazzy Lifecycle 组件节点接口、回调组、快照与话题服务声明",
       symbols: [
@@ -174,7 +174,7 @@
     {
       path: "src/localizer_node.cpp",
       group: "ros",
-      lines: 1805,
+      lines: 1891,
       chapter: "ch08",
       role: "生命周期治理、锁外构场热切图、TF2 3D 外参、Odom 插值、热调参与 6×6 协方差发布",
       symbols: [
