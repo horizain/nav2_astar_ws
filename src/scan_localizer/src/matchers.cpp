@@ -968,13 +968,15 @@ GlobalResult global_correlative(
   const int K = field.poolLevels() - 1;
   if (K < 0) {return out;}
 
-    // 计算地图自由空间边界框作为机器人位姿搜索域（允许部分光束越界记 0 分）
+    // 计算地图自由空间边界框与可通行面积作为机器人位姿搜索域（允许部分光束越界记 0 分）
   int free_xmin = W, free_xmax = -1, free_ymin = H, free_ymax = -1;
+  std::size_t free_cells = 0;
   for (int y = 0; y < H; ++y) {
     for (int x = 0; x < W; ++x) {
       const int8_t c = grid->cells[static_cast<std::size_t>(y) *
           static_cast<std::size_t>(W) + static_cast<std::size_t>(x)];
       if (c >= 0 && c <= 65) {
+        ++free_cells;
         free_xmin = std::min(free_xmin, x);
         free_xmax = std::max(free_xmax, x);
         free_ymin = std::min(free_ymin, y);
@@ -1060,10 +1062,38 @@ GlobalResult global_correlative(
     // NMS 判定阈值（用于区分多峰假设，防止同一峰相邻像素占满 top-K）
   constexpr double kNmsLinM = 0.50;
   constexpr double kNmsAngRad = 0.35;
-    // 空间+航向分桶配额：防止单段对称长走廊的相邻峰耗尽全部 top-K 名额并抬高剪枝下界
-  constexpr double kBucketSizeM = 2.50;
+    // 空间+航向分桶配额：单桶硬封顶 2，桶尺度随可通行面积、地图跨度与射程 p90 自适应放大，
+    // 防止 200m 长走廊/大厂房下局部高分区域吞掉 top-K 全局配额并过早抬高剪枝下界。
+  double r_p90 = 1.5;
+  {
+    std::vector<double> ranges;
+    ranges.reserve(valid_pts.size());
+    for (const auto & pt : valid_pts) {
+      const double r = pt.norm();
+      if (r > 1e-3) {ranges.push_back(r);}
+    }
+    if (!ranges.empty()) {
+      const std::size_t idx90 = (ranges.size() * 9) / 10;
+      std::nth_element(
+        ranges.begin(),
+        ranges.begin() + static_cast<std::ptrdiff_t>(idx90),
+        ranges.end());
+      r_p90 = std::max(1.5, ranges[idx90]);
+    }
+  }
+  const double free_area_m2 =
+    static_cast<double>(free_cells) * grid->resolution * grid->resolution;
+  const double free_diag_m = std::hypot(
+    static_cast<double>(free_xmax - free_xmin + 1) * grid->resolution,
+    static_cast<double>(free_ymax - free_ymin + 1) * grid->resolution);
+  const double denom_slots = static_cast<double>(std::max(4, topk));
+  const double area_bucket = 0.6 * std::sqrt(std::max(0.0, free_area_m2) / denom_slots);
+  const double span_bucket = 0.75 * free_diag_m / denom_slots;
+  const double range_bucket = 0.35 * r_p90;
+  const double bucket_size_m = std::clamp(
+    std::max({2.50, area_bucket, span_bucket, range_bucket}), 2.50, 20.0);
   constexpr int kAngBuckets = 4;
-  const int max_per_bucket = (topk >= 4) ? std::max(2, (topk + 2) / 3) : topk;
+  const int max_per_bucket = std::min(topk, 2);
 
   struct Hyp { double score; int dx, dy, aidx; };
   std::vector<Hyp> hyps;
@@ -1081,10 +1111,10 @@ GlobalResult global_correlative(
 
   auto same_bucket = [&](const Hyp & a, const Hyp & b)
     {
-      const int axb = static_cast<int>(std::floor(a.dx * grid->resolution / kBucketSizeM));
-      const int ayb = static_cast<int>(std::floor(a.dy * grid->resolution / kBucketSizeM));
-      const int bxb = static_cast<int>(std::floor(b.dx * grid->resolution / kBucketSizeM));
-      const int byb = static_cast<int>(std::floor(b.dy * grid->resolution / kBucketSizeM));
+      const int axb = static_cast<int>(std::floor(a.dx * grid->resolution / bucket_size_m));
+      const int ayb = static_cast<int>(std::floor(a.dy * grid->resolution / bucket_size_m));
+      const int bxb = static_cast<int>(std::floor(b.dx * grid->resolution / bucket_size_m));
+      const int byb = static_cast<int>(std::floor(b.dy * grid->resolution / bucket_size_m));
       if (axb != bxb || ayb != byb) {return false;}
       const double tha = wrap_angle(a.aidx * ang_step);
       const double thb = wrap_angle(b.aidx * ang_step);

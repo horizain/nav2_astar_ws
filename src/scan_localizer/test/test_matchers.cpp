@@ -490,4 +490,94 @@ TEST(MatchersTest, BeamVisibilityPenalizesOutOfMapAndWallPiercingCorridorFlip)
   EXPECT_GT(bp_noisy.visibility, 0.85);
 }
 
+TEST(MatchersTest, GlobalCorrelativeAdaptiveBucketSpreadInLongCorridor)
+{
+  // 80m long repetitive corridor (0.20m coarse search grid) with unique far-end alcove:
+  // with topk=24, adaptive spatial bucket scaling + hard cap max_per_bucket=2 must spread
+  // candidates across the corridor and avoid packing 8 modes into a single 2.5m cluster.
+  sloc::OccupancyGrid grid;
+  grid.resolution = 0.20;
+  grid.width = 410;
+  grid.height = 24;
+  grid.origin_x = 0.0;
+  grid.origin_y = 0.0;
+  grid.cells.assign(static_cast<std::size_t>(grid.width) * grid.height, -1);
+
+  for (int y = 6; y <= 17; ++y) {
+    for (int x = 5; x <= 404; ++x) {
+      grid.cells[static_cast<std::size_t>(y) * grid.width + x] = 0;
+    }
+  }
+  for (int x = 4; x <= 405; ++x) {
+    grid.cells[5 * grid.width + x] = 100;
+    grid.cells[18 * grid.width + x] = 100;
+  }
+  for (int y = 5; y <= 18; ++y) {
+    grid.cells[y * grid.width + 4] = 100;
+    grid.cells[y * grid.width + 405] = 100;
+  }
+  // Unique doorway alcove near far east end (x in [382..392] -> wx in [76.4..78.4])
+  for (int y = 18; y <= 22; ++y) {
+    for (int x = 383; x <= 391; ++x) {
+      grid.cells[static_cast<std::size_t>(y) * grid.width + x] = 0;
+    }
+    grid.cells[y * grid.width + 382] = 100;
+    grid.cells[y * grid.width + 392] = 100;
+  }
+  for (int x = 382; x <= 392; ++x) {
+    grid.cells[23 * grid.width + x] = 100;
+  }
+
+  sloc::MapField field;
+  ASSERT_TRUE(field.build(grid, 0.25));
+
+  std::mt19937 rng(2026);
+  sloc::sim::ScanSimConfig scfg;
+  scfg.beams = 180;
+  scfg.range_max = 20.0;
+  scfg.noise_std = 0.0;
+  const sloc::Pose2 gt(77.4, 2.3, 0.0);
+  const auto scan = sloc::sim::make_scan(grid, gt, scfg, rng);
+
+  const auto res = sloc::global_correlative(field, scan, 3, 5.0 * kDeg, 24);
+  ASSERT_TRUE(res.valid);
+
+  std::vector<sloc::Pose2> modes;
+  modes.push_back(res.pose);
+  for (const auto & alt : res.alternates) {
+    modes.push_back(alt);
+  }
+  ASSERT_GE(modes.size(), 6u);
+
+  bool recalled_gt = false;
+  double min_x = modes[0].x;
+  double max_x = modes[0].x;
+  for (const auto & m : modes) {
+    min_x = std::min(min_x, m.x);
+    max_x = std::max(max_x, m.x);
+    if (std::hypot(m.x - gt.x, m.y - gt.y) < 0.60 &&
+      std::abs(sloc::wrap_angle(m.theta - gt.theta)) < 0.35)
+    {
+      recalled_gt = true;
+    }
+  }
+  EXPECT_TRUE(recalled_gt);
+  // Candidates must span widely instead of crowding into one local hotspot.
+  EXPECT_GT(max_x - min_x, 20.0);
+
+  // Verify no 2.5m spatial window within the same 90-deg heading quadrant holds > 2 modes.
+  for (std::size_t i = 0; i < modes.size(); ++i) {
+    int same_local_cluster = 0;
+    for (std::size_t j = 0; j < modes.size(); ++j) {
+      if (std::abs(modes[i].x - modes[j].x) < 2.5 &&
+        std::abs(modes[i].y - modes[j].y) < 2.5 &&
+        std::abs(sloc::wrap_angle(modes[i].theta - modes[j].theta)) < 0.75)
+      {
+        ++same_local_cluster;
+      }
+    }
+    EXPECT_LE(same_local_cluster, 3) << "mode i=" << i << " x=" << modes[i].x;
+  }
+}
+
 }  // namespace
