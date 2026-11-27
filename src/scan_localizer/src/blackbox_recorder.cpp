@@ -441,6 +441,8 @@ void BlackboxRecorder::flush_and_wait(bool force_finalize)
 void BlackboxRecorder::writer_loop()
 {
   BlackboxBundle local_job;
+  local_job.scans.reserve(scan_ring_.size());
+  local_job.odoms.reserve(odom_ring_.size());
   while (true) {
     {
       std::unique_lock<std::mutex> lk(job_mtx_);
