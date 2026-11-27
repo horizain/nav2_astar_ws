@@ -333,6 +333,8 @@ void BlackboxRecorder::record_scan(
 
   // 自动监测异常触发条件（仅在非后窗捕获且过冷却期时生效）
   if (!capturing_post_) {
+    const bool streak_hit = cfg_.reject_streak_trigger > 0 &&
+      out.reject_streak >= cfg_.reject_streak_trigger;
     BlackboxTrigger auto_reason = BlackboxTrigger::kNone;
     if (out.state == LocState::GLOBAL && prev_state_ != LocState::GLOBAL) {
       auto_reason = BlackboxTrigger::kEnterGlobal;
@@ -340,9 +342,7 @@ void BlackboxRecorder::record_scan(
       auto_reason = BlackboxTrigger::kEnterLost;
     } else if ((out.diag.reject_flags & GateFlag::kWallPhys) != 0u) {
       auto_reason = BlackboxTrigger::kWallPhysReject;
-    } else if (cfg_.reject_streak_trigger > 0 &&
-      out.reject_streak >= cfg_.reject_streak_trigger)
-    {
+    } else if (streak_hit) {
       auto_reason = BlackboxTrigger::kRejectStreak;
     }
     if (auto_reason != BlackboxTrigger::kNone) {

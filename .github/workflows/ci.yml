@@ -1,0 +1,120 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  standalone-core-and-docs:
+    name: Core Unit Tests & Docs Check
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq g++ libeigen3-dev libgtest-dev
+
+      - name: Build & run all non-ROS scan_localizer gtest suites
+        working-directory: src/scan_localizer
+        run: |
+          set -e
+          mkdir -p /tmp/sloc_ci/obj
+          INC="-Iinclude -I/usr/include/eigen3"
+          FLAGS="-std=c++20 -O2 -Wall -Wextra -Wpedantic"
+          for f in src/map_field.cpp src/map_io.cpp src/matchers.cpp \
+                   src/particle_filter.cpp src/localizer_core.cpp \
+                   src/blackbox_recorder.cpp src/async_global_worker.cpp \
+                   src/sim_world.cpp; do
+            base=$(basename "$f" .cpp)
+            g++ $FLAGS $INC -c "$f" -o "/tmp/sloc_ci/obj/$base.o"
+          done
+          TESTS="test_se2 test_map_io test_map_field test_matchers \
+                 test_particle_filter test_localizer_core test_sim_world \
+                 test_generalization_matrix test_benchmark_regression \
+                 test_blackbox_recorder test_async_global_worker"
+          for t in $TESTS; do
+            echo "=== Running $t ==="
+            g++ $FLAGS $INC /tmp/sloc_ci/obj/*.o "test/${t}.cpp" \
+              -lgtest -lgtest_main -lpthread -o "/tmp/sloc_ci/$t"
+            "/tmp/sloc_ci/$t" --gtest_brief=1
+          done
+
+      - name: Verify tutorial code manifest & doc links
+        run: |
+          python3 docs/scan_localizer_tutorial/tests/check_code_refs.py
+          python3 docs/tools/check_tutorial_links.py
+
+  aarch64-cross-compile:
+    name: ARM64 (RK3399 NEON) Cross-Compile
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install aarch64 toolchain & Eigen3
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq g++-aarch64-linux-gnu libeigen3-dev
+
+      - name: Cross-compile scan_localizer_core for aarch64
+        working-directory: src/scan_localizer
+        run: |
+          set -e
+          mkdir -p /tmp/sloc_arm64
+          INC="-Iinclude -I/usr/include/eigen3"
+          FLAGS="-std=c++20 -O2 -Wall -Wextra -Wpedantic"
+          for f in src/map_field.cpp src/map_io.cpp src/matchers.cpp \
+                   src/particle_filter.cpp src/localizer_core.cpp \
+                   src/blackbox_recorder.cpp src/async_global_worker.cpp; do
+            base=$(basename "$f" .cpp)
+            aarch64-linux-gnu-g++ $FLAGS $INC -c "$f" -o "/tmp/sloc_arm64/$base.o"
+          done
+          echo "ARM64 cross-compile succeeded for all scan_localizer_core units."
+
+  ros2-jazzy-scan-localizer:
+    name: ROS 2 Jazzy Build, Test & Lint
+    runs-on: ubuntu-24.04
+    container:
+      image: ros:jazzy-ros-base
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install ROS 2 dependencies
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq \
+            libeigen3-dev \
+            python3-colcon-common-extensions \
+            ros-jazzy-rclcpp-lifecycle \
+            ros-jazzy-rclcpp-components \
+            ros-jazzy-sensor-msgs \
+            ros-jazzy-nav-msgs \
+            ros-jazzy-geometry-msgs \
+            ros-jazzy-diagnostic-msgs \
+            ros-jazzy-lifecycle-msgs \
+            ros-jazzy-std-srvs \
+            ros-jazzy-tf2-ros \
+            ros-jazzy-ament-cmake-gtest \
+            ros-jazzy-ament-lint-auto \
+            ros-jazzy-ament-lint-common
+
+      - name: Colcon build & test (scan_localizer)
+        shell: bash
+        run: |
+          set -e
+          source /opt/ros/jazzy/setup.bash
+          colcon build --packages-select scan_localizer \
+            --cmake-args -DCMAKE_BUILD_TYPE=Release
+          colcon test --packages-select scan_localizer \
+            --event-handlers console_cohesion+
+          colcon test-result --all --verbose
