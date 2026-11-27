@@ -125,4 +125,33 @@ TEST(AsyncGlobalWorkerTest, DestructorDiscardsPendingJobAndExitsPromptly)
   EXPECT_LT(dt_ms, 1000.0);
 }
 
+TEST(AsyncGlobalWorkerTest, UpdateConfigRefreshesIsolationAndBudget)
+{
+  const auto grid = sloc::sim::make_warehouse(0.05);
+  auto field = std::make_shared<sloc::MapField>();
+  ASSERT_TRUE(field->build(grid, 0.20));
+
+  std::mt19937 rng(9);
+  sloc::sim::ScanSimConfig scfg;
+  scfg.beams = 360;
+  scfg.noise_std = 0.01;
+  const sloc::Pose2 gt(6.0, 5.0, 0.7);
+  const auto scan = sloc::sim::make_scan(grid, gt, scfg, rng);
+
+  sloc::GlobalWorkerConfig cfg;
+  cfg.max_time_ms = 250.0;
+  sloc::AsyncGlobalWorker worker(cfg);
+
+  cfg.cpu_affinity = {0};
+  cfg.nice_value = 5;
+  cfg.max_time_ms = 300.0;
+  worker.update_config(cfg);
+
+  worker.submit(20.0, field, scan);
+  sloc::GlobalWorkerResult out;
+  ASSERT_TRUE(worker.wait_result(out, 5000));
+  ASSERT_TRUE(out.result.valid);
+  EXPECT_LT(std::hypot(out.result.pose.x - gt.x, out.result.pose.y - gt.y), 0.30);
+}
+
 }  // namespace

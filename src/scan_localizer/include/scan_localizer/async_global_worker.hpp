@@ -96,6 +96,7 @@ private:
   std::condition_variable res_cv_;
   GlobalWorkerConfig cfg_;
   bool stop_{false};
+  bool isolation_dirty_{false};
   bool has_pending_{false};
   Job pending_job_{};
   bool has_result_{false};
