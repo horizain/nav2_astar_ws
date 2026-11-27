@@ -1342,12 +1342,15 @@ CoreOutput LocalizerCore::on_scan(const Scan & scan)
 
   // 填充结构化诊断快照，任一门控拒绝均可通过位掩码直接定因
   std::uint32_t reject_flags = GateFlag::kNone;
-  if (!mr_finite) {reject_flags |= GateFlag::kInvalid;}
-  if (!gate_wall) {reject_flags |= GateFlag::kWallPhys;}
-  if (!gate_inlier) {reject_flags |= GateFlag::kInlier;}
-  if (!gate_score) {reject_flags |= GateFlag::kScore;}
-  if (!gate_cov) {reject_flags |= GateFlag::kCov;}
-  if (!gate_mahal) {reject_flags |= GateFlag::kMahal;}
+  if (!mr_finite) {
+    reject_flags |= GateFlag::kInvalid;
+  } else {
+    if (!gate_wall) {reject_flags |= GateFlag::kWallPhys;}
+    if (!gate_inlier) {reject_flags |= GateFlag::kInlier;}
+    if (!gate_score) {reject_flags |= GateFlag::kScore;}
+    if (!gate_cov) {reject_flags |= GateFlag::kCov;}
+    if (!gate_mahal) {reject_flags |= GateFlag::kMahal;}
+  }
 
   out.diag.reject_flags = reject_flags;
   out.diag.raw_score = mr_finite ? obs.geom_score : 0.0;

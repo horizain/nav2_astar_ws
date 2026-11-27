@@ -335,12 +335,16 @@ void BlackboxRecorder::record_scan(
   if (!capturing_post_) {
     const bool streak_hit = cfg_.reject_streak_trigger > 0 &&
       out.reject_streak >= cfg_.reject_streak_trigger;
+    const bool wall_phys_hit =
+      (out.diag.reject_flags & GateFlag::kInvalid) == 0u &&
+      (out.diag.reject_flags & GateFlag::kWallPhys) != 0u;
+    const bool initialized = prev_state_ != LocState::UNINIT;
     BlackboxTrigger auto_reason = BlackboxTrigger::kNone;
-    if (out.state == LocState::GLOBAL && prev_state_ != LocState::GLOBAL) {
+    if (initialized && out.state == LocState::GLOBAL && prev_state_ != LocState::GLOBAL) {
       auto_reason = BlackboxTrigger::kEnterGlobal;
-    } else if (out.state == LocState::LOST && prev_state_ != LocState::LOST) {
+    } else if (initialized && out.state == LocState::LOST && prev_state_ != LocState::LOST) {
       auto_reason = BlackboxTrigger::kEnterLost;
-    } else if ((out.diag.reject_flags & GateFlag::kWallPhys) != 0u) {
+    } else if (wall_phys_hit) {
       auto_reason = BlackboxTrigger::kWallPhysReject;
     } else if (streak_hit) {
       auto_reason = BlackboxTrigger::kRejectStreak;
