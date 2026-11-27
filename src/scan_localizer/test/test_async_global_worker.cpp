@@ -14,6 +14,7 @@
 
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <cmath>
 #include <memory>
 #include <random>
@@ -94,6 +95,34 @@ TEST(AsyncGlobalWorkerTest, LatestOnlyQueueOverwritesStalePendingRequests)
   EXPECT_EQ(res.request_id, last_id);
   EXPECT_GT(worker.dropped_count(), 0u);
   EXPECT_LT(worker.completed_count(), 12u);
+}
+
+TEST(AsyncGlobalWorkerTest, DestructorDiscardsPendingJobAndExitsPromptly)
+{
+  const auto grid = sloc::sim::make_warehouse(0.05);
+  auto field = std::make_shared<sloc::MapField>();
+  ASSERT_TRUE(field->build(grid, 0.20));
+
+  std::mt19937 rng(7);
+  sloc::sim::ScanSimConfig scfg;
+  scfg.beams = 360;
+  scfg.noise_std = 0.01;
+  const auto scan = sloc::sim::make_scan(grid, sloc::Pose2(6.0, 5.0, 0.7), scfg, rng);
+
+  sloc::GlobalWorkerConfig cfg;
+  cfg.n_hypotheses = 4;
+  cfg.max_time_ms = 50.0;
+
+  const auto t0 = std::chrono::steady_clock::now();
+  {
+    sloc::AsyncGlobalWorker worker(cfg);
+    worker.submit(1.0, field, scan);
+    worker.submit(2.0, field, scan);
+    worker.submit(3.0, field, scan);
+  }
+  const double dt_ms =
+    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+  EXPECT_LT(dt_ms, 1000.0);
 }
 
 }  // namespace

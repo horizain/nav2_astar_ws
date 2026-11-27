@@ -40,6 +40,8 @@ AsyncGlobalWorker::~AsyncGlobalWorker()
   {
     std::lock_guard<std::mutex> lk(mtx_);
     stop_ = true;
+    has_pending_ = false;
+    pending_job_ = Job{};
   }
   job_cv_.notify_all();
   res_cv_.notify_all();
@@ -141,7 +143,7 @@ void AsyncGlobalWorker::worker_loop()
     {
       std::unique_lock<std::mutex> lk(mtx_);
       job_cv_.wait(lk, [&]() {return stop_ || has_pending_;});
-      if (stop_ && !has_pending_) {
+      if (stop_) {
         break;
       }
       job = std::move(pending_job_);
