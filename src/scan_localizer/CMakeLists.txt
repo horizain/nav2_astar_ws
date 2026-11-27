@@ -13,6 +13,7 @@ endif()
 
 find_package(ament_cmake REQUIRED)
 find_package(Eigen3 REQUIRED)
+find_package(Threads REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_lifecycle REQUIRED)
 find_package(rclcpp_components REQUIRED)
@@ -36,12 +37,13 @@ add_library(scan_localizer_core STATIC
   src/matchers.cpp
   src/particle_filter.cpp
   src/localizer_core.cpp
+  src/blackbox_recorder.cpp
 )
 target_include_directories(scan_localizer_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
 )
-target_link_libraries(scan_localizer_core PUBLIC Eigen3::Eigen)
+target_link_libraries(scan_localizer_core PUBLIC Eigen3::Eigen Threads::Threads)
 set_property(TARGET scan_localizer_core PROPERTY POSITION_INDEPENDENT_CODE ON)
 target_compile_options(scan_localizer_core PRIVATE ${SCAN_LOCALIZER_WARN_FLAGS})
 
@@ -200,6 +202,12 @@ if(BUILD_TESTING)
   if(TARGET test_generalization_matrix)
     target_link_libraries(test_generalization_matrix scan_localizer_core scan_localizer_sim_lib)
     target_compile_options(test_generalization_matrix PRIVATE ${SCAN_LOCALIZER_WARN_FLAGS})
+  endif()
+
+  ament_add_gtest(test_blackbox_recorder test/test_blackbox_recorder.cpp)
+  if(TARGET test_blackbox_recorder)
+    target_link_libraries(test_blackbox_recorder scan_localizer_core)
+    target_compile_options(test_blackbox_recorder PRIVATE ${SCAN_LOCALIZER_WARN_FLAGS})
   endif()
 endif()
 

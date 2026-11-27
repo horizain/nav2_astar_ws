@@ -210,7 +210,7 @@
     {
       path: "CMakeLists.txt",
       group: "ros",
-      lines: 208,
+      lines: 216,
       chapter: "ch08",
       role: "core / sim_lib / node_component / executable / 9 组 gtest 与严格编译告警配置",
       symbols: [
@@ -424,6 +424,39 @@
         { name: "Corridor Notes", range: "1-58", desc: "走廊重定位问题与对策" },
       ],
     },
+    {
+      path: "include/scan_localizer/blackbox_recorder.hpp",
+      group: "core",
+      lines: 166,
+      chapter: "ch07",
+      role: "低内存环形缓冲黑匣子接口：固定尺寸扫描/里程计快照、紧凑二进制读写与触发状态机",
+      symbols: [
+        { name: "struct PackedScanRecord / BlackboxBundle", range: "60-90", desc: "固定 512 点零堆分配扫描快照与回放包结构" },
+        { name: "class BlackboxRecorder", range: "97-146", desc: "前后窗口环形录制、异步写盘与磁盘配额轮转" },
+      ],
+    },
+    {
+      path: "src/blackbox_recorder.cpp",
+      group: "core",
+      lines: 555,
+      chapter: "ch07",
+      role: "黑匣子环形缓冲、SLOCBB01 二进制读写、JSON 摘要与后台配额轮转实现",
+      symbols: [
+        { name: "save_blackbox_bundle / load_blackbox_bundle", range: "99-236", desc: "带魔数与边界校验的紧凑二进制事故包序列化" },
+        { name: "BlackboxRecorder::record_scan", range: "281-323", desc: "O(1) 覆盖写入并监测 GLOBAL/LOST/kWallPhys 自动触发" },
+      ],
+    },
+    {
+      path: "test/test_blackbox_recorder.cpp",
+      group: "tests",
+      lines: 249,
+      chapter: "ch09",
+      role: "黑匣子模块单元测试：二进制往返、前后窗切片、大点云降采样、冷却防风暴与磁盘配额",
+      symbols: [
+        { name: "BlackboxRecorderTest.*", range: "57-237", desc: "覆盖序列化完整性、自动触发窗口与环形配额淘汰" },
+      ],
+    },
+
   ];
 
   const ROUTES = {
