@@ -30,22 +30,27 @@ jobs:
           mkdir -p /tmp/sloc_ci/obj
           INC="-Iinclude -I/usr/include/eigen3"
           FLAGS="-std=c++20 -O2 -Wall -Wextra -Wpedantic"
-          for f in src/map_field.cpp src/map_io.cpp src/matchers.cpp \
-                   src/particle_filter.cpp src/localizer_core.cpp \
-                   src/blackbox_recorder.cpp src/async_global_worker.cpp \
-                   src/sim_world.cpp; do
+          CORE_SRCS=$(python3 -c '
+          import re
+          txt = open("CMakeLists.txt", encoding="utf-8").read()
+          m = re.search(r"add_library\(scan_localizer_core\s+STATIC(.*?)\)", txt, re.S)
+          assert m, "scan_localizer_core not found in CMakeLists.txt"
+          print(" ".join(re.findall(r"src/[A-Za-z0-9_]+\.cpp", m.group(1))))
+          ')
+          echo "Discovered scan_localizer_core sources: $CORE_SRCS"
+          for f in $CORE_SRCS src/sim_world.cpp; do
             base=$(basename "$f" .cpp)
             g++ $FLAGS $INC -c "$f" -o "/tmp/sloc_ci/obj/$base.o"
           done
-          TESTS="test_se2 test_map_io test_map_field test_matchers \
-                 test_particle_filter test_localizer_core test_sim_world \
-                 test_generalization_matrix test_benchmark_regression \
-                 test_blackbox_recorder test_async_global_worker"
-          for t in $TESTS; do
-            echo "=== Running $t ==="
-            g++ $FLAGS $INC /tmp/sloc_ci/obj/*.o "test/${t}.cpp" \
-              -lgtest -lgtest_main -lpthread -o "/tmp/sloc_ci/$t"
-            "/tmp/sloc_ci/$t" --gtest_brief=1
+          for tf in test/test_*.cpp; do
+            base=$(basename "$tf" .cpp)
+            if [ "$base" = "test_localizer_node" ]; then
+              continue
+            fi
+            echo "=== Running $base ==="
+            g++ $FLAGS $INC /tmp/sloc_ci/obj/*.o "$tf" \
+              -lgtest -lgtest_main -lpthread -o "/tmp/sloc_ci/$base"
+            "/tmp/sloc_ci/$base" --gtest_brief=1
           done
 
       - name: Verify tutorial code manifest & doc links
@@ -60,25 +65,66 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install aarch64 toolchain & Eigen3
+      - name: Install aarch64 toolchain, QEMU & Eigen3
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq g++-aarch64-linux-gnu libeigen3-dev
+          sudo apt-get install -y -qq g++-aarch64-linux-gnu qemu-user-static libeigen3-dev
 
-      - name: Cross-compile scan_localizer_core for aarch64
+      - name: Cross-compile scan_localizer_core & run ARM64 NEON smoke test under QEMU
         working-directory: src/scan_localizer
         run: |
           set -e
           mkdir -p /tmp/sloc_arm64
           INC="-Iinclude -I/usr/include/eigen3"
           FLAGS="-std=c++20 -O2 -Wall -Wextra -Wpedantic"
-          for f in src/map_field.cpp src/map_io.cpp src/matchers.cpp \
-                   src/particle_filter.cpp src/localizer_core.cpp \
-                   src/blackbox_recorder.cpp src/async_global_worker.cpp; do
+          CORE_SRCS=$(python3 -c '
+          import re
+          txt = open("CMakeLists.txt", encoding="utf-8").read()
+          m = re.search(r"add_library\(scan_localizer_core\s+STATIC(.*?)\)", txt, re.S)
+          assert m, "scan_localizer_core not found in CMakeLists.txt"
+          print(" ".join(re.findall(r"src/[A-Za-z0-9_]+\.cpp", m.group(1))))
+          ')
+          echo "Cross-compiling ARM64 sources: $CORE_SRCS"
+          for f in $CORE_SRCS src/sim_world.cpp; do
             base=$(basename "$f" .cpp)
             aarch64-linux-gnu-g++ $FLAGS $INC -c "$f" -o "/tmp/sloc_arm64/$base.o"
           done
-          echo "ARM64 cross-compile succeeded for all scan_localizer_core units."
+          cat << 'NEON_EOF' > /tmp/sloc_arm64/neon_smoke.cpp
+          #include <cmath>
+          #include <iostream>
+          #include <random>
+          #include "scan_localizer/map_field.hpp"
+          #include "scan_localizer/matchers.hpp"
+          #include "scan_localizer/sim_world.hpp"
+
+          int main() {
+            const auto grid = sloc::sim::make_warehouse(0.05);
+            sloc::MapField field;
+            if (!field.build(grid, 0.20) || field.likeDataU8() == nullptr) {
+              std::cerr << "MapField build failed\n";
+              return 1;
+            }
+            std::mt19937 rng(99);
+            sloc::sim::ScanSimConfig scfg;
+            scfg.beams = 360;
+            scfg.noise_std = 0.01;
+            const sloc::Pose2 gt(6.0, 5.0, 0.7);
+            const auto scan = sloc::sim::make_scan(grid, gt, scfg, rng);
+            const double ang_step = sloc::compute_adaptive_ang_step(field, scan);
+            const auto res = sloc::global_correlative(field, scan, 3, ang_step, 8, 2500.0);
+            const double pos_err = std::hypot(res.pose.x - gt.x, res.pose.y - gt.y);
+            const double ang_err = std::abs(sloc::wrap_angle(res.pose.theta - gt.theta));
+            std::cout << "ARM64 NEON global_correlative: valid=" << res.valid
+                      << " pos_err=" << pos_err << "m ang_err=" << ang_err << "rad\n";
+            if (!res.valid || pos_err >= 0.30 || ang_err >= 0.20) {
+              return 2;
+            }
+            return 0;
+          }
+          NEON_EOF
+          aarch64-linux-gnu-g++ $FLAGS $INC -static /tmp/sloc_arm64/*.o \
+            /tmp/sloc_arm64/neon_smoke.cpp -lpthread -o /tmp/sloc_arm64/neon_smoke
+          qemu-aarch64-static /tmp/sloc_arm64/neon_smoke
 
   ros2-jazzy-scan-localizer:
     name: ROS 2 Jazzy Build, Test & Lint
