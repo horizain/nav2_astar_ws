@@ -477,6 +477,17 @@ TEST(MatchersTest, BeamVisibilityPenalizesOutOfMapAndWallPiercingCorridorFlip)
   const auto gres = sloc::global_correlative(field, scan, 2, 5.0 * kDeg, 4);
   ASSERT_TRUE(gres.valid);
   EXPECT_LT(std::abs(sloc::wrap_angle(gres.pose.theta - true_pose.theta)), 0.30);
+
+  // Minor real-map imperfections (~4% of beams shooting past an opened doorway into unknown space)
+  // must NOT tank visibility below healthy threshold while 180-deg flip remains rejected.
+  sloc::Scan noisy_door_scan = scan;
+  for (int i = 0; i < 6; ++i) {
+    const double ang = -0.10 + 0.04 * i;
+    noisy_door_scan.points[static_cast<std::size_t>(i)] =
+      sloc::Vec2(8.0 * std::cos(ang), 8.0 * std::sin(ang));
+  }
+  const auto bp_noisy = sloc::evaluate_beam_physics(field, true_pose, noisy_door_scan, 0.15, true);
+  EXPECT_GT(bp_noisy.visibility, 0.85);
 }
 
 }  // namespace

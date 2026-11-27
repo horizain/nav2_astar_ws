@@ -71,15 +71,17 @@ double compute_inlier_ratio(
 
 void apply_beam_physics(
   const MapField & field, const Pose2 & pose, const Scan & scan,
-  double inlier_gate, bool check_vis, double & score, double & inlier_ratio)
+  double inlier_gate, bool check_vis, double & score, double & inlier_ratio,
+  bool allow_short_boost = true)
 {
   if (!check_vis || scan.points.size() < 16) {
     return;
   }
   const BeamPhysicsStats bp = evaluate_beam_physics(
     field, pose, scan, inlier_gate, true);
-  // 若物理可见性健康，同时修正被前景动态人群 (z_short) 稀释的平均似然与内点率
-  if (bp.visibility >= 0.75) {
+  // 仅在已锁定跟踪期开启前景动态遮挡 (z_short) 补偿；全局多假设判别期禁用该提分，
+  // 防止错位假设把“未匹配到的真实隔墙/家具”当成动态遮挡扣除从而与真位姿打平。
+  if (allow_short_boost && bp.visibility >= 0.65) {
     score = std::max(score, bp.static_score);
     inlier_ratio = std::max(inlier_ratio, bp.static_inlier_ratio);
   }
@@ -379,9 +381,11 @@ bool LocalizerCore::try_promote_hypotheses(
   const int req_frames = std::max(1, cfg_.hyp_confirm_frames);
   const int ambig_frames = std::max(req_frames, cfg_.hyp_ambiguous_confirm_frames);
   const bool real_scan = scan.points.size() >= 16;
-  const double p_bg = std::clamp(cfg_.min_score, 0.10, 0.60);
+  const double p_bg = std::clamp(
+    std::max(cfg_.min_score, 0.5 * (cfg_.min_score + cfg_.hyp_min_score)), 0.15, 0.65);
 
-  // 运动新息门控因子 γ_motion：真实几何扫描在原地静止时 γ_sym=0，彻底杜绝静态相关性假收敛（陷阱 1）
+  // 运动新息门控因子 γ_motion：真实几何扫描在原地静止且多峰平手时 γ=0，
+  // 杜绝静态相关性假收敛（陷阱 1）
   const double d0 = std::max(0.15, field_->sigma_m_);
   const double raw_motion =
     std::hypot(motion_delta.x, motion_delta.y) / d0 +
@@ -392,6 +396,7 @@ bool LocalizerCore::try_promote_hypotheses(
     bool valid{false};
     bool ok{false};
     double ll{0.0};
+    double eff_q{0.0};
     MatchResult mr{};
   };
   std::vector<EvalEntry> evals(hypotheses_.size());
@@ -399,12 +404,18 @@ bool LocalizerCore::try_promote_hypotheses(
   int best_idx = -1;
   double best_score = -1.0;
   double frame_best_score = -1.0;
+  int top_valid_idx = -1;
+  double top_valid_eff_q = -1.0;
   double max_score_innov = 0.0;
   int live_ok_count = 0;
 
   const auto is_far_from_anchor = [&](const Pose2 & p) {
       return std::hypot(p.x - last_pose_.x, p.y - last_pose_.y) > cfg_.global_jump_min_dist ||
              std::abs(wrap_angle(p.theta - last_pose_.theta)) > 0.8;
+    };
+  const auto is_distinct = [](const Pose2 & a, const Pose2 & b) {
+      return std::hypot(a.x - b.x, a.y - b.y) >= 0.8 ||
+             std::abs(wrap_angle(a.theta - b.theta)) >= 0.35;
     };
 
   for (std::size_t i = 0; i < hypotheses_.size(); ++i) {
@@ -417,11 +428,19 @@ bool LocalizerCore::try_promote_hypotheses(
     if (valid_match) {
       apply_beam_physics(
         *field_, mr.pose, scan, cfg_.match_opt.inlier_gate,
-        cfg_.use_visibility_check, mr.score, mr.inlier_ratio);
+        cfg_.use_visibility_check, mr.score, mr.inlier_ratio, false);
       if (h.eval_count > 0) {
         max_score_innov = std::max(max_score_innov, std::abs(mr.score - h.last_score));
       }
-      evals[i].ll = 6.0 * std::log(std::max(mr.score, 0.05) / p_bg);
+      // 综合似然与内点率几何均值计算单帧对数似然比，防止低分低内点随机错峰 2 帧冲过 0.95
+      const double eff_q = std::sqrt(
+        std::max(mr.score, 0.05) * std::max(mr.inlier_ratio, 0.05));
+      evals[i].eff_q = eff_q;
+      evals[i].ll = 6.0 * std::log(eff_q / p_bg);
+      if (eff_q > top_valid_eff_q) {
+        top_valid_eff_q = eff_q;
+        top_valid_idx = static_cast<int>(i);
+      }
     } else {
       evals[i].ll = -4.0;
     }
@@ -464,11 +483,33 @@ bool LocalizerCore::try_promote_hypotheses(
     }
   }
 
-  // 更新序贯贝叶斯对数权重：多峰竞争且静止无环境突变时 γ=0 不累积伪证据；单峰或运动中按 γ 累积
+  // 区分“真正对称平手多峰”与“主峰显著领先弱干扰峰”：
+  // 仅当存在与当前最优质量空间分离且综合质量差 < sym_freeze_margin 的近乎等价竞争峰时，
+  // 静止期才冻结 γ=0；若主峰已明确领先全部异地候选，允许静止期累积后验，避免永不晋升死锁。
+  double distinct_runner_eff_q = -1.0;
+  if (top_valid_idx >= 0) {
+    const Pose2 & top_pose = evals[static_cast<std::size_t>(top_valid_idx)].mr.pose;
+    for (std::size_t i = 0; i < hypotheses_.size(); ++i) {
+      if (static_cast<int>(i) == top_valid_idx || !evals[i].valid) {continue;}
+      if (evals[i].mr.score < cfg_.min_score || evals[i].mr.inlier_ratio < cfg_.min_inlier_ratio) {
+        continue;
+      }
+      if (is_distinct(evals[i].mr.pose, top_pose)) {
+        distinct_runner_eff_q = std::max(distinct_runner_eff_q, evals[i].eff_q);
+      }
+    }
+  }
+  const double sym_freeze_margin = std::min(0.04, 0.5 * cfg_.hyp_ambiguity_margin);
+  const bool symmetric_tie = (distinct_runner_eff_q >= 0.0) &&
+    ((top_valid_eff_q - distinct_runner_eff_q) < sym_freeze_margin);
+
+  // 更新序贯贝叶斯对数权重：对称平手且静止时 γ=0；单峰或显著领先或运动中按 γ 累积
   const double env_innov_gate = std::clamp((max_score_innov - 0.08) / 0.15, 0.0, 0.6);
-  const double gamma = (!real_scan || live_ok_count <= 1) ?
-    1.0 :
-    std::clamp(raw_motion + env_innov_gate, 0.0, 1.0);
+  const double motion_gamma = std::clamp(raw_motion + env_innov_gate, 0.0, 1.0);
+  double gamma = 1.0;
+  if (real_scan && live_ok_count > 1) {
+    gamma = symmetric_tie ? motion_gamma : std::max(motion_gamma, 0.8);
+  }
 
   double max_lw = 0.0;  // 含虚拟离群零假设 log_w_null = 0.0
   for (std::size_t i = 0; i < hypotheses_.size(); ++i) {
@@ -506,11 +547,6 @@ bool LocalizerCore::try_promote_hypotheses(
     prune_dead_hypotheses();
     return false;
   }
-
-  const auto is_distinct = [](const Pose2 & a, const Pose2 & b) {
-      return std::hypot(a.x - b.x, a.y - b.y) >= 0.8 ||
-             std::abs(wrap_angle(a.theta - b.theta)) >= 0.35;
-    };
 
   bool local_reanchored = false;
   MatchResult best_mr = evals[best_idx].mr;
@@ -553,7 +589,7 @@ bool LocalizerCore::try_promote_hypotheses(
       if (local_valid) {
         apply_beam_physics(
           *field_, local_mr.pose, scan, cfg_.match_opt.inlier_gate,
-          cfg_.use_visibility_check, local_mr.score, local_mr.inlier_ratio);
+          cfg_.use_visibility_check, local_mr.score, local_mr.inlier_ratio, false);
       }
       const bool local_healthy = local_valid &&
         local_mr.score >= cfg_.min_score &&
@@ -745,7 +781,7 @@ bool LocalizerCore::handle_recovery_scan(const Scan & active_scan, CoreOutput & 
           ec.inlier = mr.inlier_ratio;
           apply_beam_physics(
             *field_, ec.pose, active_scan, cfg_.match_opt.inlier_gate,
-            cfg_.use_visibility_check, ec.eff_score, ec.inlier);
+            cfg_.use_visibility_check, ec.eff_score, ec.inlier, false);
           if (is_valid_spd_cov3(mr.covariance)) {
             ec.cov = 0.5 * (mr.covariance + mr.covariance.transpose());
             ec.has_cov = true;
@@ -757,7 +793,7 @@ bool LocalizerCore::handle_recovery_scan(const Scan & active_scan, CoreOutput & 
             *field_, ec.pose, active_scan, cfg_.match_opt.inlier_gate);
           apply_beam_physics(
             *field_, ec.pose, active_scan, cfg_.match_opt.inlier_gate,
-            cfg_.use_visibility_check, ec.eff_score, ec.inlier);
+            cfg_.use_visibility_check, ec.eff_score, ec.inlier, false);
         } else {
           continue;
         }
@@ -822,7 +858,7 @@ bool LocalizerCore::handle_recovery_scan(const Scan & active_scan, CoreOutput & 
                 tc.inlier = tmr.inlier_ratio;
                 apply_beam_physics(
                   *field_, tc.pose, active_scan, cfg_.match_opt.inlier_gate,
-                  cfg_.use_visibility_check, tc.eff_score, tc.inlier);
+                  cfg_.use_visibility_check, tc.eff_score, tc.inlier, false);
                 if (tc.eff_score >= cfg_.min_score) {
                   if (is_valid_spd_cov3(tmr.covariance)) {
                     tc.cov = 0.5 * (tmr.covariance + tmr.covariance.transpose());
@@ -856,7 +892,7 @@ bool LocalizerCore::handle_recovery_scan(const Scan & active_scan, CoreOutput & 
             if (local_valid) {
               apply_beam_physics(
                 *field_, local_mr.pose, active_scan, cfg_.match_opt.inlier_gate,
-                cfg_.use_visibility_check, local_mr.score, local_mr.inlier_ratio);
+                cfg_.use_visibility_check, local_mr.score, local_mr.inlier_ratio, false);
             }
             const bool local_healthy = local_valid &&
               local_mr.score >= cfg_.min_score &&

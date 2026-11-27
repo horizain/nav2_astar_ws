@@ -1354,7 +1354,11 @@ BeamPhysicsStats evaluate_beam_physics(
   const double s = std::sin(pose.theta);
 
   double total_len = 0.0;
-  double bad_energy = 0.0;
+  double unk_bad_energy = 0.0;
+  double occ_bad_energy = 0.0;
+  double max_unk_depth = 0.0;
+  int unk_contradict = 0;
+  int occ_contradict = 0;
   double static_like_sum = 0.0;
   int used = 0;
   int inlier_cnt = 0;
@@ -1438,22 +1442,28 @@ BeamPhysicsStats evaluate_beam_physics(
       // 状态 3：穿过建图静态残影团块后准确命中远端真实墙面 (clutter pass-through)
       ++stats.n_clutter_pass;
       ++stats.n_static;
-      if (occ_len > 3.0 * tau_wall) {
-        bad_energy += 0.5 * (occ_len - 3.0 * tau_wall);
+      if (occ_len > 4.0 * tau_wall) {
+        occ_bad_energy += 0.4 * (occ_len - 4.0 * tau_wall);
+        ++occ_contradict;
         ++stats.n_contradict;
       }
       continue;
     }
 
-    const bool unk_spill = (end_unknown && unk_len > 4.0 * tau_wall) ||
-      (unk_len > 7.0 * tau_wall);
-    const bool void_pierce = !end_on_wall && (occ_len >= tau_wall) &&
-      (first_occ_t >= 0.0) && ((r - first_occ_t) > 2.5 * tau_wall);
+    const bool unk_spill = (end_unknown && unk_len > 5.0 * tau_wall) ||
+      (unk_len > 8.0 * tau_wall);
+    const bool void_pierce = !end_on_wall && (occ_len >= 1.1 * tau_wall) &&
+      (first_occ_t >= 0.0) && ((r - first_occ_t) > 3.5 * tau_wall);
     if (unk_spill || void_pierce) {
-      // 状态 4：非物理穿墙悬空或深穿未建图未知灰区 (180° 翻转假峰)
-      const double e_unk = unk_spill ? unk_len : 0.0;
-      const double e_occ = void_pierce ? (r - first_occ_t) : 0.0;
-      bad_energy += std::min(r, std::max(e_unk, e_occ));
+      // 状态 4：区分深穿未建图未知灰区（强矛盾，180°翻转假峰）与穿占映射区内障碍（门开/移走家具）
+      if (unk_spill) {
+        unk_bad_energy += std::min(r, unk_len);
+        max_unk_depth = std::max(max_unk_depth, unk_len);
+        ++unk_contradict;
+      } else {
+        occ_bad_energy += std::min(r, 0.5 * (r - first_occ_t));
+        ++occ_contradict;
+      }
       ++stats.n_contradict;
       continue;
     }
@@ -1466,13 +1476,24 @@ BeamPhysicsStats evaluate_beam_physics(
     return stats;
   }
 
-  // 允许 2% 随机噪点先验 (z_rand)，超额矛盾能量按指数似然平滑衰减
-  const double excess_bad_ratio = std::max(
-    0.0, (bad_energy - 0.025 * total_len) / total_len);
-  const double excess_bad_frac = std::max(
-    0.0, static_cast<double>(stats.n_contradict) / static_cast<double>(used) - 0.02);
+  // 分项容差：真实地图允许少量门开/移走家具(occ)与边角未建图噪点(unk)，但对深穿未知灰区保持强判别
+  const double unk_ratio = unk_bad_energy / total_len;
+  const double excess_unk_ratio = std::max(0.0, unk_ratio - 0.05);
+  const double excess_unk_frac = std::max(
+    0.0, static_cast<double>(unk_contradict) / static_cast<double>(used) - 0.035);
+  const double unk_depth_term = (unk_ratio > 0.06) ?
+    std::min(0.80, 0.08 * std::max(0.0, max_unk_depth - 4.0)) : 0.0;
+  const double unk_penalty =
+    6.5 * excess_unk_ratio + 4.0 * excess_unk_frac + unk_depth_term;
+
+  const double occ_ratio = occ_bad_energy / total_len;
+  const double excess_occ_ratio = std::max(0.0, occ_ratio - 0.10);
+  const double excess_occ_frac = std::max(
+    0.0, static_cast<double>(occ_contradict) / static_cast<double>(used) - 0.08);
+  const double occ_penalty = 2.5 * excess_occ_ratio + 2.0 * excess_occ_frac;
+
   stats.visibility = std::clamp(
-    std::exp(-4.5 * excess_bad_ratio - 3.5 * excess_bad_frac), 0.05, 1.0);
+    std::exp(-std::max(unk_penalty, occ_penalty)), 0.05, 1.0);
 
   // 动态遮挡分母修正：最多扣除 55% 的 z_short 光束，既抗高密人群又防止空旷错位假高分/内点率
   const double min_explainable = 0.45 * static_cast<double>(used);

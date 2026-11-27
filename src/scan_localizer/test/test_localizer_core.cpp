@@ -1070,4 +1070,92 @@ TEST(LocalizerCoreTest, CorridorLongitudinalLagRelaxesMahalGate)
   EXPECT_EQ(out2.state, sloc::LocState::TRACKING);
 }
 
+TEST(LocalizerCoreTest, StationaryClearWinnerPromotesWhileWeakLoneSurvivorWaits)
+{
+  class ScoredPoseMatcher : public sloc::Matcher {
+public:
+    double high_score{0.87};
+    double high_inlier{0.80};
+    double low_score{0.55};
+    double low_inlier{0.56};
+
+    sloc::MatchResult match(
+      const sloc::MapField &, const sloc::Pose2 & prior,
+      const sloc::Scan &, const sloc::MatchOptions &) const override
+    {
+      sloc::MatchResult r;
+      r.valid = true;
+      r.pose = prior;
+      r.covariance = sloc::Cov3::Identity() * 1e-3;
+      if (prior.x < 10.0) {
+        r.score = high_score;
+        r.inlier_ratio = high_inlier;
+      } else {
+        r.score = low_score;
+        r.inlier_ratio = low_inlier;
+      }
+      return r;
+    }
+  };
+
+  const auto & wf = shared_warehouse();
+  auto sm = std::make_shared<ScoredPoseMatcher>();
+
+  // Real-size scan (>=16 beams) to exercise SPRT path without visibility distortion.
+  sloc::Scan real_scan;
+  for (int i = 0; i < 36; ++i) {
+    const double ang = i * (2.0 * sloc::kPi / 36.0);
+    real_scan.points.emplace_back(2.0 * std::cos(ang), 2.0 * std::sin(ang));
+  }
+
+  sloc::CoreConfig cfg;
+  cfg.use_visibility_check = false;
+  cfg.min_score = 0.35;
+  cfg.min_inlier_ratio = 0.45;
+  cfg.hyp_min_score = 0.45;
+  cfg.hyp_min_inlier = 0.50;
+  cfg.hyp_confirm_frames = 2;
+  cfg.hyp_ambiguity_margin = 0.08;
+  cfg.anomaly_window = 0;
+
+  // 1) Stationary robot with a clear dominant winner (0.87 vs 0.55 distractor) must promote
+  //    within a few frames instead of deadlocking with gamma=0.
+  {
+    sloc::LocalizerCore core(cfg);
+    core.set_map(wf.field);
+    core.set_matcher(sm);
+    core.on_odom(sloc::Pose2(0.0, 0.0, 0.0));
+    ASSERT_TRUE(core.request_global(true));
+    core.add_hypotheses({sloc::Pose2(5.0, 5.0, 0.0), sloc::Pose2(15.0, 5.0, 0.0)});
+
+    sloc::CoreOutput out;
+    bool promoted = false;
+    for (int f = 0; f < 6; ++f) {
+      out = core.on_scan(real_scan);
+      if (out.accepted) {
+        promoted = true;
+        break;
+      }
+    }
+    EXPECT_TRUE(promoted);
+    EXPECT_EQ(out.state, sloc::LocState::TRACKING);
+    EXPECT_NEAR(out.pose.x, 5.0, 1e-6);
+  }
+
+  // 2) Marginal lone survivor (score=0.47, inlier=0.51) must NOT jump into TRACKING in 2 frames.
+  {
+    sm->low_score = 0.47;
+    sm->low_inlier = 0.51;
+    sloc::LocalizerCore core(cfg);
+    core.set_map(wf.field);
+    core.set_matcher(sm);
+    core.on_odom(sloc::Pose2(0.0, 0.0, 0.0));
+    ASSERT_TRUE(core.request_global(true));
+    core.add_hypotheses({sloc::Pose2(15.0, 5.0, 0.0)});
+
+    EXPECT_FALSE(core.on_scan(real_scan).accepted);
+    EXPECT_FALSE(core.on_scan(real_scan).accepted);
+  }
+}
+
 }  // namespace
