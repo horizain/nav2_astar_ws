@@ -69,28 +69,46 @@ double compute_inlier_ratio(
   return static_cast<double>(inliers) / static_cast<double>(scan.points.size());
 }
 
-void apply_beam_physics(
-  const MapField & field, const Pose2 & pose, const Scan & scan,
-  double inlier_gate, bool check_vis, double & score, double & inlier_ratio,
-  bool allow_short_boost = true)
+// 纯无状态正交观测评估：物理层不感知 TRACKING/GLOBAL 状态，也不在原地改写几何分
+struct ScanObservation
 {
+  double geom_score{0.0};           // 原始几何贴合度
+  double geom_inlier{0.0};          // 原始几何内点率
+  double static_score{0.0};         // 扣除前景动态遮挡 (z_short) 后的静态贴合度
+  double static_inlier{0.0};        // 扣除前景动态遮挡 (z_short) 后的静态内点率
+  double wall_visibility{1.0};      // 硬物理一致性（穿墙/穿墙入未知）∈ [0.05, 1.0]
+  double frontier_visibility{1.0};  // 零穿墙地图前沿覆盖度 ∈ [0.62, 1.0]
+  double short_ratio{0.0};
+  double frontier_ratio{0.0};
+
+  // 全局候选排序质量：禁用 z_short 提分防错位洗白，按硬一致性与覆盖度综合排序
+  double global_rank_score() const
+  {
+    return geom_score * wall_visibility * frontier_visibility;
+  }
+};
+
+ScanObservation evaluate_observation(
+  const MapField & field, const Pose2 & pose, const Scan & scan,
+  double raw_score, double raw_inlier, double inlier_gate, bool check_vis)
+{
+  ScanObservation obs;
+  obs.geom_score = raw_score;
+  obs.geom_inlier = raw_inlier;
+  obs.static_score = raw_score;
+  obs.static_inlier = raw_inlier;
   if (!check_vis || scan.points.size() < 16) {
-    return;
+    return obs;
   }
   const BeamPhysicsStats bp = evaluate_beam_physics(
     field, pose, scan, inlier_gate, true);
-  // 跟踪期（allow_short_boost=true）：对零穿墙纯前沿外溢（未封口边界/侧向开口）保底 0.80，
-  // 避免精准跟踪因朝向地图未建图前沿被压成 LOW_SCORE 误踢；硬穿墙矛盾仍按 wall_visibility 强罚。
-  const double eff_vis = allow_short_boost ?
-    std::min(bp.wall_visibility, std::max(bp.visibility, 0.80 * bp.wall_visibility)) :
-    bp.visibility;
-  // 仅在已锁定跟踪期开启前景动态遮挡 (z_short) 补偿；全局多假设判别期禁用该提分，
-  // 防止错位假设把“未匹配到的真实隔墙/家具”当成动态遮挡扣除从而与真位姿打平。
-  if (allow_short_boost && eff_vis >= 0.65) {
-    score = std::max(score, bp.static_score);
-    inlier_ratio = std::max(inlier_ratio, bp.static_inlier_ratio);
-  }
-  score *= eff_vis;
+  obs.wall_visibility = bp.wall_visibility;
+  obs.frontier_visibility = bp.frontier_visibility;
+  obs.static_score = std::max(raw_score, bp.static_score);
+  obs.static_inlier = std::max(raw_inlier, bp.static_inlier_ratio);
+  obs.short_ratio = bp.short_ratio;
+  obs.frontier_ratio = bp.frontier_ratio;
+  return obs;
 }
 
 }  // namespace
@@ -431,17 +449,21 @@ bool LocalizerCore::try_promote_hypotheses(
       std::isfinite(mr.score) &&
       std::isfinite(mr.inlier_ratio);
     if (valid_match) {
-      apply_beam_physics(
-        *field_, mr.pose, scan, cfg_.match_opt.inlier_gate,
-        cfg_.use_visibility_check, mr.score, mr.inlier_ratio, false);
+      const ScanObservation obs = evaluate_observation(
+        *field_, mr.pose, scan, mr.score, mr.inlier_ratio,
+        cfg_.match_opt.inlier_gate, cfg_.use_visibility_check);
+      mr.score = obs.global_rank_score();
+      mr.inlier_ratio = obs.geom_inlier;
       if (h.eval_count > 0) {
         max_score_innov = std::max(max_score_innov, std::abs(mr.score - h.last_score));
       }
-      // 综合似然与内点率几何均值计算单帧对数似然比，防止低分低内点随机错峰 2 帧冲过 0.95
+      // 正交物理对数似然：几何贴合 + 内点支撑 + 硬物理惩罚独立叠加，避免混合标量耦合
       const double eff_q = std::sqrt(
         std::max(mr.score, 0.05) * std::max(mr.inlier_ratio, 0.05));
       evals[i].eff_q = eff_q;
-      evals[i].ll = 6.0 * std::log(eff_q / p_bg);
+      const double phys_ll = (obs.wall_visibility < cfg_.min_wall_visibility) ?
+        2.0 * std::log(std::max(obs.wall_visibility, 0.05)) : 0.0;
+      evals[i].ll = 6.0 * std::log(eff_q / p_bg) + phys_ll;
       if (eff_q > top_valid_eff_q) {
         top_valid_eff_q = eff_q;
         top_valid_idx = static_cast<int>(i);
@@ -599,12 +621,15 @@ bool LocalizerCore::try_promote_hypotheses(
         is_finite_pose(local_mr.pose) &&
         std::isfinite(local_mr.score) &&
         std::isfinite(local_mr.inlier_ratio);
+      ScanObservation local_obs;
       if (local_valid) {
-        apply_beam_physics(
-          *field_, local_mr.pose, scan, cfg_.match_opt.inlier_gate,
-          cfg_.use_visibility_check, local_mr.score, local_mr.inlier_ratio, false);
+        local_obs = evaluate_observation(
+          *field_, local_mr.pose, scan, local_mr.score, local_mr.inlier_ratio,
+          cfg_.match_opt.inlier_gate, cfg_.use_visibility_check);
+        local_mr.score = local_obs.global_rank_score();
       }
       const bool local_healthy = local_valid &&
+        local_obs.wall_visibility >= cfg_.min_wall_visibility &&
         local_mr.score >= cfg_.min_score &&
         local_mr.inlier_ratio >= cfg_.min_inlier_ratio;
       if (local_healthy && best_score < local_mr.score + cfg_.global_jump_score_margin) {
@@ -790,23 +815,24 @@ bool LocalizerCore::handle_recovery_scan(const Scan & active_scan, CoreOutput & 
           std::isfinite(mr.score) && std::isfinite(mr.inlier_ratio))
         {
           ec.pose = Pose2(mr.pose.x, mr.pose.y, wrap_angle(mr.pose.theta));
-          ec.eff_score = mr.score;
-          ec.inlier = mr.inlier_ratio;
-          apply_beam_physics(
-            *field_, ec.pose, active_scan, cfg_.match_opt.inlier_gate,
-            cfg_.use_visibility_check, ec.eff_score, ec.inlier, false);
+          const ScanObservation obs = evaluate_observation(
+            *field_, ec.pose, active_scan, mr.score, mr.inlier_ratio,
+            cfg_.match_opt.inlier_gate, cfg_.use_visibility_check);
+          ec.eff_score = obs.global_rank_score();
+          ec.inlier = obs.geom_inlier;
           if (is_valid_spd_cov3(mr.covariance)) {
             ec.cov = 0.5 * (mr.covariance + mr.covariance.transpose());
             ec.has_cov = true;
           }
         } else if (i == 0 && std::isfinite(gres.score)) {
           ec.pose = Pose2(p0.x, p0.y, wrap_angle(p0.theta));
-          ec.eff_score = gres.score;
-          ec.inlier = compute_inlier_ratio(
+          const double raw_in = compute_inlier_ratio(
             *field_, ec.pose, active_scan, cfg_.match_opt.inlier_gate);
-          apply_beam_physics(
-            *field_, ec.pose, active_scan, cfg_.match_opt.inlier_gate,
-            cfg_.use_visibility_check, ec.eff_score, ec.inlier, false);
+          const ScanObservation obs = evaluate_observation(
+            *field_, ec.pose, active_scan, gres.score, raw_in,
+            cfg_.match_opt.inlier_gate, cfg_.use_visibility_check);
+          ec.eff_score = obs.global_rank_score();
+          ec.inlier = obs.geom_inlier;
         } else {
           continue;
         }
@@ -867,11 +893,11 @@ bool LocalizerCore::handle_recovery_scan(const Scan & active_scan, CoreOutput & 
                 EvalCand tc;
                 tc.from_twin = true;
                 tc.pose = Pose2(tmr.pose.x, tmr.pose.y, wrap_angle(tmr.pose.theta));
-                tc.eff_score = tmr.score;
-                tc.inlier = tmr.inlier_ratio;
-                apply_beam_physics(
-                  *field_, tc.pose, active_scan, cfg_.match_opt.inlier_gate,
-                  cfg_.use_visibility_check, tc.eff_score, tc.inlier, false);
+                const ScanObservation tobs = evaluate_observation(
+                  *field_, tc.pose, active_scan, tmr.score, tmr.inlier_ratio,
+                  cfg_.match_opt.inlier_gate, cfg_.use_visibility_check);
+                tc.eff_score = tobs.global_rank_score();
+                tc.inlier = tobs.geom_inlier;
                 if (tc.eff_score >= cfg_.min_score) {
                   if (is_valid_spd_cov3(tmr.covariance)) {
                     tc.cov = 0.5 * (tmr.covariance + tmr.covariance.transpose());
@@ -902,12 +928,15 @@ bool LocalizerCore::handle_recovery_scan(const Scan & active_scan, CoreOutput & 
               is_finite_pose(local_mr.pose) &&
               std::isfinite(local_mr.score) &&
               std::isfinite(local_mr.inlier_ratio);
+            ScanObservation local_obs;
             if (local_valid) {
-              apply_beam_physics(
-                *field_, local_mr.pose, active_scan, cfg_.match_opt.inlier_gate,
-                cfg_.use_visibility_check, local_mr.score, local_mr.inlier_ratio, false);
+              local_obs = evaluate_observation(
+                *field_, local_mr.pose, active_scan, local_mr.score, local_mr.inlier_ratio,
+                cfg_.match_opt.inlier_gate, cfg_.use_visibility_check);
+              local_mr.score = local_obs.global_rank_score();
             }
             const bool local_healthy = local_valid &&
+              local_obs.wall_visibility >= cfg_.min_wall_visibility &&
               local_mr.score >= cfg_.min_score &&
               local_mr.inlier_ratio >= cfg_.min_inlier_ratio;
             if (local_healthy &&
@@ -1253,21 +1282,26 @@ CoreOutput LocalizerCore::on_scan(const Scan & scan)
     std::isfinite(mr.score) &&
     std::isfinite(mr.inlier_ratio) &&
     mr.covariance.allFinite();
-  double eff_inlier = mr.inlier_ratio;
-  double eff_score = mr.score;
+  // 正交观测评估：几何贴合、前景动态遮挡、硬穿墙矛盾、前沿覆盖度完全解耦
+  ScanObservation obs;
   if (mr_finite) {
-    apply_beam_physics(
-      *field_, mr.pose, *active_scan, cfg_.match_opt.inlier_gate,
-      cfg_.use_visibility_check, eff_score, eff_inlier);
+    obs = evaluate_observation(
+      *field_, mr.pose, *active_scan, mr.score, mr.inlier_ratio,
+      cfg_.match_opt.inlier_gate, cfg_.use_visibility_check);
   }
 
-  out.score = std::isfinite(eff_score) ? eff_score : 0.0;
-  out.inlier_ratio = std::isfinite(eff_inlier) ? eff_inlier : 0.0;
+  // ---------- 五道正交门控（valid / wall_phys / inlier / score / cov / mahal） ----------
+  // 硬物理门控独立判别穿墙/穿墙入未知矛盾；纯自由前沿外溢不再乘进几何分污染 min_score 门限
+  const bool gate_wall = mr_finite && (obs.wall_visibility >= cfg_.min_wall_visibility);
+  const double track_score = gate_wall ? obs.static_score : (obs.geom_score * obs.wall_visibility);
+  const double track_inlier = gate_wall ? obs.static_inlier : obs.geom_inlier;
+
+  out.score = std::isfinite(track_score) ? track_score : 0.0;
+  out.inlier_ratio = std::isfinite(track_inlier) ? track_inlier : 0.0;
   out.pose = pred;
 
-  // ---------- 四道门控（valid / inlier / score / mahal + cov） ----------
-  const bool gate_inlier = mr_finite && (eff_inlier >= cfg_.min_inlier_ratio);
-  const bool gate_score = mr_finite && (eff_score >= cfg_.min_score);
+  const bool gate_inlier = mr_finite && (track_inlier >= cfg_.min_inlier_ratio);
+  const bool gate_score = mr_finite && (track_score >= cfg_.min_score);
 
   Cov3 R = Cov3::Identity();
   bool gate_cov = false;
@@ -1285,6 +1319,7 @@ CoreOutput LocalizerCore::on_scan(const Scan & scan)
   Cov3 S = Cov3::Identity();
   Eigen::LDLT<Cov3> ldlt;
   bool gate_mahal = false;
+  double mahal_val = 0.0;
   if (mr_finite) {
     innov = Eigen::Vector3d(
       mr.pose.x - pred.x,
@@ -1297,13 +1332,33 @@ CoreOutput LocalizerCore::on_scan(const Scan & scan)
       const Eigen::Vector3d S_inv_innov = ldlt.solve(innov);
       if (ldlt.info() == Eigen::Success && S_inv_innov.allFinite()) {
         const double mahal = innov.dot(S_inv_innov);
-        gate_mahal = std::isfinite(mahal) && mahal >= 0.0 &&
-          mahal < cfg_.mahal_gate;
+        if (std::isfinite(mahal) && mahal >= 0.0) {
+          mahal_val = mahal;
+          gate_mahal = mahal < cfg_.mahal_gate;
+        }
       }
     }
   }
 
-  const bool accept = mr_finite && gate_inlier && gate_score &&
+  // 填充结构化诊断快照，任一门控拒绝均可通过位掩码直接定因
+  std::uint32_t reject_flags = GateFlag::kNone;
+  if (!mr_finite) {reject_flags |= GateFlag::kInvalid;}
+  if (!gate_wall) {reject_flags |= GateFlag::kWallPhys;}
+  if (!gate_inlier) {reject_flags |= GateFlag::kInlier;}
+  if (!gate_score) {reject_flags |= GateFlag::kScore;}
+  if (!gate_cov) {reject_flags |= GateFlag::kCov;}
+  if (!gate_mahal) {reject_flags |= GateFlag::kMahal;}
+
+  out.diag.reject_flags = reject_flags;
+  out.diag.raw_score = mr_finite ? obs.geom_score : 0.0;
+  out.diag.raw_inlier = mr_finite ? obs.geom_inlier : 0.0;
+  out.diag.wall_visibility = obs.wall_visibility;
+  out.diag.frontier_visibility = obs.frontier_visibility;
+  out.diag.short_ratio = obs.short_ratio;
+  out.diag.frontier_ratio = obs.frontier_ratio;
+  out.diag.mahal_dist = mahal_val;
+
+  const bool accept = mr_finite && gate_wall && gate_inlier && gate_score &&
     gate_mahal && gate_cov;
 
   // 滑动窗口异常监测（绑架主动触发）：仅将匹配失效、极低分或得分与内点率均不达标
@@ -1369,7 +1424,7 @@ CoreOutput LocalizerCore::on_scan(const Scan & scan)
   P4_ = P4_pred;
   // 局部吸引盆秩 1 经验贝叶斯松弛：仅当高分匹配落在本地跟踪窗邻域内却因短时滞后触发马氏拒绝时，
   // 严格沿当前新息方向叠加有界秩 1 协方差；远距离对称假峰绝不触发任何协方差膨胀（替代旧 P*=2.5）
-  if (mr_finite && gate_inlier && gate_score && gate_cov && !gate_mahal) {
+  if (mr_finite && gate_wall && gate_inlier && gate_score && gate_cov && !gate_mahal) {
     const double innov_xy = std::hypot(innov(0), innov(1));
     const double max_local_xy = std::max(0.20, 1.5 * cfg_.match_opt.window_lin);
     const double max_local_th = std::max(0.15, 1.5 * cfg_.match_opt.window_ang);

@@ -27,6 +27,7 @@
 // 多假设队列 + 滑动窗口主动绑架检测。
 // ============================================================================
 #include <cstddef>
+#include <cstdint>
 #include <deque>
 #include <functional>
 #include <memory>
@@ -44,11 +45,12 @@ enum class LocState { UNINIT, TRACKING, DEGRADED, LOST, GLOBAL };
 
 struct CoreConfig
 {
-  // 门限
+  // 正交门限（几何 / 硬物理矛盾 / 协方差 / 马氏距离各自独立判门）
   double min_inlier_ratio{0.60};
   double min_score{0.35};
-  double mahal_gate{9.0};          // χ²(3) 3σ ≈ 9.35
-  double max_cov_eig{1.0};         // 匹配协方差最小特征值上限 (m²)
+  double min_wall_visibility{0.50};  // 硬物理一致性门限（仅拦截穿墙/穿墙入未知矛盾）
+  double mahal_gate{9.0};            // χ²(3) 3σ ≈ 9.35
+  double max_cov_eig{1.0};           // 匹配协方差最小特征值上限 (m²)
   // 预测协方差（odom 滑移 + 速度耦合时序抖动物理模型）
   double odom_trans_var_per_m{4e-4};     // (0.02m/m)²
   double odom_trans_var_per_rad{2e-3};   // 原地旋转引起的横向平移过程噪声 (m²/rad)
@@ -96,6 +98,30 @@ struct CoreConfig
   MatchOptions match_opt{};
 };
 
+namespace GateFlag
+{
+constexpr std::uint32_t kNone = 0u;
+constexpr std::uint32_t kInvalid = 1u << 0;   // 匹配失效或非有限值
+constexpr std::uint32_t kInlier = 1u << 1;    // 几何内点率不足
+constexpr std::uint32_t kScore = 1u << 2;     // 几何拟合似然不足
+constexpr std::uint32_t kWallPhys = 1u << 3;  // 穿墙/穿墙入未知硬物理矛盾
+constexpr std::uint32_t kCov = 1u << 4;       // 匹配协方差病态/过大
+constexpr std::uint32_t kMahal = 1u << 5;     // 马氏距离超门限
+}  // namespace GateFlag
+
+// 结构化诊断快照：每次决策保留各正交物理因子原始值与门控位掩码，消除黑盒排查
+struct FrameDiagnostics
+{
+  std::uint32_t reject_flags{GateFlag::kNone};
+  double raw_score{0.0};
+  double raw_inlier{0.0};
+  double wall_visibility{1.0};
+  double frontier_visibility{1.0};
+  double short_ratio{0.0};
+  double frontier_ratio{0.0};
+  double mahal_dist{0.0};
+};
+
 struct CoreOutput
 {
   Pose2 pose;                  // map 系 base 位姿
@@ -104,6 +130,7 @@ struct CoreOutput
   bool accepted{false};        // 本帧匹配是否被采纳
   double score{0.0}, inlier_ratio{0.0};
   int reject_streak{0};
+  FrameDiagnostics diag{};     // 正交因子与门控诊断明细
 };
 
 class LocalizerCore {

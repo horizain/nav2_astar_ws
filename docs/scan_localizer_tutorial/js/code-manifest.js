@@ -83,7 +83,7 @@
     {
       path: "include/scan_localizer/matchers.hpp",
       group: "matchers",
-      lines: 189,
+      lines: 194,
       chapter: "ch03",
       role: "五种局部匹配器接口、MatchOptions 参数与 global_correlative 全局搜索声明",
       symbols: [
@@ -95,7 +95,7 @@
     {
       path: "src/matchers.cpp",
       group: "matchers",
-      lines: 1521,
+      lines: 1602,
       chapter: "ch04",
       role: "五种局部匹配器、未阻尼 Hessian 协方差、B&B 全局重定位与工厂实现",
       symbols: [
@@ -136,7 +136,7 @@
     {
       path: "include/scan_localizer/localizer_core.hpp",
       group: "core",
-      lines: 213,
+      lines: 240,
       chapter: "ch07",
       role: "ROS 无关核心状态机：4 状态各向异性 EKF [x,y,θ,b_g]^T、门控与多假设队列",
       symbols: [
@@ -147,7 +147,7 @@
     {
       path: "src/localizer_core.cpp",
       group: "core",
-      lines: 1376,
+      lines: 1480,
       chapter: "ch07",
       role: "4D SE(2)+Bias EKF、Joseph 协方差、四道门控、静止锁死松弛与跳变保护实现",
       symbols: [
@@ -337,7 +337,7 @@
     {
       path: "test/test_matchers.cpp",
       group: "sim_test",
-      lines: 482,
+      lines: 643,
       chapter: "ch04",
       role: "五种匹配器收敛、退化走廊协方差、B&B 100%越界与失败回调单测 (8 cases)",
       symbols: [
@@ -357,7 +357,7 @@
     {
       path: "test/test_localizer_core.cpp",
       group: "sim_test",
-      lines: 1073,
+      lines: 1294,
       chapter: "ch07",
       role: "4D EKF 零偏收敛、门控、走廊滑移、静止松弛与对称走廊防误跳单测 (14 cases)",
       symbols: [

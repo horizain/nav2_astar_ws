@@ -1548,9 +1548,12 @@ BeamPhysicsStats evaluate_beam_physics(
     0.0, static_cast<double>(stats.n_frontier_unk) / static_cast<double>(used) - 0.06);
   const double frontier_penalty =
     1.2 * excess_frontier_ratio + 0.8 * excess_frontier_frac;
-  const double frontier_vis = std::clamp(std::exp(-frontier_penalty), 0.62, 1.0);
+  stats.frontier_visibility = std::clamp(std::exp(-frontier_penalty), 0.62, 1.0);
+  stats.short_ratio = static_cast<double>(stats.n_short) / static_cast<double>(used);
+  stats.frontier_ratio = static_cast<double>(stats.n_frontier_unk) / static_cast<double>(used);
 
-  stats.visibility = std::clamp(stats.wall_visibility * frontier_vis, 0.05, 1.0);
+  stats.visibility = std::clamp(
+    stats.wall_visibility * stats.frontier_visibility, 0.05, 1.0);
 
   // 动态遮挡分母修正：最多扣除 55% 的 z_short 光束，既抗高密人群又防止空旷错位假高分/内点率
   const double min_explainable = 0.45 * static_cast<double>(used);
