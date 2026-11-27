@@ -1361,6 +1361,7 @@ BeamPhysicsStats evaluate_beam_physics(
   const Eigen::Vector2i og = grid.worldToGridIndex(pose.x, pose.y);
   if (!grid.inside(og.x(), og.y())) {
     stats.visibility = 0.05;
+    stats.wall_visibility = 0.05;
     return stats;
   }
   const int8_t oc = grid.cells[
@@ -1368,13 +1369,14 @@ BeamPhysicsStats evaluate_beam_physics(
     static_cast<std::size_t>(og.x())];
   if (oc < 0 || (check_occupied && oc > 65)) {
     stats.visibility = 0.15;
+    stats.wall_visibility = 0.15;
     return stats;
   }
 
   const double res = grid.resolution;
   const double sigma = std::max(res, field.sigma_m_);
-  // 所有物理尺度均由地图分辨率与似然平滑尺度 σ 导出，无走廊宽度/米数魔法阈值
-  const double tau_wall = std::max(3.0 * res, 2.5 * sigma);
+  // 所有物理尺度均由地图分辨率与似然平滑尺度 σ 导出，并给 tau_wall 加 0.35m 上限防止粗地图漏判薄墙
+  const double tau_wall = std::min(std::max(3.0 * res, 2.5 * sigma), 0.35);
   const double clear_m = std::max(2.0 * res, 1.5 * sigma);
   const double gate = std::isfinite(inlier_gate) ? std::max(res, inlier_gate) : sigma;
 
@@ -1384,10 +1386,11 @@ BeamPhysicsStats evaluate_beam_physics(
   const double s = std::sin(pose.theta);
 
   double total_len = 0.0;
-  double unk_bad_energy = 0.0;
+  double wall_unk_energy = 0.0;
+  double frontier_unk_energy = 0.0;
   double occ_bad_energy = 0.0;
-  double max_unk_depth = 0.0;
-  int unk_contradict = 0;
+  double max_wall_unk_depth = 0.0;
+  int wall_unk_contradict = 0;
   int occ_contradict = 0;
   double static_like_sum = 0.0;
   int used = 0;
@@ -1449,7 +1452,10 @@ BeamPhysicsStats evaluate_beam_physics(
           t += step;
         } else {
           const double d_obs = static_cast<double>(field.cellSdf(idx.x(), idx.y()));
-          const double step = std::clamp(0.75 * d_obs, std::max(2.0 * res, sigma), 0.60);
+          // 临近薄墙（<=max(2.5格,1.5σ)）时把最小步长缩到单格，防大步跨越 1 格厚封口墙误判为前沿
+          const double min_step = (d_obs <= std::max(2.5 * res, 1.5 * sigma)) ?
+            res : std::max(2.0 * res, sigma);
+          const double step = std::clamp(0.75 * d_obs, min_step, 0.60);
           t += step;
         }
       }
@@ -1485,16 +1491,23 @@ BeamPhysicsStats evaluate_beam_physics(
     const bool void_pierce = !end_on_wall && (occ_len >= 1.1 * tau_wall) &&
       (first_occ_t >= 0.0) && ((r - first_occ_t) > 3.5 * tau_wall);
     if (unk_spill || void_pierce) {
-      // 状态 4：区分深穿未建图未知灰区（强矛盾，180°翻转假峰）与穿占映射区内障碍（门开/移走家具）
-      if (unk_spill) {
-        unk_bad_energy += std::min(r, unk_len);
-        max_unk_depth = std::max(max_unk_depth, unk_len);
-        ++unk_contradict;
+      // 状态 4：物理拆分三类异常：
+      // (a) wall_unk：先穿已知墙面再深穿未知灰区（180°翻转硬矛盾，极限强罚）；
+      // (b) frontier_unk：零穿墙直接从自由区射出地图边界/侧向开口（合法前沿，仅温和覆盖折扣）；
+      // (c) void_pierce：穿透映射区内旧障碍（门开/移走家具，中等容差）。
+      if (unk_spill && occ_len > 0.0) {
+        wall_unk_energy += std::min(r, unk_len);
+        max_wall_unk_depth = std::max(max_wall_unk_depth, unk_len);
+        ++wall_unk_contradict;
+        ++stats.n_contradict;
+      } else if (unk_spill) {
+        frontier_unk_energy += std::min(r, unk_len);
+        ++stats.n_frontier_unk;
       } else {
         occ_bad_energy += std::min(r, 0.5 * (r - first_occ_t));
         ++occ_contradict;
+        ++stats.n_contradict;
       }
-      ++stats.n_contradict;
       continue;
     }
 
@@ -1506,15 +1519,15 @@ BeamPhysicsStats evaluate_beam_physics(
     return stats;
   }
 
-  // 分项容差：真实地图允许少量门开/移走家具(occ)与边角未建图噪点(unk)，但对深穿未知灰区保持强判别
-  const double unk_ratio = unk_bad_energy / total_len;
-  const double excess_unk_ratio = std::max(0.0, unk_ratio - 0.05);
-  const double excess_unk_frac = std::max(
-    0.0, static_cast<double>(unk_contradict) / static_cast<double>(used) - 0.035);
-  const double unk_depth_term = (unk_ratio > 0.06) ?
-    std::min(0.80, 0.08 * std::max(0.0, max_unk_depth - 4.0)) : 0.0;
-  const double unk_penalty =
-    6.5 * excess_unk_ratio + 4.0 * excess_unk_frac + unk_depth_term;
+  // 硬矛盾分项惩罚：穿墙入未知(wall_unk)保持极限判别，穿占旧障碍(occ)保留门开/家具容差
+  const double wall_unk_ratio = wall_unk_energy / total_len;
+  const double excess_wall_unk_ratio = std::max(0.0, wall_unk_ratio - 0.05);
+  const double excess_wall_unk_frac = std::max(
+    0.0, static_cast<double>(wall_unk_contradict) / static_cast<double>(used) - 0.035);
+  const double unk_depth_term = (wall_unk_ratio > 0.06) ?
+    std::min(0.80, 0.08 * std::max(0.0, max_wall_unk_depth - 5.0 * tau_wall)) : 0.0;
+  const double wall_unk_penalty =
+    6.5 * excess_wall_unk_ratio + 4.0 * excess_wall_unk_frac + unk_depth_term;
 
   const double occ_ratio = occ_bad_energy / total_len;
   const double excess_occ_ratio = std::max(0.0, occ_ratio - 0.10);
@@ -1522,8 +1535,22 @@ BeamPhysicsStats evaluate_beam_physics(
     0.0, static_cast<double>(occ_contradict) / static_cast<double>(used) - 0.08);
   const double occ_penalty = 2.5 * excess_occ_ratio + 2.0 * excess_occ_frac;
 
-  stats.visibility = std::clamp(
-    std::exp(-std::max(unk_penalty, occ_penalty)), 0.05, 1.0);
+  // 复合硬矛盾：主项 + 0.35 * 次项，避免“一半穿墙 + 一半穿墙入未知”被 std::max 低估
+  const double hard_penalty =
+    std::max(wall_unk_penalty, occ_penalty) +
+    0.35 * std::min(wall_unk_penalty, occ_penalty);
+  stats.wall_visibility = std::clamp(std::exp(-hard_penalty), 0.05, 1.0);
+
+  // 零穿墙纯前沿外溢：在 GLOBAL 期给温和覆盖折扣（保底 0.62），防止未封口真实位姿被一刀砍死跳镜像
+  const double frontier_ratio = frontier_unk_energy / total_len;
+  const double excess_frontier_ratio = std::max(0.0, frontier_ratio - 0.08);
+  const double excess_frontier_frac = std::max(
+    0.0, static_cast<double>(stats.n_frontier_unk) / static_cast<double>(used) - 0.06);
+  const double frontier_penalty =
+    1.2 * excess_frontier_ratio + 0.8 * excess_frontier_frac;
+  const double frontier_vis = std::clamp(std::exp(-frontier_penalty), 0.62, 1.0);
+
+  stats.visibility = std::clamp(stats.wall_visibility * frontier_vis, 0.05, 1.0);
 
   // 动态遮挡分母修正：最多扣除 55% 的 z_short 光束，既抗高密人群又防止空旷错位假高分/内点率
   const double min_explainable = 0.45 * static_cast<double>(used);

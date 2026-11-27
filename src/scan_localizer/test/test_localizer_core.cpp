@@ -1158,4 +1158,62 @@ public:
   }
 }
 
+
+TEST(LocalizerCoreTest, TrackingSurvivesOpenMapFrontierWithoutLowScoreKick)
+{
+  // Open west boundary corridor (x=0..400 free, no west wall)
+  sloc::OccupancyGrid grid;
+  grid.resolution = 0.05;
+  grid.width = 420;
+  grid.height = 100;
+  grid.origin_x = -20.0;
+  grid.origin_y = -2.5;
+  grid.cells.assign(static_cast<std::size_t>(grid.width) * grid.height, -1);
+  for (int y = 30; y <= 69; ++y) {
+    for (int x = 0; x <= 400; ++x) {
+      grid.cells[static_cast<std::size_t>(y) * grid.width + x] = 0;
+    }
+  }
+  for (int x = 0; x <= 401; ++x) {
+    grid.cells[29 * grid.width + x] = 100;
+    grid.cells[70 * grid.width + x] = 100;
+  }
+  for (int y = 29; y <= 70; ++y) {
+    grid.cells[y * grid.width + 401] = 100;
+  }
+
+  auto field = std::make_shared<sloc::MapField>();
+  ASSERT_TRUE(field->build(grid, 0.15));
+
+  sloc::Scan frontier_scan;
+  for (int i = 0; i < 180; ++i) {
+    const double ang = -sloc::kPi + i * (sloc::kTwoPi / 180.0);
+    if (std::abs(ang) < 0.40) {
+      frontier_scan.points.emplace_back(12.0 * std::cos(ang), 12.0 * std::sin(ang));
+    } else if (std::abs(std::sin(ang)) > 0.20) {
+      const double r = std::min(15.0, 1.0 / std::abs(std::sin(ang)));
+      frontier_scan.points.emplace_back(r * std::cos(ang), r * std::sin(ang));
+    } else {
+      frontier_scan.points.emplace_back(12.0 * std::cos(ang), 12.0 * std::sin(ang));
+    }
+  }
+
+  sloc::CoreConfig cfg;
+  cfg.use_visibility_check = true;
+  cfg.min_score = 0.35;
+  cfg.min_inlier_ratio = 0.45;
+  sloc::LocalizerCore core(cfg);
+  core.set_map(field);
+  core.set_matcher(sloc::make_matcher("field_gn"));
+  core.on_odom(sloc::Pose2(0.0, 0.0, 0.0));
+  core.set_initial_pose(sloc::Pose2(-18.5, 0.0, sloc::kPi));
+
+  // Consecutive frames facing unsealed west map boundary must stay TRACKING with zero kicks.
+  for (int f = 0; f < 6; ++f) {
+    const auto out = core.on_scan(frontier_scan);
+    EXPECT_TRUE(out.accepted) << "frame=" << f << " score=" << out.score;
+    EXPECT_EQ(out.state, sloc::LocState::TRACKING);
+  }
+}
+
 }  // namespace

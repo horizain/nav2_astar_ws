@@ -160,13 +160,15 @@ double compute_adaptive_ang_step(const MapField & field, const Scan & scan);
 //   4) CONTRADICTION : 穿墙射入未知灰区或悬空外溢（按超额矛盾比例施加指数似然惩罚）
 struct BeamPhysicsStats
 {
-  double visibility{1.0};           // 物理可见性一致性似然 ∈ [0.05, 1.0]
+  double visibility{1.0};           // 综合可见性似然（含前沿温和折扣）∈ [0.05, 1.0]
+  double wall_visibility{1.0};      // 仅含穿墙/穿墙入未知硬矛盾的可见性 ∈ [0.05, 1.0]
   double static_score{0.0};         // 扣除合理 z_short 前景遮挡后的有效静态平均似然 ∈ [0, 1]
   double static_inlier_ratio{0.0};  // 扣除合理 z_short 前景遮挡后的有效静态内点率 ∈ [0, 1]
   int n_static{0};
   int n_short{0};
   int n_clutter_pass{0};
   int n_contradict{0};
+  int n_frontier_unk{0};            // 零穿墙纯自由前沿射出地图外/未建图开口的光束数
 };
 
 BeamPhysicsStats evaluate_beam_physics(

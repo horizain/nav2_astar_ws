@@ -79,13 +79,18 @@ void apply_beam_physics(
   }
   const BeamPhysicsStats bp = evaluate_beam_physics(
     field, pose, scan, inlier_gate, true);
+  // 跟踪期（allow_short_boost=true）：对零穿墙纯前沿外溢（未封口边界/侧向开口）保底 0.80，
+  // 避免精准跟踪因朝向地图未建图前沿被压成 LOW_SCORE 误踢；硬穿墙矛盾仍按 wall_visibility 强罚。
+  const double eff_vis = allow_short_boost ?
+    std::min(bp.wall_visibility, std::max(bp.visibility, 0.80 * bp.wall_visibility)) :
+    bp.visibility;
   // 仅在已锁定跟踪期开启前景动态遮挡 (z_short) 补偿；全局多假设判别期禁用该提分，
   // 防止错位假设把“未匹配到的真实隔墙/家具”当成动态遮挡扣除从而与真位姿打平。
-  if (allow_short_boost && bp.visibility >= 0.65) {
+  if (allow_short_boost && eff_vis >= 0.65) {
     score = std::max(score, bp.static_score);
     inlier_ratio = std::max(inlier_ratio, bp.static_inlier_ratio);
   }
-  score *= bp.visibility;
+  score *= eff_vis;
 }
 
 }  // namespace
@@ -442,7 +447,8 @@ bool LocalizerCore::try_promote_hypotheses(
         top_valid_idx = static_cast<int>(i);
       }
     } else {
-      evals[i].ll = -4.0;
+      // 软化单帧失效惩罚，避免瞬时行人遮挡一帧清空十余帧累积的正确假设优势
+      evals[i].ll = -1.8;
     }
     evals[i].valid = valid_match;
     evals[i].mr = mr;
@@ -500,15 +506,22 @@ bool LocalizerCore::try_promote_hypotheses(
     }
   }
   const double sym_freeze_margin = std::min(0.04, 0.5 * cfg_.hyp_ambiguity_margin);
-  const bool symmetric_tie = (distinct_runner_eff_q >= 0.0) &&
-    ((top_valid_eff_q - distinct_runner_eff_q) < sym_freeze_margin);
+  const double sym_clear_margin = std::max(sym_freeze_margin + 0.04, cfg_.hyp_ambiguity_margin);
+  double stationary_gamma = 0.8;
+  if (distinct_runner_eff_q >= 0.0) {
+    const double eff_gap = top_valid_eff_q - distinct_runner_eff_q;
+    const double ramp = std::clamp(
+      (eff_gap - sym_freeze_margin) / std::max(1e-6, sym_clear_margin - sym_freeze_margin),
+      0.0, 1.0);
+    stationary_gamma = 0.8 * ramp;
+  }
 
-  // 更新序贯贝叶斯对数权重：对称平手且静止时 γ=0；单峰或显著领先或运动中按 γ 累积
+  // 更新序贯贝叶斯对数权重：对称平手且静止时 γ=0；在 [freeze, clear] 区间平滑过渡避免阶跃假锁
   const double env_innov_gate = std::clamp((max_score_innov - 0.08) / 0.15, 0.0, 0.6);
   const double motion_gamma = std::clamp(raw_motion + env_innov_gate, 0.0, 1.0);
   double gamma = 1.0;
   if (real_scan && live_ok_count > 1) {
-    gamma = symmetric_tie ? motion_gamma : std::max(motion_gamma, 0.8);
+    gamma = std::max(motion_gamma, stationary_gamma);
   }
 
   double max_lw = 0.0;  // 含虚拟离群零假设 log_w_null = 0.0

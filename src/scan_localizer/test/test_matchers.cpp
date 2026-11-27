@@ -580,4 +580,64 @@ TEST(MatchersTest, GlobalCorrelativeAdaptiveBucketSpreadInLongCorridor)
   }
 }
 
+
+TEST(MatchersTest, OpenFrontierDoesNotCrushVisibilityWhileWallPiercingFlipStillRejected)
+{
+  // Corridor open at west map edge (no west wall, unsealed frontier) and walled at east end
+  // with unknown (-1) exterior behind east wall.
+  sloc::OccupancyGrid grid;
+  grid.resolution = 0.05;
+  grid.width = 440;   // wx in [-20..+2]
+  grid.height = 100;  // wy in [-2.5..+2.5]
+  grid.origin_x = -20.0;
+  grid.origin_y = -2.5;
+  grid.cells.assign(static_cast<std::size_t>(grid.width) * grid.height, -1);
+
+  // Carve free corridor x in [0..400] (west end open at map boundary x=0), y in [30..69]
+  for (int y = 30; y <= 69; ++y) {
+    for (int x = 0; x <= 400; ++x) {
+      grid.cells[static_cast<std::size_t>(y) * grid.width + x] = 0;
+    }
+  }
+  // North/south walls along corridor + single-cell east end wall at x=401
+  for (int x = 0; x <= 401; ++x) {
+    grid.cells[29 * grid.width + x] = 100;
+    grid.cells[70 * grid.width + x] = 100;
+  }
+  for (int y = 29; y <= 70; ++y) {
+    grid.cells[y * grid.width + 401] = 100;
+  }
+
+  sloc::MapField field;
+  ASSERT_TRUE(field.build(grid, 0.15));
+
+  // Scan near west open boundary facing WEST (-x, pi): side walls match, forward rays shoot
+  // straight out of map (!grid.inside) with zero wall crossing.
+  sloc::Scan west_frontier_scan;
+  for (int i = 0; i < 180; ++i) {
+    const double ang = -sloc::kPi + i * (sloc::kTwoPi / 180.0);
+    // Forward cone (|ang| < 25 deg) shoots 12m out past open west edge; side/rear hit walls.
+    if (std::abs(ang) < 0.40) {
+      west_frontier_scan.points.emplace_back(12.0 * std::cos(ang), 12.0 * std::sin(ang));
+    } else if (std::abs(std::sin(ang)) > 0.20) {
+      const double r = std::min(15.0, 1.0 / std::abs(std::sin(ang)));
+      west_frontier_scan.points.emplace_back(r * std::cos(ang), r * std::sin(ang));
+    } else {
+      west_frontier_scan.points.emplace_back(12.0 * std::cos(ang), 12.0 * std::sin(ang));
+    }
+  }
+  const sloc::Pose2 west_pose(-18.5, 0.0, sloc::kPi);
+  const auto bp_frontier = sloc::evaluate_beam_physics(field, west_pose, west_frontier_scan, 0.15);
+  EXPECT_GT(bp_frontier.n_frontier_unk, 10);
+  EXPECT_GT(bp_frontier.wall_visibility, 0.95);
+  EXPECT_GE(bp_frontier.visibility, 0.62);
+
+  // Same scan evaluated at east end facing EAST (+x, 0): forward rays pierce east wall (x=401)
+  // into unknown exterior -> wall_unk must crush both wall_visibility and visibility.
+  const sloc::Pose2 east_flip_pose(-1.5, 0.0, 0.0);
+  const auto bp_flip = sloc::evaluate_beam_physics(field, east_flip_pose, west_frontier_scan, 0.15);
+  EXPECT_LT(bp_flip.wall_visibility, 0.35);
+  EXPECT_LT(bp_flip.visibility, 0.35);
+}
+
 }  // namespace
