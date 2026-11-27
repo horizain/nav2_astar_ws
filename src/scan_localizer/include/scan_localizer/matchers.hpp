@@ -148,7 +148,8 @@ struct GlobalResult
 GlobalResult global_correlative(
   const MapField & field, const Scan & scan,
   int beams_subsample, double ang_step,
-  int n_hypotheses);
+  int n_hypotheses,
+  double max_time_ms = 0.0);
 
 // 按扫描有效量程 p90 与似然场平滑尺度 σ 物理推导全局粗搜自适应角步长 ∈ [0.75°, 3.0°]
 double compute_adaptive_ang_step(const MapField & field, const Scan & scan);

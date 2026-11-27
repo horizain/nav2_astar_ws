@@ -38,6 +38,7 @@ add_library(scan_localizer_core STATIC
   src/particle_filter.cpp
   src/localizer_core.cpp
   src/blackbox_recorder.cpp
+  src/async_global_worker.cpp
 )
 target_include_directories(scan_localizer_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -208,6 +209,12 @@ if(BUILD_TESTING)
   if(TARGET test_blackbox_recorder)
     target_link_libraries(test_blackbox_recorder scan_localizer_core)
     target_compile_options(test_blackbox_recorder PRIVATE ${SCAN_LOCALIZER_WARN_FLAGS})
+  endif()
+
+  ament_add_gtest(test_async_global_worker test/test_async_global_worker.cpp)
+  if(TARGET test_async_global_worker)
+    target_link_libraries(test_async_global_worker scan_localizer_core scan_localizer_sim_lib)
+    target_compile_options(test_async_global_worker PRIVATE ${SCAN_LOCALIZER_WARN_FLAGS})
   endif()
 endif()
 

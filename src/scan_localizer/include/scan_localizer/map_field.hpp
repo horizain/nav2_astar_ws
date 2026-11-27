@@ -176,6 +176,18 @@ public:
              static_cast<std::size_t>(px)];
   }
 
+  // 零检查只读 uint8 量化金字塔指针（1 B/格，适配 RK3399 L2 缓存与 NEON 批量查表）
+  const std::uint8_t * poolDataU8(int level) const
+  {
+    if (!valid_ || level < 0 ||
+      level >= static_cast<int>(swmax_u8_.size()))
+    {
+      return nullptr;
+    }
+    return swmax_u8_[static_cast<std::size_t>(level)].data();
+  }
+  const std::uint8_t * likeDataU8() const {return poolDataU8(0);}
+
   // O(1) 查询世界坐标 (wx, wy) 处的地图可定位性、退化主轴与对称孪生区先验
   LocalMapPrior queryPrior(double wx, double wy) const;
 
@@ -193,6 +205,7 @@ private:
   std::vector<float> like_;          // [0,1]
   struct SWGrid { int width{0}, height{0}; std::vector<float> data; };
   std::vector<SWGrid> swmax_;        // [0]=like，[k]=2^k 滑窗最大值
+  std::vector<std::vector<std::uint8_t>> swmax_u8_;  // ceil(255*swmax) 紧致上界金字塔
 
   struct PriorCell
   {

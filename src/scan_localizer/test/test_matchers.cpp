@@ -640,4 +640,25 @@ TEST(MatchersTest, OpenFrontierDoesNotCrushVisibilityWhileWallPiercingFlipStillR
   EXPECT_LT(bp_flip.visibility, 0.35);
 }
 
+
+TEST(MatchersTest, GlobalCorrelativeRespectsWallClockTimeBudget)
+{
+  const auto grid = sloc::sim::make_warehouse(0.05);
+  sloc::MapField field;
+  ASSERT_TRUE(field.build(grid, 0.20));
+  ASSERT_NE(field.likeDataU8(), nullptr);
+
+  std::mt19937 rng(99);
+  sloc::sim::ScanSimConfig scfg;
+  scfg.beams = 360;
+  scfg.noise_std = 0.01;
+  const sloc::Pose2 gt(6.0, 5.0, 0.7);
+  const auto scan = sloc::sim::make_scan(grid, gt, scfg, rng);
+
+  const auto res = sloc::global_correlative(field, scan, 3, 5.0 * kDeg, 8, 250.0);
+  ASSERT_TRUE(res.valid);
+  EXPECT_LT(std::hypot(res.pose.x - gt.x, res.pose.y - gt.y), 0.30);
+  EXPECT_LT(std::abs(sloc::wrap_angle(res.pose.theta - gt.theta)), 0.20);
+}
+
 }  // namespace

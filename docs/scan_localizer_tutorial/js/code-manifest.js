@@ -56,7 +56,7 @@
     {
       path: "include/scan_localizer/map_field.hpp",
       group: "geometry",
-      lines: 215,
+      lines: 228,
       chapter: "ch02",
       role: "OccupancyGrid 坐标换算与 MapField（EDT→SDF→似然场→swmax 金字塔）接口",
       symbols: [
@@ -67,7 +67,7 @@
     {
       path: "src/map_field.cpp",
       group: "geometry",
-      lines: 751,
+      lines: 764,
       chapter: "ch02",
       role: "双向 Meijster/FH EDT、SDF 双线性梯度、似然场与 2^k 滑窗最大值栈构建",
       symbols: [
@@ -83,7 +83,7 @@
     {
       path: "include/scan_localizer/matchers.hpp",
       group: "matchers",
-      lines: 194,
+      lines: 195,
       chapter: "ch03",
       role: "五种局部匹配器接口、MatchOptions 参数与 global_correlative 全局搜索声明",
       symbols: [
@@ -95,7 +95,7 @@
     {
       path: "src/matchers.cpp",
       group: "matchers",
-      lines: 1602,
+      lines: 1748,
       chapter: "ch04",
       role: "五种局部匹配器、未阻尼 Hessian 协方差、B&B 全局重定位与工厂实现",
       symbols: [
@@ -210,7 +210,7 @@
     {
       path: "CMakeLists.txt",
       group: "ros",
-      lines: 216,
+      lines: 223,
       chapter: "ch08",
       role: "core / sim_lib / node_component / executable / 9 组 gtest 与严格编译告警配置",
       symbols: [
@@ -337,7 +337,7 @@
     {
       path: "test/test_matchers.cpp",
       group: "sim_test",
-      lines: 643,
+      lines: 664,
       chapter: "ch04",
       role: "五种匹配器收敛、退化走廊协方差、B&B 100%越界与失败回调单测 (8 cases)",
       symbols: [
@@ -454,6 +454,39 @@
       role: "黑匣子模块单元测试：二进制往返、前后窗切片、大点云降采样、冷却防风暴与磁盘配额",
       symbols: [
         { name: "BlackboxRecorderTest.*", range: "57-237", desc: "覆盖序列化完整性、自动触发窗口与环形配额淘汰" },
+      ],
+    },
+
+    {
+      path: "include/scan_localizer/async_global_worker.hpp",
+      group: "core",
+      lines: 111,
+      chapter: "ch08",
+      role: "异步全局重定位隔离工作线程接口：Latest-Only 单槽覆盖、Linux 绑核与 nice 降权",
+      symbols: [
+        { name: "struct GlobalWorkerConfig / GlobalWorkerResult", range: "34-52", desc: "绑核列表、降权 nice 与墙钟预算配置及结果快照" },
+        { name: "class AsyncGlobalWorker", range: "54-99", desc: "常驻单线程异步重定位与非阻塞结果轮询" },
+      ],
+    },
+    {
+      path: "src/async_global_worker.cpp",
+      group: "core",
+      lines: 218,
+      chapter: "ch08",
+      role: "AsyncGlobalWorker 实现：pthread_setaffinity_np 绑核、setpriority 降权与自适应角步长",
+      symbols: [
+        { name: "AsyncGlobalWorker::apply_thread_isolation", range: "123-155", desc: "Linux 绑核与线程 nice 降权（静默降级安全）" },
+        { name: "AsyncGlobalWorker::worker_loop", range: "157-200", desc: "单槽最新帧消费并透传 max_time_ms 墙钟预算" },
+      ],
+    },
+    {
+      path: "test/test_async_global_worker.cpp",
+      group: "tests",
+      lines: 99,
+      chapter: "ch09",
+      role: "AsyncGlobalWorker 单元测试：绑核降权重定位精度与高频突发提交单槽覆盖验证",
+      symbols: [
+        { name: "AsyncGlobalWorkerTest.*", range: "27-92", desc: "覆盖绑核执行、非阻塞轮询与旧请求自动丢弃" },
       ],
     },
 
