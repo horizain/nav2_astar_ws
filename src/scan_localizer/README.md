@@ -298,3 +298,28 @@ scan_localizer/
 ## 许可
 
 Apache-2.0（与 `package.xml` 及全仓源码头一致）。算法参考并致谢：Olson 2009（correlative）、Cartographer（B&B / PrecomputationGrid 思路）、LaMa（连续似然场定位）、AMCL（粒子滤波基线）。
+
+---
+
+## 真实公开数据集基准与离线排障工具
+
+除上述仿真 E1–E10 外，`scan_localizer` 已在 3 套公开真实 2D 激光数据集上完成端到端实测：
+
+| 公开真实数据集 | 测试重点 | 核心实测结论 | 完整报告 |
+| :--- | :--- | :--- | :--- |
+| 浙大玉泉 GP-SLAM-2D（曹光彪 46×46m / 永谦 27×28m） | 5 匹配器对比、异步全局恢复、3×绑架、对称走廊消歧 | 曹光彪默认参数 94.43% / 0.101 m ATE、绑架 3/3；永谦 ATE **4.729 m → 0.725 m (-84.7%)** | [gp_slam_2d_benchmark](../../docs/results/gp_slam_2d_benchmark/README.md) |
+| Cartographer MiR100（24×15m，360 s / 124.5 m） | 4D EKF 在线陀螺零偏估计、50% 打滑、无里程计 | 12 组全 **0 Lost**；`+0.08/+0.25 rad/s` 零偏 11.2/17.7 s 收敛（`<0.03°/s`）；50% 打滑 `kMahal` **-91.0%**；无里程计+陀螺 **99.98%** | [mir100_imu_4d_ekf_benchmark](../../docs/results/mir100_imu_4d_ekf_benchmark/README.md) |
+| Cartographer 德意志博物馆双包（53×44m，+22 天） | 跨 22 天环境变化 + 零轮式里程计冷启动压测 | 32.3% 动态变化下 **14.8 s** 冷启动锁定（`score=0.866`），明确 3D 背包俯仰晃动边界 | [deutsches_museum_crossday_benchmark](../../docs/results/deutsches_museum_crossday_benchmark/README.md) |
+
+### `.slocbb` 黑盒离线复盘与本地预检
+
+```bash
+# 板端零第三方依赖快速看故障摘要与 GateFlag 拒因统计
+python3 tools/inspect_blackbox.py /var/log/slamware/blackbox/fault.slocbb
+
+# 电脑端导出逐帧 CSV 并绘制 2x2 复盘图（含触发帧激光叠图）
+python3 tools/inspect_blackbox.py fault.slocbb --map map.yaml --csv diag.csv --plot diag.png
+
+# 提交 PR 前在仓库根目录一键本地预检
+./scripts/lint_scan_localizer.sh
+```

@@ -291,7 +291,7 @@
     {
       path: "README.md",
       group: "ros",
-      lines: 300,
+      lines: 325,
       chapter: "ch09",
       role: "scan_localizer 实验驱动设计总结与 E1–E10 选型结论手册",
       symbols: [
