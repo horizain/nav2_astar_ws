@@ -1,0 +1,149 @@
+{
+  "dataset": "Google Cartographer MiR100 (landmarks_demo_uncalibrated.bag)",
+  "source_url": "https://storage.googleapis.com/cartographer-public-data/bags/mir/landmarks_demo_uncalibrated.bag",
+  "commit": "6a1bf55",
+  "duration_s": 359.94,
+  "distance_m": 124.46,
+  "total_yaw_deg": -1025.95,
+  "odom_vs_gyro_yaw_drift_deg": -48.71,
+  "scans": 4546,
+  "scan_rate_hz": 12.5,
+  "map_size_m": [
+    24.0,
+    15.3
+  ],
+  "mini_slam_loops": 44,
+  "cases": [
+    {
+      "name": "Wheel-Odom Only (composed)",
+      "acc_pct": 99.56,
+      "deg": 0,
+      "lost": 0,
+      "mahal": 19,
+      "ate_m": 0.149,
+      "mean_ms": 4.62,
+      "p95_ms": 5.16
+    },
+    {
+      "name": "4D EKF + Real Gyro (composed)",
+      "acc_pct": 99.6,
+      "deg": 0,
+      "lost": 0,
+      "mahal": 17,
+      "ate_m": 0.149,
+      "bias_rad_s": -0.0003,
+      "mean_ms": 4.13,
+      "p95_ms": 4.68
+    },
+    {
+      "name": "4D EKF + Real IMU Yaw (composed)",
+      "acc_pct": 99.69,
+      "deg": 0,
+      "lost": 0,
+      "mahal": 13,
+      "ate_m": 0.149,
+      "bias_rad_s": -0.0003,
+      "mean_ms": 4.13,
+      "p95_ms": 4.7
+    },
+    {
+      "name": "Gyro +0.08 rad/s Bias [4D EKF ON]",
+      "acc_pct": 99.58,
+      "deg": 0,
+      "lost": 0,
+      "mahal": 18,
+      "ate_m": 0.149,
+      "bias_rad_s": 0.0797,
+      "conv_s": 11.2,
+      "mean_ms": 4.45,
+      "p95_ms": 5.13
+    },
+    {
+      "name": "Gyro +0.08 rad/s Bias [Bias Est OFF]",
+      "acc_pct": 99.63,
+      "deg": 0,
+      "lost": 0,
+      "mahal": 16,
+      "ate_m": 0.149,
+      "bias_rad_s": 0.0,
+      "mean_ms": 4.73,
+      "p95_ms": 5.16
+    },
+    {
+      "name": "Gyro +0.25 rad/s Bias [4D EKF ON]",
+      "acc_pct": 99.65,
+      "deg": 0,
+      "lost": 0,
+      "mahal": 15,
+      "ate_m": 0.149,
+      "bias_rad_s": 0.2492,
+      "conv_s": 17.7,
+      "mean_ms": 4.74,
+      "p95_ms": 5.15
+    },
+    {
+      "name": "Gyro +0.25 rad/s Bias [Bias Est OFF]",
+      "acc_pct": 99.34,
+      "deg": 0,
+      "lost": 0,
+      "mahal": 29,
+      "ate_m": 0.149,
+      "bias_rad_s": 0.0,
+      "mean_ms": 4.8,
+      "p95_ms": 5.28
+    },
+    {
+      "name": "Wheel Slip 50% [Odom Only]",
+      "acc_pct": 96.08,
+      "deg": 0,
+      "lost": 0,
+      "mahal": 177,
+      "ate_m": 0.149,
+      "mean_ms": 5.09,
+      "p95_ms": 5.28
+    },
+    {
+      "name": "Wheel Slip 50% [4D EKF + Real Gyro]",
+      "acc_pct": 99.63,
+      "deg": 0,
+      "lost": 0,
+      "mahal": 16,
+      "ate_m": 0.149,
+      "bias_rad_s": -0.0002,
+      "mean_ms": 4.75,
+      "p95_ms": 5.18
+    },
+    {
+      "name": "Odomless + Real Gyro (4D EKF)",
+      "acc_pct": 99.98,
+      "deg": 0,
+      "lost": 0,
+      "mahal": 0,
+      "ate_m": 0.149,
+      "bias_rad_s": -0.0001,
+      "mean_ms": 7.4,
+      "p95_ms": 8.02
+    },
+    {
+      "name": "Wheel-Odom Only (field_gn)",
+      "acc_pct": 99.74,
+      "deg": 0,
+      "lost": 0,
+      "mahal": 12,
+      "ate_m": 0.15,
+      "mean_ms": 0.54,
+      "p95_ms": 0.79
+    },
+    {
+      "name": "4D EKF + Real Gyro (field_gn)",
+      "acc_pct": 99.76,
+      "deg": 0,
+      "lost": 0,
+      "mahal": 11,
+      "ate_m": 0.15,
+      "bias_rad_s": -0.0003,
+      "mean_ms": 0.55,
+      "p95_ms": 0.8
+    }
+  ]
+}
