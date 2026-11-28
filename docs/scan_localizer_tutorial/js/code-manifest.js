@@ -571,7 +571,7 @@
     {
       path: "test/test_inspect_blackbox.py",
       group: "tests",
-      lines: 101,
+      lines: 103,
       chapter: "ch09",
       role: "离线黑匣子诊断脚本单元测试（往返解析、损坏文件防护与 CSV 导出校验）",
       symbols: [

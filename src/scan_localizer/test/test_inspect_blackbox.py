@@ -68,7 +68,9 @@ class InspectBlackboxTest(unittest.TestCase):
             self.assertTrue(bundle.odoms[0].has_imu)
             self.assertEqual(len(bundle.scans[0].points), 2)
             self.assertEqual(ib.find_trigger_frame_index(bundle), 1)
-            self.assertEqual(ib.decode_gate_flags(bundle.scans[2].reject_flags), 'kInlier|kWallPhys')
+            self.assertEqual(
+                ib.decode_gate_flags(bundle.scans[2].reject_flags), 'kInlier|kWallPhys'
+            )
 
             summary = ib.format_summary(bundle)
             self.assertIn('REJECT_STREAK', summary)
