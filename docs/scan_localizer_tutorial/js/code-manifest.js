@@ -156,7 +156,7 @@
     {
       path: "include/scan_localizer/localizer_core.hpp",
       group: "core",
-      lines: 250,
+      lines: 252,
       chapter: "ch07",
       role: "ROS 无关核心状态机：4 状态各向异性 EKF [x,y,θ,b_g]^T、门控与多假设队列",
       symbols: [
@@ -167,7 +167,7 @@
     {
       path: "src/localizer_core.cpp",
       group: "core",
-      lines: 716,
+      lines: 721,
       chapter: "ch07",
       role: "4D SE(2)+Bias EKF、Joseph 协方差、四道门控、静止锁死松弛与跳变保护实现",
       symbols: [
@@ -190,7 +190,7 @@
     {
       path: "src/hypothesis_tracker.cpp",
       group: "core",
-      lines: 845,
+      lines: 888,
       desc: "LocalizerCore 多假设序贯贝叶斯队列、异常监测与全局重定位恢复（从 localizer_core.cpp 拆分）",
       symbols: [
         { name: "LocalizerCore::try_promote_hypotheses", range: "100-420", desc: "运动门控 SPRT 多假设晋升与连续性保护" },
@@ -417,7 +417,7 @@
     {
       path: "test/test_localizer_core.cpp",
       group: "sim_test",
-      lines: 1428,
+      lines: 1575,
       chapter: "ch07",
       role: "4D EKF 零偏收敛、门控、走廊滑移、静止松弛与对称走廊防误跳单测 (14 cases)",
       symbols: [

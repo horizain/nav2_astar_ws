@@ -61,6 +61,7 @@ void LocalizerCore::add_hypotheses(const std::vector<Pose2> & hyps)
     }
     Hypothesis h;
     h.pose = clean_p;
+    h.seed_pose = clean_p;
     if (hypotheses_.size() < cfg_.max_hypotheses) {
       hypotheses_.push_back(h);
     } else {
@@ -75,6 +76,26 @@ void LocalizerCore::add_hypotheses(const std::vector<Pose2> & hyps)
       }
       if (evict_idx >= 0) {
         hypotheses_[static_cast<std::size_t>(evict_idx)] = h;
+      }
+    }
+  }
+  if (hypotheses_.size() > 1) {
+    bool has_distinct_pair = false;
+    for (std::size_t i = 0; i < hypotheses_.size() && !has_distinct_pair; ++i) {
+      for (std::size_t j = i + 1; j < hypotheses_.size(); ++j) {
+        if (std::hypot(
+            hypotheses_[i].pose.x - hypotheses_[j].pose.x,
+            hypotheses_[i].pose.y - hypotheses_[j].pose.y) >= 0.8 ||
+          std::abs(wrap_angle(hypotheses_[i].pose.theta - hypotheses_[j].pose.theta)) >= 0.35)
+        {
+          has_distinct_pair = true;
+          break;
+        }
+      }
+    }
+    if (has_distinct_pair) {
+      for (auto & h : hypotheses_) {
+        h.seeded_ambiguous = true;
       }
     }
   }
@@ -371,6 +392,26 @@ bool LocalizerCore::try_promote_hypotheses(
       if (posterior < req_post) {
         prune_dead_hypotheses();
         return false;
+      }
+      // 多峰对称环境下的远距离自动跳变保护：若候选源自多峰歧义池且远离上一锚点，
+      // 必须具备极高几何置信度（score>=0.85 且 inlier>=0.75）或经历足够累积运动消歧
+      // （位移>=0.50m 或旋转>=0.35rad），防止对称圆弧走廊中短距离内误锁镜像假峰。
+      const auto & best_h = hypotheses_[static_cast<std::size_t>(best_idx)];
+      if (!manual_global_ && first_fix_ && is_far_from_anchor(best_mr.pose) &&
+        best_h.seeded_ambiguous)
+      {
+        const bool high_geom_lock =
+          best_mr.score >= 0.85 && best_mr.inlier_ratio >= 0.75;
+        const double net_disp = std::hypot(
+          best_mr.pose.x - best_h.seed_pose.x,
+          best_mr.pose.y - best_h.seed_pose.y);
+        const double net_rot = std::abs(
+          wrap_angle(best_mr.pose.theta - best_h.seed_pose.theta));
+        const bool enough_motion = net_disp >= 0.50 || net_rot >= 0.35;
+        if (!high_geom_lock && !enough_motion) {
+          prune_dead_hypotheses();
+          return false;
+        }
       }
     } else if (hypotheses_.size() > 1) {
       double competing_score = -1.0;
@@ -704,12 +745,14 @@ bool LocalizerCore::handle_recovery_scan(const Scan & active_scan, CoreOutput & 
             }
             Hypothesis h;
             h.pose = d.pose;
+            h.seed_pose = d.pose;
             h.log_weight = 6.0 * std::log(std::max(d.eff_score, 0.05) / p_bg);
             h.confirm_count = (d.eff_score >= cfg_.hyp_min_score &&
               d.inlier >= cfg_.hyp_min_inlier) ? 1 : 0;
             h.last_score = d.eff_score;
             h.ema_score = d.eff_score;
             h.eval_count = 1;
+            h.seeded_ambiguous = true;
             hypotheses_.push_back(h);
           }
           if (has_odom_ && !first_fix_) {
