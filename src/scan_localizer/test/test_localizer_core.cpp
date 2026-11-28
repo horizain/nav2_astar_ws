@@ -1621,3 +1621,44 @@ TEST(LocalizerCoreTest, ExtremeBoundaryAllNanEmptyScanLongDropoutAndHighFreqHypo
     EXPECT_LE(core.hypothesis_count(), cfg.max_hypotheses);
   }
 }
+
+TEST(LocalizerCoreTest, ClampedUpdateScalesCovarianceAndTinyAngStepGuardsOverflow)
+{
+  const auto & wf = shared_warehouse();
+  std::mt19937 rng(77);
+  sloc::sim::ScanSimConfig scfg;
+  scfg.beams = 180;
+  scfg.noise_std = 0.01;
+  const sloc::Pose2 gt(6.0, 5.0, 0.2);
+  const auto scan = sloc::sim::make_scan(wf.grid, gt, scfg, rng);
+
+  // Tiny ang_step that would overflow int16_t Node::aidx must return invalid safely
+  const auto tiny_res = sloc::global_correlative(*wf.field, scan, 3, 1e-5, 4, 50.0);
+  EXPECT_FALSE(tiny_res.valid);
+
+  // Clamped translational update must not shrink covariance as aggressively as unclamped
+  sloc::CoreConfig cfg_unclamped;
+  cfg_unclamped.allow_odomless = true;
+  cfg_unclamped.max_update_trans = 0.0;
+  sloc::CoreConfig cfg_clamped = cfg_unclamped;
+  cfg_clamped.max_update_trans = 0.02;
+
+  sloc::LocalizerCore core_u(cfg_unclamped);
+  sloc::LocalizerCore core_c(cfg_clamped);
+  auto m = sloc::make_matcher("composed", &wf.grid, cfg_unclamped.match_opt.ndt_voxel);
+  core_u.set_map(wf.field);
+  core_u.set_matcher(m);
+  core_c.set_map(wf.field);
+  core_c.set_matcher(m);
+
+  const sloc::Pose2 init_off(gt.x + 0.12, gt.y, gt.theta);
+  const sloc::Cov3 init_cov = sloc::Cov3::Identity() * 0.09;
+  core_u.set_initial_pose(init_off, init_cov);
+  core_c.set_initial_pose(init_off, init_cov);
+
+  const auto out_u = core_u.on_scan(scan);
+  const auto out_c = core_c.on_scan(scan);
+  ASSERT_TRUE(out_u.accepted);
+  ASSERT_TRUE(out_c.accepted);
+  EXPECT_GT(out_c.covariance(0, 0), out_u.covariance(0, 0));
+}

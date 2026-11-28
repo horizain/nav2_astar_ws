@@ -75,6 +75,9 @@ public:
   // 动态更新参数（下一次搜索生效）
   void update_config(const GlobalWorkerConfig & cfg);
 
+  // 递增代际号并丢弃待执行及已完成但尚未消费的结果（切图/重设位姿/重入 GLOBAL 时防陈旧污染）
+  void invalidate();
+
   bool is_busy() const {return busy_.load(std::memory_order_acquire);}
   std::uint64_t dropped_count() const {return dropped_.load(std::memory_order_acquire);}
   std::uint64_t completed_count() const {return completed_.load(std::memory_order_acquire);}
@@ -83,6 +86,7 @@ private:
   struct Job
   {
     std::uint64_t request_id{0};
+    std::uint64_t epoch{0};
     double stamp_s{0.0};
     std::shared_ptr<const MapField> field;
     Scan scan;
@@ -98,10 +102,12 @@ private:
   bool stop_{false};
   bool isolation_dirty_{false};
   bool has_pending_{false};
+  bool running_{false};
   Job pending_job_{};
   bool has_result_{false};
   GlobalWorkerResult latest_result_{};
   std::uint64_t next_id_{1};
+  std::uint64_t epoch_{0};
 
   std::atomic<bool> busy_{false};
   std::atomic<std::uint64_t> dropped_{0};

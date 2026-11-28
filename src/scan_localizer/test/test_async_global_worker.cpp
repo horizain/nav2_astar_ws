@@ -154,4 +154,40 @@ TEST(AsyncGlobalWorkerTest, UpdateConfigRefreshesIsolationAndBudget)
   EXPECT_LT(std::hypot(out.result.pose.x - gt.x, out.result.pose.y - gt.y), 0.30);
 }
 
+TEST(AsyncGlobalWorkerTest, InvalidateDiscardsStaleResultsAndTracksBusyState)
+{
+  const auto grid = sloc::sim::make_warehouse(0.05);
+  auto field = std::make_shared<sloc::MapField>();
+  ASSERT_TRUE(field->build(grid, 0.20));
+
+  std::mt19937 rng(31);
+  sloc::sim::ScanSimConfig scfg;
+  scfg.beams = 360;
+  scfg.noise_std = 0.01;
+  const sloc::Pose2 gt(6.0, 5.0, 0.7);
+  const auto scan = sloc::sim::make_scan(grid, gt, scfg, rng);
+
+  sloc::GlobalWorkerConfig cfg;
+  cfg.n_hypotheses = 4;
+  cfg.max_time_ms = 250.0;
+  sloc::AsyncGlobalWorker worker(cfg);
+
+  const auto id1 = worker.submit(10.0, field, scan);
+  EXPECT_TRUE(worker.is_busy());
+  sloc::GlobalWorkerResult out;
+  ASSERT_TRUE(worker.wait_result(out, 5000));
+  EXPECT_EQ(out.request_id, id1);
+
+  // Submit and invalidate immediately: stale result must not be delivered
+  worker.submit(11.0, field, scan);
+  worker.invalidate();
+  EXPECT_FALSE(worker.wait_result(out, 150));
+
+  // New submission after invalidate must succeed cleanly
+  const auto id3 = worker.submit(12.0, field, scan);
+  ASSERT_TRUE(worker.wait_result(out, 5000));
+  EXPECT_EQ(out.request_id, id3);
+  EXPECT_TRUE(out.result.valid);
+}
+
 }  // namespace

@@ -329,4 +329,36 @@ TEST(BlackboxRecorderTest, DestructorFlushesInFlightCaptureAndSanitizesJsonNan)
   EXPECT_EQ(jtxt.find("inf"), std::string::npos);
 }
 
+TEST(BlackboxRecorderTest, TimeRollbackResetsInFlightCaptureAndCooldown)
+{
+  ScopedTempDir tmp("rollback");
+  sloc::BlackboxConfig cfg;
+  cfg.output_dir = tmp.path.string();
+  cfg.pre_seconds = 0.5;
+  cfg.post_seconds = 2.0;
+  cfg.cooldown_s = 30.0;
+
+  sloc::BlackboxRecorder rec(cfg);
+  const sloc::Scan scan = make_ring_scan(36, 3.0);
+  sloc::CoreOutput ok_out;
+  ok_out.state = sloc::LocState::TRACKING;
+  ok_out.accepted = true;
+  ok_out.score = 0.90;
+
+  // Start a capture at t=100.0 (post window ends at 102.0)
+  rec.record_scan(100.0, scan, ok_out);
+  rec.trigger(100.0, sloc::BlackboxTrigger::kExternalRequest);
+  EXPECT_TRUE(rec.is_capturing_post());
+
+  // Clock rolls back to t=5.0 (e.g. rosbag loop): must unstick capture & cooldown
+  rec.record_scan(5.0, scan, ok_out);
+  EXPECT_FALSE(rec.is_capturing_post());
+
+  rec.trigger(5.1, sloc::BlackboxTrigger::kExternalRequest);
+  EXPECT_TRUE(rec.is_capturing_post());
+  rec.record_scan(7.2, scan, ok_out);
+  rec.flush_and_wait();
+  EXPECT_EQ(rec.dump_count(), 1u);
+}
+
 }  // namespace

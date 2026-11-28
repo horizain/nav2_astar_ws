@@ -191,7 +191,7 @@ public:
   {
     delta = Pose2{};
     if (buf_.empty() || !std::isfinite(from_stamp_s) || !std::isfinite(to_stamp_s) ||
-      to_stamp_s <= from_stamp_s)
+      to_stamp_s <= from_stamp_s || from_stamp_s < buf_.front().stamp_s - 0.05)
     {
       return false;
     }
