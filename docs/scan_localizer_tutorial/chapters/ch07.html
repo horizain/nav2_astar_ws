@@ -83,7 +83,7 @@
         <table>
           <thead><tr><th>入口状态</th><th>本帧走向</th><th>关键行为</th><th>真实源码</th></tr></thead>
           <tbody>
-            <tr><td><code>TRACKING</code></td><td>正常 EKF 路径</td><td>四门全过则 Joseph 更新；拒绝则纯预测并累计拒收。</td><td><code>L528-757</code></td></tr>
+            <tr><td><code>TRACKING</code></td><td>正常 EKF 路径</td><td>四门全过则 Joseph 更新；拒绝则纯预测并累计拒收。</td><td><code>L265-710</code></td></tr>
             <tr><td><code>DEGRADED</code></td><td>仍走正常 EKF 路径</td><td>匹配恢复即可回到 TRACKING；持续拒绝可升级为 LOST。</td><td><code>L528-729</code></td></tr>
             <tr><td><code>UNINIT / LOST / GLOBAL</code></td><td>恢复旁路</td><td>传播并验证假设，或调用 <code>global_fn_</code>；远距离跳变受安全门保护。</td><td><code>L431-526</code></td></tr>
           </tbody>
@@ -311,11 +311,11 @@ bool ekf_tracking_minimal(
         <p>门控拒绝意味着本帧测量没有被信任，此时若仍执行 <code>K4 × innov</code>，就等于把同一个坏修正塞回状态，逻辑自相矛盾。因此 <code>L707-708</code> 只提交 <code>last_pose_ = pred</code> 与 <code>P4_ = P4_pred</code>，不写测量更新。静止解锁时的 1.5 倍协方差松弛是主动增大不确定性，不是融合测量；状态仍保持预测值，<code>out.accepted</code> 仍为 false。</p>
       </div>
 
-      <h2 id="sec-stepper"><span class="sec-no">7.6</span>源码分段步进：跟着真实 trace 读 L528-757</h2>
+      <h2 id="sec-stepper"><span class="sec-no">7.6</span>源码分段步进：跟着真实 trace 读 L265-710</h2>
       <p>点击“下一步”逐段阅读生产实现。每推进上方动画一帧，面板读取共享模拟器广播的 <code>ch07:step</code>；正常路径展示 <code>out.trace</code>，恢复分支或旧版模拟器没有 trace 时显示明确提示。矩阵同时兼容嵌套数组与按行展开的扁平数组。</p>
       <div class="src-bar">
         <button type="button" class="src-jump" data-file="src/localizer_core.cpp" data-lines="398-526"><span class="tag">入口与恢复</span>localizer_core.cpp : L398-526</button>
-        <button type="button" class="src-jump" data-file="src/localizer_core.cpp" data-lines="528-757"><span class="tag">正常跟踪</span>localizer_core.cpp : L528-757 (预测 / 四门 / Joseph / 拒绝)</button>
+        <button type="button" class="src-jump" data-file="src/localizer_core.cpp" data-lines="265-710"><span class="tag">正常跟踪</span>localizer_core.cpp : L265-710 (预测 / 四门 / Joseph / 拒绝)</button>
         <button type="button" class="src-jump" data-file="src/localizer_core.cpp" data-lines="277-304"><span class="tag">运动增量</span>localizer_core.cpp : L277-304 (compute_motion_delta)</button>
       </div>
       <div class="hands-on-stepper">
