@@ -56,7 +56,7 @@
     {
       path: "include/scan_localizer/map_field.hpp",
       group: "geometry",
-      lines: 228,
+      lines: 259,
       chapter: "ch02",
       role: "OccupancyGrid 坐标换算与 MapField（EDT→SDF→似然场→swmax 金字塔）接口",
       symbols: [
@@ -67,7 +67,7 @@
     {
       path: "src/map_field.cpp",
       group: "geometry",
-      lines: 764,
+      lines: 796,
       chapter: "ch02",
       role: "双向 Meijster/FH EDT、SDF 双线性梯度、似然场与 2^k 滑窗最大值栈构建",
       symbols: [
@@ -112,7 +112,7 @@
     {
       path: "src/global_search.cpp",
       group: "core",
-      lines: 594,
+      lines: 642,
       desc: "金字塔 Branch-and-Bound 全局相关性搜索、uint8 LUT 早退评估与自适应角步长（从 matchers.cpp 拆分）",
       symbols: [
         { name: "global_correlative", range: "55-540", desc: "多分辨率金字塔 B&B 全局多峰搜索" },
@@ -387,7 +387,7 @@
     {
       path: "test/test_map_field.cpp",
       group: "sim_test",
-      lines: 348,
+      lines: 387,
       chapter: "ch02",
       role: "edt1d 负截断边界、未知区 SDF、梯度精度与 swmax 金字塔单测 (10 cases)",
       symbols: [

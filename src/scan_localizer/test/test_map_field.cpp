@@ -346,3 +346,42 @@ TEST(MapFieldTest, MapPriorDetectsCorridorDegeneracyAndCornerLocalizability)
 }
 
 }  // namespace
+
+TEST(MapFieldTest, FreeBlockPrefixSumAndBoundsQuery)
+{
+  sloc::OccupancyGrid g = make_grid(20, 16, 0.1, -1);
+  // Carve an L-shaped free region: [2,6)x[3,7) and [6,12)x[3,5)
+  for (int y = 3; y < 7; ++y) {
+    for (int x = 2; x < 6; ++x) {
+      g.cells[static_cast<std::size_t>(y) * g.width + x] = 0;
+    }
+  }
+  for (int y = 3; y < 5; ++y) {
+    for (int x = 6; x < 12; ++x) {
+      g.cells[static_cast<std::size_t>(y) * g.width + x] = 0;
+    }
+  }
+  g.cells[3 * g.width + 2] = 100;  // one obstacle cell inside
+
+  sloc::MapField field;
+  ASSERT_TRUE(field.build(g, 0.20));
+
+  int xmin = 0, xmax = 0, ymin = 0, ymax = 0;
+  field.freeBounds(xmin, xmax, ymin, ymax);
+  EXPECT_EQ(xmin, 2);
+  EXPECT_EQ(xmax, 11);
+  EXPECT_EQ(ymin, 3);
+  EXPECT_EQ(ymax, 6);
+  EXPECT_EQ(field.freeCells(), 27u);  // 4*4 + 6*2 - 1 obstacle
+
+  // Pure unknown/empty block in upper-right L-notch must return false
+  EXPECT_FALSE(field.hasFreeInBlock(6, 5, 4));
+  EXPECT_FALSE(field.hasFreeInBlock(12, 0, 8));
+  EXPECT_FALSE(field.hasFreeInBlock(0, 0, 2));
+  // Blocks overlapping free cells must return true
+  EXPECT_TRUE(field.hasFreeInBlock(2, 3, 2));
+  EXPECT_TRUE(field.hasFreeInBlock(10, 4, 4));
+  // Out-of-range block clipped cleanly
+  EXPECT_FALSE(field.hasFreeInBlock(-4, -4, 4));
+  EXPECT_TRUE(field.hasFreeInBlock(-2, 2, 5));
+}
