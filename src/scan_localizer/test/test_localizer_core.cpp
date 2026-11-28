@@ -1573,3 +1573,51 @@ public:
   }
   EXPECT_TRUE(promoted);
 }
+
+TEST(LocalizerCoreTest, ExtremeBoundaryAllNanEmptyScanLongDropoutAndHighFreqHypotheses)
+{
+  const auto & wf = shared_warehouse();
+  sloc::CoreConfig cfg;
+  cfg.use_imu_yaw = true;
+  cfg.allow_odomless = true;
+  cfg.max_hypotheses = 6;
+  cfg.anomaly_window = 0;
+
+  sloc::LocalizerCore core(cfg);
+  core.set_map(wf.field);
+  core.set_matcher(sloc::make_matcher("composed", &wf.grid, cfg.match_opt.ndt_voxel));
+  core.set_initial_pose(sloc::Pose2(5.0, 5.0, 0.0));
+
+  // 1) Empty scan, single-point scan, and all-NaN/Inf scan must never produce NaN pose/cov
+  sloc::Scan empty_scan;
+  const auto o_empty = core.on_scan(empty_scan);
+  EXPECT_FALSE(o_empty.accepted);
+  EXPECT_TRUE(std::isfinite(o_empty.pose.x) && std::isfinite(o_empty.pose.y));
+  EXPECT_TRUE(o_empty.covariance.allFinite());
+
+  sloc::Scan nan_scan;
+  nan_scan.points.emplace_back(std::numeric_limits<double>::quiet_NaN(), 1.0);
+  nan_scan.points.emplace_back(1.0, std::numeric_limits<double>::infinity());
+  nan_scan.points.emplace_back(-std::numeric_limits<double>::infinity(), 0.0);
+  const auto o_nan = core.on_scan(nan_scan);
+  EXPECT_FALSE(o_nan.accepted);
+  EXPECT_TRUE(std::isfinite(o_nan.pose.x) && std::isfinite(o_nan.pose.theta));
+
+  // 2) Negative/zero/huge dt (>5s dropout) and NaN gyro inputs must be handled safely
+  core.on_imu_gyro(0.1, -0.05);
+  core.on_imu_gyro(0.1, 0.0);
+  core.on_imu_gyro(std::numeric_limits<double>::quiet_NaN(), 0.02);
+  core.on_imu_gyro(0.05, 6.5);  // 6.5s dropout gap
+  EXPECT_TRUE(std::isfinite(core.gyro_bias()));
+  EXPECT_TRUE(std::isfinite(core.gyro_bias_var()));
+
+  // 3) High-frequency hypothesis injection (200 batches) must stay bounded by max_hypotheses
+  ASSERT_TRUE(core.request_global(true));
+  for (int k = 0; k < 200; ++k) {
+    const std::vector<sloc::Pose2> batch = {
+      sloc::Pose2(1.0 + 0.5 * (k % 15), 2.0 + 0.5 * (k % 9), 0.2 * k),
+      sloc::Pose2(std::numeric_limits<double>::quiet_NaN(), 0.0, 0.0)};
+    core.add_hypotheses(batch);
+    EXPECT_LE(core.hypothesis_count(), cfg.max_hypotheses);
+  }
+}
