@@ -1,0 +1,64 @@
+{
+  "commit": "b9aaa15",
+  "date": "2026-11-28",
+  "platform": "x86_64 Intel Xeon Platinum 8481C (2 vCPU), GCC 12.2.0, Eigen 3.4.0, Ceres 2.1.0, -O3 -DNDEBUG",
+  "dataset_repo": "https://github.com/RuanJY/GP-SLAM-2D_dataset",
+  "datasets": {
+    "yongqian": {
+      "bag": "Yongqian_data_2019-05-29-13-12-39.bag",
+      "duration_s": 214.21,
+      "scans": 6414,
+      "odoms": 8466,
+      "odom_path_m": 55.49,
+      "raw_odom_loop_err_m": 8.669,
+      "raw_odom_loop_err_deg": 134.95,
+      "odom_dropout_s": 1.697,
+      "odom_jump_m": 0.33
+    },
+    "chouyeiching": {
+      "bag": "ChouYeiChing_data_2019-05-29-13-17-41.bag",
+      "duration_s": 301.56,
+      "scans": 9098,
+      "odoms": 12563,
+      "odom_path_m": 91.92,
+      "raw_odom_loop_err_m": 17.482,
+      "raw_odom_loop_err_deg": 89.73,
+      "odom_dropout_s": 0.404,
+      "odom_jump_m": 0.05
+    }
+  },
+  "mini_slam": {
+    "yongqian": {
+      "default": {"keyframes": 107, "loops": 2, "spa_solves": 2, "loop_err_m": 7.155, "loop_err_deg": 105.24, "total_s": 2.694, "hz": 2381.2, "mean_ms": 0.42, "p99_ms": 9.081, "max_ms": 349.49},
+      "noloop": {"keyframes": 107, "loops": 0, "spa_solves": 0, "loop_err_m": 7.181, "loop_err_deg": 105.83, "total_s": 1.034, "hz": 6201.3, "mean_ms": 0.161, "p99_ms": 9.144, "max_ms": 13.584},
+      "wide_loop": {"keyframes": 107, "loops": 0, "spa_solves": 0, "loop_err_m": 7.181, "loop_err_deg": 105.83, "total_s": 32.273, "hz": 198.7, "mean_ms": 5.032, "p99_ms": 9.055, "max_ms": 1412.237}
+    },
+    "chouyeiching": {
+      "default": {"keyframes": 177, "loops": 0, "spa_solves": 0, "loop_err_m": 6.542, "loop_err_deg": 29.97, "total_s": 1.369, "hz": 6644.6, "mean_ms": 0.15, "p99_ms": 8.247, "max_ms": 15.152},
+      "noloop": {"keyframes": 177, "loops": 0, "spa_solves": 0, "loop_err_m": 6.542, "loop_err_deg": 29.97, "total_s": 1.375, "hz": 6615.8, "mean_ms": 0.151, "p99_ms": 8.239, "max_ms": 14.392},
+      "wide_loop": {"keyframes": 177, "loops": 0, "spa_solves": 0, "loop_err_m": 6.542, "loop_err_deg": 29.97, "total_s": 10.298, "hz": 883.4, "mean_ms": 1.132, "p99_ms": 8.506, "max_ms": 1346.818}
+    }
+  },
+  "scan_localizer_tracking_10hz_adapted": {
+    "chouyeiching": {
+      "map_build_ms": 112.92,
+      "composed": {"scans": 3033, "accept_pct": 95.68, "degraded": 58, "lost": 0, "ate_rmse_m": 0.102, "mean_score": 0.924, "mean_ms": 9.562, "p50_ms": 7.404, "p95_ms": 14.333, "p99_ms": 84.388, "max_hz": 104.6},
+      "correlative": {"scans": 3033, "accept_pct": 56.28, "degraded": 55, "lost": 1264, "ate_rmse_m": 1.534, "mean_score": 0.542, "mean_ms": 5.688, "p50_ms": 5.478, "p95_ms": 11.772, "p99_ms": 82.972, "max_hz": 175.8},
+      "icp_p2p": {"scans": 3033, "accept_pct": 56.15, "degraded": 55, "lost": 1264, "ate_rmse_m": 1.573, "mean_score": 0.538, "mean_ms": 0.245, "p50_ms": 0.266, "p95_ms": 0.61, "p99_ms": 0.779, "max_hz": 4078.1},
+      "field_gn": {"scans": 3033, "accept_pct": 54.37, "degraded": 90, "lost": 1272, "ate_rmse_m": 1.27, "mean_score": 0.534, "mean_ms": 0.342, "p50_ms": 0.378, "p95_ms": 0.735, "p99_ms": 0.781, "max_hz": 2920.3},
+      "ndt": {"scans": 3033, "accept_pct": 38.84, "degraded": 55, "lost": 1795, "ate_rmse_m": 4.466, "mean_score": 0.374, "mean_ms": 0.156, "p50_ms": 0.0, "p95_ms": 0.524, "p99_ms": 0.596, "max_hz": 6409.5}
+    },
+    "yongqian": {
+      "map_build_ms": 34.62,
+      "composed": {"scans": 2138, "accept_pct": 35.5, "degraded": 63, "lost": 1298, "ate_rmse_m": 3.387, "mean_score": 0.364, "mean_ms": 5.812, "p50_ms": 0.001, "p95_ms": 14.375, "p99_ms": 92.327, "max_hz": 172.1},
+      "correlative": {"scans": 2138, "accept_pct": 35.55, "degraded": 66, "lost": 1298, "ate_rmse_m": 3.447, "mean_score": 0.365, "mean_ms": 5.901, "p50_ms": 0.001, "p95_ms": 14.749, "p99_ms": 92.7, "max_hz": 169.5},
+      "icp_p2p": {"scans": 2138, "accept_pct": 34.71, "degraded": 55, "lost": 1335, "ate_rmse_m": 3.478, "mean_score": 0.349, "mean_ms": 0.175, "p50_ms": 0.001, "p95_ms": 0.657, "p99_ms": 0.82, "max_hz": 5703.6},
+      "field_gn": {"scans": 2138, "accept_pct": 33.49, "degraded": 81, "lost": 1318, "ate_rmse_m": 3.5, "mean_score": 0.35, "mean_ms": 0.22, "p50_ms": 0.001, "p95_ms": 0.768, "p99_ms": 0.793, "max_hz": 4544.0},
+      "ndt": {"scans": 2138, "accept_pct": 35.08, "degraded": 57, "lost": 1317, "ate_rmse_m": 3.458, "mean_score": 0.352, "mean_ms": 0.2, "p50_ms": 0.001, "p95_ms": 0.664, "p99_ms": 0.687, "max_hz": 5002.9}
+    }
+  },
+  "scan_localizer_global_relocalization_25q": {
+    "yongqian": {"queries": 25, "top1_ok": 17, "top1_pct": 68.0, "top8_ok": 19, "top8_pct": 76.0, "mean_pos_err_m": 0.053, "mean_ang_err_deg": 1.53, "median_ms": 36.65, "mean_ms": 53.42, "p95_ms": 119.48, "max_ms": 153.68},
+    "chouyeiching": {"queries": 25, "top1_ok": 22, "top1_pct": 88.0, "top8_ok": 24, "top8_pct": 96.0, "mean_pos_err_m": 0.044, "mean_ang_err_deg": 0.59, "median_ms": 197.5, "mean_ms": 222.36, "p95_ms": 480.04, "max_ms": 512.36}
+  }
+}
