@@ -59,6 +59,48 @@ jobs:
           python3 docs/scan_localizer_tutorial/tests/check_code_refs.py
           python3 docs/tools/check_tutorial_links.py
 
+  core-asan-ubsan:
+    name: Core Unit Tests (ASan + UBSan)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq g++ libeigen3-dev libgtest-dev
+
+      - name: Build & run all non-ROS scan_localizer tests under ASan + UBSan
+        working-directory: src/scan_localizer
+        run: |
+          set -e
+          mkdir -p /tmp/sloc_asan/obj
+          INC="-Iinclude -I/usr/include/eigen3"
+          FLAGS="-std=c++20 -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -Wall -Wextra -Wpedantic"
+          CORE_SRCS=$(python3 -c '
+          import re
+          txt = open("CMakeLists.txt", encoding="utf-8").read()
+          m = re.search(r"add_library\(scan_localizer_core\s+STATIC(.*?)\)", txt, re.S)
+          assert m, "scan_localizer_core not found in CMakeLists.txt"
+          print(" ".join(re.findall(r"src/[A-Za-z0-9_]+\.cpp", m.group(1))))
+          ')
+          for f in $CORE_SRCS src/sim_world.cpp; do
+            base=$(basename "$f" .cpp)
+            g++ $FLAGS $INC -c "$f" -o "/tmp/sloc_asan/obj/$base.o"
+          done
+          for tf in test/test_*.cpp; do
+            base=$(basename "$tf" .cpp)
+            if [ "$base" = "test_localizer_node" ]; then
+              continue
+            fi
+            echo "=== ASan/UBSan $base ==="
+            g++ $FLAGS $INC /tmp/sloc_asan/obj/*.o "$tf" \
+              -lgtest -lgtest_main -lpthread -o "/tmp/sloc_asan/$base"
+            ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1 \
+              "/tmp/sloc_asan/$base" --gtest_brief=1
+          done
+
   aarch64-cross-compile:
     name: ARM64 (RK3399 NEON) Cross-Compile
     runs-on: ubuntu-24.04

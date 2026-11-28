@@ -424,17 +424,19 @@ CoreOutput LocalizerCore::on_scan(const Scan & scan)
       std::max(2.0 * base_wlin, raw_dtrans + 0.10), base_wlin, 0.60);
     active_opt.window_ang = std::clamp(
       std::max(2.0 * base_wang, raw_drot + 0.10), base_wang, 0.60);
-  } else if (cfg_.adaptive_window && has_odom_) {
+  } else if (cfg_.adaptive_window) {
     const double base_wlin = cfg_.match_opt.window_lin;
     const double base_wang = cfg_.match_opt.window_ang;
     const double pos_std = std::sqrt(
       std::max(0.0, std::max(P4_pred(0, 0), P4_pred(1, 1))));
     const double ang_std = std::sqrt(std::max(0.0, P4_pred(2, 2)));
     if (state_ == LocState::TRACKING && reject_streak_ == 0) {
-      active_opt.window_lin = std::clamp(
-        3.5 * pos_std + 0.03, std::max(0.06, 0.55 * base_wlin), base_wlin);
-      active_opt.window_ang = std::clamp(
-        3.5 * ang_std + 0.02, std::max(0.04, 0.55 * base_wang), base_wang);
+      if (has_odom_) {
+        active_opt.window_lin = std::clamp(
+          3.5 * pos_std + 0.03, std::max(0.06, 0.55 * base_wlin), base_wlin);
+        active_opt.window_ang = std::clamp(
+          3.5 * ang_std + 0.02, std::max(0.04, 0.55 * base_wang), base_wang);
+      }
     } else {
       // 连续拒帧或 DEGRADED 时，除先验协方差外还按拒帧数渐进扩窗（最高 3x / 0.50m），
       // 避免默认低过程噪声下大转弯/滑移超出基础搜窗后 pos_std 几乎不增长导致失锁。

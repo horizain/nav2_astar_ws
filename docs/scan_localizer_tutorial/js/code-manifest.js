@@ -167,7 +167,7 @@
     {
       path: "src/localizer_core.cpp",
       group: "core",
-      lines: 721,
+      lines: 723,
       chapter: "ch07",
       role: "4D SE(2)+Bias EKF、Joseph 协方差、四道门控、静止锁死松弛与跳变保护实现",
       symbols: [
@@ -397,7 +397,7 @@
     {
       path: "test/test_matchers.cpp",
       group: "sim_test",
-      lines: 672,
+      lines: 724,
       chapter: "ch04",
       role: "五种匹配器收敛、退化走廊协方差、B&B 100%越界与失败回调单测 (8 cases)",
       symbols: [
@@ -417,7 +417,7 @@
     {
       path: "test/test_localizer_core.cpp",
       group: "sim_test",
-      lines: 1575,
+      lines: 1623,
       chapter: "ch07",
       role: "4D EKF 零偏收敛、门控、走廊滑移、静止松弛与对称走廊防误跳单测 (14 cases)",
       symbols: [

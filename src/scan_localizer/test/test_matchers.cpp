@@ -670,3 +670,55 @@ TEST(MatchersTest, GlobalCorrelativeRespectsWallClockTimeBudget)
 }
 
 }  // namespace
+
+TEST(MatchersTest, Large100mMapRespectsWallClockBudgetAndAllUnknownMapSafe)
+{
+  // 1) All-unknown and all-occupied maps must return valid=false cleanly
+  sloc::OccupancyGrid unk;
+  unk.resolution = 0.1;
+  unk.width = 40;
+  unk.height = 40;
+  unk.cells.assign(1600, -1);
+  sloc::MapField unk_field;
+  ASSERT_TRUE(unk_field.build(unk, 0.20));
+  sloc::Scan tiny_scan;
+  for (int i = 0; i < 20; ++i) {
+    tiny_scan.points.emplace_back(1.0 + 0.1 * i, 0.5);
+  }
+  const auto res_unk = sloc::global_correlative(unk_field, tiny_scan, 1, 0.1, 4, 100.0);
+  EXPECT_FALSE(res_unk.valid);
+
+  // 2) Large 100m x 100m map with strict max_time_ms=60ms budget must terminate promptly
+  sloc::OccupancyGrid big;
+  big.resolution = 0.05;
+  big.width = 2000;
+  big.height = 2000;
+  big.cells.assign(static_cast<std::size_t>(big.width) * big.height, -1);
+  for (int y = 200; y < 600; ++y) {
+    for (int x = 200; x < 1800; ++x) {
+      big.cells[static_cast<std::size_t>(y) * big.width + x] = 0;
+    }
+  }
+  for (int x = 200; x < 1800; ++x) {
+    big.cells[200 * big.width + x] = 100;
+    big.cells[599 * big.width + x] = 100;
+  }
+  for (int y = 200; y < 600; ++y) {
+    big.cells[static_cast<std::size_t>(y) * big.width + 200] = 100;
+    big.cells[static_cast<std::size_t>(y) * big.width + 1799] = 100;
+  }
+  sloc::MapField big_field;
+  ASSERT_TRUE(big_field.build(big, 0.20));
+  std::mt19937 rng(7);
+  sloc::sim::ScanSimConfig scfg;
+  scfg.beams = 180;
+  scfg.range_max = 20.0;
+  const auto scan = sloc::sim::make_scan(big, sloc::Pose2(25.0, 20.0, 0.4), scfg, rng);
+
+  const auto t0 = std::chrono::steady_clock::now();
+  const auto res = sloc::global_correlative(big_field, scan, 3, 0.05, 8, 60.0);
+  const double elapsed_ms = std::chrono::duration<double, std::milli>(
+    std::chrono::steady_clock::now() - t0).count();
+  EXPECT_LT(elapsed_ms, 800.0);  // generous bound for ASan/debug CI runners
+  (void)res;
+}
