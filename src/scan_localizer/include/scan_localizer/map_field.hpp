@@ -188,6 +188,34 @@ public:
   }
   const std::uint8_t * likeDataU8() const {return poolDataU8(0);}
 
+  // 预计算可通行空间（0 <= cell <= occupied_thresh）包围盒与 O(1) 块存在性查询
+  std::size_t freeCells() const {return free_cells_;}
+  void freeBounds(int & xmin, int & xmax, int & ymin, int & ymax) const
+  {
+    xmin = free_xmin_;
+    xmax = free_xmax_;
+    ymin = free_ymin_;
+    ymax = free_ymax_;
+  }
+  inline bool hasFreeInBlock(int bx, int by, int span) const
+  {
+    if (!valid_ || free_ps_.empty() || span <= 0) {return false;}
+    const int w = grid_->width;
+    const int h = grid_->height;
+    const int x0 = std::max(0, bx);
+    const int y0 = std::max(0, by);
+    const int x1 = std::min(w, bx + span);
+    const int y1 = std::min(h, by + span);
+    if (x0 >= x1 || y0 >= y1) {return false;}
+    const std::size_t stride = static_cast<std::size_t>(w + 1);
+    const std::int32_t cnt =
+      free_ps_[static_cast<std::size_t>(y1) * stride + static_cast<std::size_t>(x1)] -
+      free_ps_[static_cast<std::size_t>(y0) * stride + static_cast<std::size_t>(x1)] -
+      free_ps_[static_cast<std::size_t>(y1) * stride + static_cast<std::size_t>(x0)] +
+      free_ps_[static_cast<std::size_t>(y0) * stride + static_cast<std::size_t>(x0)];
+    return cnt > 0;
+  }
+
   // O(1) 查询世界坐标 (wx, wy) 处的地图可定位性、退化主轴与对称孪生区先验
   LocalMapPrior queryPrior(double wx, double wy) const;
 
@@ -206,6 +234,9 @@ private:
   struct SWGrid { int width{0}, height{0}; std::vector<float> data; };
   std::vector<SWGrid> swmax_;        // [0]=like，[k]=2^k 滑窗最大值
   std::vector<std::vector<std::uint8_t>> swmax_u8_;  // ceil(255*swmax) 紧致上界金字塔
+  std::vector<std::int32_t> free_ps_;  // (H+1)*(W+1) 可通行栅格 2D 前缀和
+  std::size_t free_cells_{0};
+  int free_xmin_{0}, free_xmax_{-1}, free_ymin_{0}, free_ymax_{-1};
 
   struct PriorCell
   {

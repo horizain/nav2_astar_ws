@@ -294,6 +294,38 @@ bool MapField::build(
     }
   }
 
+  // 构建可通行栅格（0 <= c <= occupied_thresh_）2D 前缀和，供全局搜索 O(1) 跳过空块
+  {
+    const int w = grid_->width;
+    const int h = grid_->height;
+    const std::size_t stride = static_cast<std::size_t>(w + 1);
+    free_ps_.assign(static_cast<std::size_t>(h + 1) * stride, 0);
+    free_cells_ = 0;
+    free_xmin_ = w;
+    free_xmax_ = -1;
+    free_ymin_ = h;
+    free_ymax_ = -1;
+    for (int y = 0; y < h; ++y) {
+      std::int32_t row_sum = 0;
+      const std::size_t cell_row = static_cast<std::size_t>(y) * static_cast<std::size_t>(w);
+      const std::size_t ps_prev = static_cast<std::size_t>(y) * stride;
+      const std::size_t ps_curr = static_cast<std::size_t>(y + 1) * stride;
+      for (int x = 0; x < w; ++x) {
+        const int8_t c = grid_->cells[cell_row + static_cast<std::size_t>(x)];
+        if (c >= 0 && c <= occupied_thresh_) {
+          ++free_cells_;
+          ++row_sum;
+          free_xmin_ = std::min(free_xmin_, x);
+          free_xmax_ = std::max(free_xmax_, x);
+          free_ymin_ = std::min(free_ymin_, y);
+          free_ymax_ = std::max(free_ymax_, y);
+        }
+        free_ps_[ps_curr + static_cast<std::size_t>(x + 1)] =
+          free_ps_[ps_prev + static_cast<std::size_t>(x + 1)] + row_sum;
+      }
+    }
+  }
+
   valid_ = true;
   buildMapPrior();
   return true;
