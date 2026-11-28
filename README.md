@@ -176,3 +176,25 @@ python3 docs/tools/astar_playground.py \
 
 Apache-2.0。教学实现，生产使用前请补充 footprint 碰撞检查、
 并发保护、动态参数和更完整的测试。
+
+---
+
+## `scan_localizer` 真实公开数据集基准与离线排障
+
+在 3 套公开真实 2D 激光数据集上的端到端评测报告（含可视化图表与结构化 `summary.json`）：
+
+| 数据集与场景 | 核心评测维度 | 关键实测结果 | 详细报告 |
+| :--- | :--- | :--- | :--- |
+| 浙大玉泉 GP-SLAM-2D（曹光彪 46×46m / 永谦 27×28m） | 5 种匹配器对比 + 异步全局重定位 + 3×绑架恢复 + 对称圆弧消歧 | 曹光彪默认参数 94.43% 接受率 / 0.101 m ATE、绑架 **3/3**；永谦对称镜像误锁治理后 ATE **4.729 m → 0.725 m (-84.7%)** | [GP-SLAM-2D 基准报告](docs/results/gp_slam_2d_benchmark/README.md) |
+| Google Cartographer MiR100（24×15m，360 s / 124.5 m） | 4D EKF 在线陀螺零偏估计 + 50% 旋转打滑 + 无里程计退化 | 12 组工况 **0 Degraded / 0 Lost**；`+0.25 rad/s` 零偏 17.7 s 收敛（残差 `<0.03°/s`）；50% 打滑 `kMahal` 降 **91.0%**；纯无里程计+陀螺 **99.98%** | [MiR100 4D EKF 报告](docs/results/mir100_imu_4d_ekf_benchmark/README.md) |
+| Google Cartographer 德意志博物馆双包（53×44m，相隔 22 天） | 跨 22 天环境变化 + 零轮式里程计全盲冷启动压测 | 32.3% 动态/展品变化下 **14.8 s** 全盲冷启动锁定，并验证纯 2D 定位对 3D 背包晃动的物理边界 | [德意志博物馆压测报告](docs/results/deutsches_museum_crossday_benchmark/README.md) |
+
+离线排障与推送前自检工具（均不依赖 ROS 2）：
+
+```bash
+# 离线复盘 BlackboxRecorder 录制的 .slocbb 事故黑盒（可选 --map / --csv / --plot）
+python3 src/scan_localizer/tools/inspect_blackbox.py path/to/fault.slocbb --map map.yaml --plot diag.png
+
+# 推送 PR 前一键本地预检（参数一致性 / 代码清单 / 文档链接 / flake8 / 行宽）
+./scripts/lint_scan_localizer.sh
+```
