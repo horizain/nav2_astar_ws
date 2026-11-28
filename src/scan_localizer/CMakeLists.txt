@@ -35,8 +35,11 @@ add_library(scan_localizer_core STATIC
   src/map_field.cpp
   src/map_io.cpp
   src/matchers.cpp
+  src/global_search.cpp
+  src/beam_physics.cpp
   src/particle_filter.cpp
   src/localizer_core.cpp
+  src/hypothesis_tracker.cpp
   src/blackbox_recorder.cpp
   src/async_global_worker.cpp
 )

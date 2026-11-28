@@ -95,7 +95,7 @@
     {
       path: "src/matchers.cpp",
       group: "matchers",
-      lines: 1727,
+      lines: 952,
       chapter: "ch04",
       role: "五种局部匹配器、未阻尼 Hessian 协方差、B&B 全局重定位与工厂实现",
       symbols: [
@@ -105,9 +105,29 @@
         { name: "IcpP2pMatcher::match", range: "395-499", desc: "点到点 ICP、旋转力臂雅可比与法向信息矩阵协方差" },
         { name: "NdtMatcher::build / match", range: "504-686", desc: "2D 体素高斯拟合与 3×3 邻域 D2P 优化" },
         { name: "ComposedMatcher::match", range: "691-705", desc: "Correlative 粗捕获 → FieldGn 精修与退化保护" },
-        { name: "global_correlative", range: "716-1014", desc: "基于 swmax_ 的优先队列 B&B + Top-K NMS + 末端精修" },
-        { name: "make_matcher", range: "1017-1039", desc: "按配置名创建匹配器实例" },
+        { name: "global_correlative", range: "880-925", desc: "基于 swmax_ 的优先队列 B&B + Top-K NMS + 末端精修" },
+        { name: "make_matcher", range: "926-950", desc: "按配置名创建匹配器实例" },
       ],
+    },
+    {
+      path: "src/global_search.cpp",
+      group: "core",
+      lines: 594,
+      desc: "金字塔 Branch-and-Bound 全局相关性搜索、uint8 LUT 早退评估与自适应角步长（从 matchers.cpp 拆分）",
+      symbols: [
+        { name: "global_correlative", range: "55-540", desc: "多分辨率金字塔 B&B 全局多峰搜索" },
+        { name: "compute_adaptive_ang_step", range: "542-570", desc: "基于扫描 p90 射程与 σ 的自适应角步长推导" }
+      ]
+    },
+    {
+      path: "src/beam_physics.cpp",
+      group: "core",
+      lines: 267,
+      desc: "四态物理波束评估与可见性一致性检验（从 matchers.cpp 拆分）",
+      symbols: [
+        { name: "evaluate_beam_physics", range: "40-250", desc: "SDF 球面跳跃追踪四态物理波束统计" },
+        { name: "beam_visibility_consistency", range: "252-265", desc: "穿墙与未知前沿可见性一致性因子" }
+      ]
     },
     {
       path: "include/scan_localizer/particle_filter.hpp",
@@ -147,7 +167,7 @@
     {
       path: "src/localizer_core.cpp",
       group: "core",
-      lines: 1593,
+      lines: 716,
       chapter: "ch07",
       role: "4D SE(2)+Bias EKF、Joseph 协方差、四道门控、静止锁死松弛与跳变保护实现",
       symbols: [
@@ -155,8 +175,27 @@
         { name: "set_initial_pose / request_global", range: "105-160", desc: "人工初始化重置与显式全局重定位标志" },
         { name: "on_imu_yaw / on_imu_gyro / map_to_odom", range: "216-275", desc: "IMU 首帧双锚定与扫描时刻锚定 TF" },
         { name: "compute_motion_delta / try_promote_hypotheses", range: "277-374", desc: "减零偏后的 IMU Δyaw 与多假设晋升验证" },
-        { name: "LocalizerCore::on_scan", range: "398-758", desc: "完整主循环：4D F4/Q4 预测、4 门控、Joseph 更新与异常恢复" },
+        { name: "LocalizerCore::on_scan", range: "265-710", desc: "完整主循环：4D F4/Q4 预测、4 门控、Joseph 更新与异常恢复" },
       ],
+    },
+    {
+      path: "src/localizer_core_internal.hpp",
+      group: "core",
+      lines: 113,
+      desc: "LocalizerCore 与 hypothesis_tracker 共享的内部观测评估与协方差校验工具",
+      symbols: [
+        { name: "detail::evaluate_observation", range: "80-108", desc: "无状态正交物理观测评估" }
+      ]
+    },
+    {
+      path: "src/hypothesis_tracker.cpp",
+      group: "core",
+      lines: 846,
+      desc: "LocalizerCore 多假设序贯贝叶斯队列、异常监测与全局重定位恢复（从 localizer_core.cpp 拆分）",
+      symbols: [
+        { name: "LocalizerCore::try_promote_hypotheses", range: "100-420", desc: "运动门控 SPRT 多假设晋升与连续性保护" },
+        { name: "LocalizerCore::handle_recovery_scan", range: "445-835", desc: "UNINIT/LOST/GLOBAL 恢复与多峰播种" }
+      ]
     },
 
     // Group 4: ROS 2 Lifecycle Node & Config
@@ -231,7 +270,7 @@
     {
       path: "CMakeLists.txt",
       group: "ros",
-      lines: 230,
+      lines: 233,
       chapter: "ch08",
       role: "core / sim_lib / node_component / executable / 9 组 gtest 与严格编译告警配置",
       symbols: [

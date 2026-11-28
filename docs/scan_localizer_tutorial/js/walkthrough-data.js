@@ -117,7 +117,7 @@
     GlobalAndPF: {
       name: "global_correlative & ParticleFilter",
       file: "src/matchers.cpp",
-      lines: "716-1014",
+      lines: "880-925",
       chapter: "ch06",
       layer: "L2 · 全局/对照组",
       ownership: "自由函数（传入 MapField swmax_）与成员缓冲复用类",
@@ -557,7 +557,7 @@ return fine;`,
     global_bnb: {
       title: "global_correlative (金字塔分支定界冷启动)",
       file: "src/matchers.cpp",
-      lines: "716-1014",
+      lines: "880-925",
       chapter: "ch06",
       contract: "输入：MapField (含 swmax_), scan, beams_subsample, ang_step, n_hypotheses。输出：主假设与多峰 alternates。",
       thoughtSteps: [
@@ -584,7 +584,7 @@ return fine;`,
     core_on_scan: {
       title: "LocalizerCore::on_scan (4D EKF + 状态机大脑)",
       file: "src/localizer_core.cpp",
-      lines: "398-758",
+      lines: "265-710",
       chapter: "ch07",
       contract: "输入：车体系点云 Scan（外层已转外参）。输出：CoreOutput(位姿/3×3协方差/状态/是否采纳)。",
       thoughtSteps: [
