@@ -51,7 +51,7 @@
       <button type="button" class="src-jump" data-file="include/scan_localizer/se2.hpp" data-lines="80-93"><span class="tag">C++20</span>se2.hpp : L80-93 (Concept)</button>
       <button type="button" class="src-jump" data-file="src/matchers.cpp" data-lines="70-98"><span class="tag">Eigen</span>matchers.cpp : L70-98 (cov_from_hessian)</button>
       <button type="button" class="src-jump" data-file="src/localizer_node.cpp" data-lines="909-963"><span class="tag">锁</span>localizer_node.cpp : L909-963 (applyMap)</button>
-      <button type="button" class="src-jump" data-file="src/localizer_node.cpp" data-lines="1308-1335"><span class="tag">快照</span>localizer_node.cpp : L1308-1335 (onScan)</button>
+      <button type="button" class="src-jump" data-file="src/localizer_node.cpp" data-lines="865-895"><span class="tag">快照</span>localizer_node.cpp : L865-895 (onScan)</button>
       <button type="button" class="src-jump" data-file="src/localizer_node.cpp" data-lines="701-888"><span class="tag">Lifecycle</span>localizer_node.cpp : L701-888 (回调)</button>
     </div>
 
@@ -206,7 +206,7 @@
           bad: "std::lock_guard<std::mutex> lk(state_mtx_); field->build(...); pub->publish(...);",
           good: "auto field = std::make_shared<MapField>(); field->build(...);\n{ std::lock_guard lk(state_mtx_); field_ = field; }\npublishOutputs(snap, stamp);",
           why: "绝不持锁做耗时建场或 DDS I/O，缩短状态锁占用，降低传感器回调延迟与锁耦合风险。" },
-        { tag: "ros2", title: "6×6 协方差下标铁律 kIdx = {0, 1, 5}", file: "src/localizer_node.cpp", lines: "1584-1590",
+        { tag: "ros2", title: "6×6 协方差下标铁律 kIdx = {0, 1, 5}", file: "src/localizer_node.cpp", lines: "1195-1210",
           bad: "pm.pose.covariance[2 * 6 + 2] = cov(2, 2); // 把航向方差塞进 z 轴了!",
           good: "constexpr int kIdx[3] = {0, 1, 5};\npm.pose.covariance[6 * kIdx[i] + kIdx[j]] = cov(i, j);",
           why: "ROS 消息顺序永远是 (x,y,z,r,p,yaw)，yaw 在索引 5 对应矩阵 [35]。" },

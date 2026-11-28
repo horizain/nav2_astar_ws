@@ -640,7 +640,7 @@ auto matcher = make_matcher(name, grid.get(), voxel);
     node_on_scan: {
       title: "LocalizerNode::onScan (3D 外参与时间对齐入口)",
       file: "src/localizer_node.cpp",
-      lines: "1189-1336",
+      lines: "707-895",
       chapter: "ch08",
       contract: "输入：LaserScan::SharedPtr。输出：驱动 Core 推进一帧并锁外发布输出。",
       thoughtSteps: [
@@ -670,7 +670,7 @@ publishOutputs(snap, scan_stamp);`,
     node_publish: {
       title: "LocalizerNode::publishOutputs (锁外快照发布)",
       file: "src/localizer_node.cpp",
-      lines: "1555-1667",
+      lines: "1162-1290",
       chapter: "ch08",
       contract: "输入：值语义 OutputSnapshot 与时间戳 stamp。输出：广播 map→odom TF、6×6 位姿协方差、多假设与诊断状态。",
       thoughtSteps: [
