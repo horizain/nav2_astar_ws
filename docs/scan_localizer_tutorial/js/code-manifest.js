@@ -190,7 +190,7 @@
     {
       path: "src/hypothesis_tracker.cpp",
       group: "core",
-      lines: 846,
+      lines: 845,
       desc: "LocalizerCore 多假设序贯贝叶斯队列、异常监测与全局重定位恢复（从 localizer_core.cpp 拆分）",
       symbols: [
         { name: "LocalizerCore::try_promote_hypotheses", range: "100-420", desc: "运动门控 SPRT 多假设晋升与连续性保护" },

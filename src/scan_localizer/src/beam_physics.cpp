@@ -15,11 +15,11 @@
 // ============================================================================
 // 四态物理波束评估与可见性一致性检验（从 matchers.cpp 拆分）
 // ============================================================================
-#include "scan_localizer/matchers.hpp"
-
 #include <algorithm>
 #include <cmath>
 #include <vector>
+
+#include "scan_localizer/matchers.hpp"
 
 namespace sloc
 {

@@ -15,8 +15,6 @@
 // ============================================================================
 // 全局相关性搜索（金字塔 Branch-and-Bound + uint8 LUT + 自适应角步长）
 // ============================================================================
-#include "scan_localizer/matchers.hpp"
-
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -24,6 +22,8 @@
 #include <limits>
 #include <queue>
 #include <vector>
+
+#include "scan_localizer/matchers.hpp"
 
 namespace sloc
 {

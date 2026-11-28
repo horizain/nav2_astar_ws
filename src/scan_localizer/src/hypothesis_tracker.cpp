@@ -16,8 +16,6 @@
 // LocalizerCore 多假设序贯贝叶斯队列、异常监测与全局重定位恢复
 // （从 localizer_core.cpp 拆分）
 // ============================================================================
-#include "scan_localizer/localizer_core.hpp"
-
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -25,6 +23,7 @@
 #include <vector>
 
 #include "localizer_core_internal.hpp"
+#include "scan_localizer/localizer_core.hpp"
 
 namespace sloc
 {
