@@ -576,7 +576,10 @@ void LocalizerNode::onImu(const sensor_msgs::msg::Imu::SharedPtr m)
   if (!m) {return;}
   const double wz = m->angular_velocity.z;
   if (!std::isfinite(wz)) {return;}
-  const rclcpp::Time stamp(m->header.stamp);
+  rclcpp::Time stamp(m->header.stamp);
+  if (stamp.nanoseconds() == 0) {
+    stamp = now();
+  }
 
   std::lock_guard<std::mutex> lk(state_mtx_);
   if (!core_) {return;}
@@ -596,9 +599,10 @@ void LocalizerNode::onImu(const sensor_msgs::msg::Imu::SharedPtr m)
     last_imu_wz_ = wz;
     return;
   }
+  const double prev_wz = last_imu_wz_;
   last_imu_stamp_ = stamp;
   last_imu_wz_ = wz;
-  imu_yaw_ += wz * dt;
+  imu_yaw_ += 0.5 * (prev_wz + wz) * dt;
   core_->on_imu_yaw(imu_yaw_, dt);
 }
 
@@ -1097,16 +1101,21 @@ void LocalizerNode::onNoMotionUpdate(
 {
   if (!active_.load()) {return;}
 
+  const rclcpp::Time update_stamp = now();
   OutputSnapshot snap;
   {
     std::lock_guard<std::mutex> lk(state_mtx_);
     if (!active_.load() || !map_received_ || !core_ || !has_last_scan_) {
       return;
     }
+    active_scan_stamp_s_ = update_stamp.seconds();
     const CoreOutput out = core_->on_scan(last_scan_);
+    if (blackbox_) {
+      blackbox_->record_scan(active_scan_stamp_s_, last_scan_, out);
+    }
     snap = buildSnapshotLocked(out, false);
   }
-  publishOutputs(snap, now());
+  publishOutputs(snap, update_stamp);
 }
 
 void LocalizerNode::onTfKeepaliveTimer()

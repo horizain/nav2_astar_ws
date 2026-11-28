@@ -223,7 +223,7 @@
     {
       path: "src/localizer_node.cpp",
       group: "ros",
-      lines: 1315,
+      lines: 1324,
       chapter: "ch08",
       role: "生命周期治理、锁外构场热切图、TF2 3D 外参、Odom 插值、热调参与 6×6 协方差发布",
       symbols: [
