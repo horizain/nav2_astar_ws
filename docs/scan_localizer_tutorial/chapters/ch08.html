@@ -269,7 +269,7 @@ void LocalizerNode::resetResources()
       <h2 id="sec-time"><span class="sec-no">8.4</span>onScan：一帧扫描只有一个时间锚</h2>
       <p>激光消息的到达时刻、消息头时刻、当前最新里程计时刻不是同一个概念。匹配需要的是“这束激光在 <code>header.stamp</code> 时，雷达相对 base 在哪里，机器人相对 odom 在哪里”。因此外参 TF 与 odom 都按扫描时刻查询，而不是按回调开始时的 <code>now()</code>。</p>
       <div class="code-card">
-        <div class="code-head"><span class="code-file">C++ 风格伪代码：扫描时刻对齐与双重提交检查（L1189-1336）</span><button type="button" class="code-btn code-copy-btn">复制</button></div>
+        <div class="code-head"><span class="code-file">C++ 风格伪代码：扫描时刻对齐与双重提交检查（L707-895）</span><button type="button" class="code-btn code-copy-btn">复制</button></div>
         <pre><code class="language-cpp">void LocalizerNode::onScan(const LaserScan::SharedPtr &amp; m)
 {
   if (!active_.load() || !m) {return;}
@@ -505,8 +505,8 @@ void LocalizerNode::publishOutputs(
       <div class="src-bar">
         <button type="button" class="src-jump" data-file="src/localizer_node.cpp" data-lines="644-888"><span class="tag">Lifecycle</span>清理与五个状态回调</button>
         <button type="button" class="src-jump" data-file="src/localizer_node.cpp" data-lines="890-963"><span class="tag">切图</span>applyMap：锁外构建 + 原子交换</button>
-        <button type="button" class="src-jump" data-file="src/localizer_node.cpp" data-lines="1113-1336"><span class="tag">时间对齐</span>lookupOdomAt + onScan</button>
-        <button type="button" class="src-jump" data-file="src/localizer_node.cpp" data-lines="1520-1667"><span class="tag">发布</span>OutputSnapshot + 6×6 协方差</button>
+        <button type="button" class="src-jump" data-file="src/localizer_node.cpp" data-lines="645-895"><span class="tag">时间对齐</span>lookupOdomAt + onScan</button>
+        <button type="button" class="src-jump" data-file="src/localizer_node.cpp" data-lines="1127-1290"><span class="tag">发布</span>OutputSnapshot + 6×6 协方差</button>
       </div>
       <div class="hands-on-stepper">
         <div class="hands-on-toolbar">

@@ -163,7 +163,7 @@
     {
       path: "include/scan_localizer/localizer_node.hpp",
       group: "ros",
-      lines: 269,
+      lines: 267,
       chapter: "ch08",
       role: "ROS 2 Jazzy Lifecycle 组件节点接口、回调组、快照与话题服务声明",
       symbols: [
@@ -172,9 +172,19 @@
       ],
     },
     {
+      path: "include/scan_localizer/odom_sync_buffer.hpp",
+      group: "core",
+      lines: 287,
+      desc: "纯 C++20 里程计时间同步缓冲、异步重定位运动外推与静止重试冷却门控",
+      symbols: [
+        { name: "OdomSyncBuffer", range: "44-224", desc: "环形缓冲 SE(2) 插值、速度估计与异步结果运动外推" },
+        { name: "GlobalRetryGate", range: "230-285", desc: "静止/移动感知的异步全局重定位冷却节流器" }
+      ]
+    },
+    {
       path: "src/localizer_node.cpp",
       group: "ros",
-      lines: 1891,
+      lines: 1297,
       chapter: "ch08",
       role: "生命周期治理、锁外构场热切图、TF2 3D 外参、Odom 插值、热调参与 6×6 协方差发布",
       symbols: [
@@ -183,14 +193,25 @@
         { name: "on_configure / activate / deactivate / cleanup", range: "695-888", desc: "完整 Lifecycle 状态切换与 resetResources 幂等清理" },
         { name: "applyMap", range: "890-963", desc: "锁外构建 MapField+Matcher，加锁瞬间原子交换" },
         { name: "lookupOdomAt", range: "1113-1187", desc: "优先 TF2 扫描时刻插值，回退环形缓冲线性插值" },
-        { name: "onScan", range: "1189-1336", desc: "TF2 3D 外参转 base_frame 点云、核心步进与防竞争快照" },
-        { name: "publishOutputs", range: "1555-1667", desc: "map→odom TF、{0,1,5} 6×6 协方差与诊断状态广播" },
+        { name: "onScan", range: "707-895", desc: "TF2 3D 外参转 base_frame 点云、核心步进与防竞争快照" },
+        { name: "publishOutputs", range: "1162-1290", desc: "map→odom TF、{0,1,5} 6×6 协方差与诊断状态广播" },
       ],
+    },
+    {
+      path: "src/localizer_node_params.cpp",
+      group: "ros",
+      lines: 595,
+      desc: "LocalizerNode 全量参数声明、校验与动态热更新实现（从 localizer_node.cpp 拆分）",
+      symbols: [
+        { name: "LocalizerNode::declareParameters", range: "43-155", desc: "全量 66 项 ROS 2 参数声明" },
+        { name: "LocalizerNode::readAndValidateParameters", range: "157-335", desc: "on_configure 阶段参数读取与合法性校验" },
+        { name: "LocalizerNode::onSetParameters", range: "335-594", desc: "运行时动态参数回调与匹配器热切换" }
+      ]
     },
     {
       path: "config/localizer.yaml",
       group: "ros",
-      lines: 80,
+      lines: 98,
       chapter: "ch08",
       role: "全部 52 项节点生产参数默认值（含 autostart: false 对齐 Nav2）",
       symbols: [
@@ -210,7 +231,7 @@
     {
       path: "CMakeLists.txt",
       group: "ros",
-      lines: 223,
+      lines: 230,
       chapter: "ch08",
       role: "core / sim_lib / node_component / executable / 9 组 gtest 与严格编译告警配置",
       symbols: [
@@ -373,6 +394,15 @@
       symbols: [
         { name: "LocalizerNode Integration Tests", range: "181-866", desc: "6 组真实 DDS 节点端到端测试" },
       ],
+    },
+    {
+      path: "test/test_odom_sync_buffer.cpp",
+      group: "test",
+      lines: 108,
+      desc: "OdomSyncBuffer 插值/异步外推与 GlobalRetryGate 冷却节流单元测试",
+      symbols: [
+        { name: "OdomSyncBufferTest / GlobalRetryGateTest", range: "22-106", desc: "4 项时间同步、外推与冷却门控单测" }
+      ]
     },
     {
       path: "test/test_sim_world.cpp",

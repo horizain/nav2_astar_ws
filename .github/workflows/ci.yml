@@ -53,8 +53,9 @@ jobs:
             "/tmp/sloc_ci/$base" --gtest_brief=1
           done
 
-      - name: Verify tutorial code manifest & doc links
+      - name: Verify tutorial code manifest, param parity & doc links
         run: |
+          python3 docs/scan_localizer_tutorial/tests/sync_code_manifest.py --check-params
           python3 docs/scan_localizer_tutorial/tests/check_code_refs.py
           python3 docs/tools/check_tutorial_links.py
 

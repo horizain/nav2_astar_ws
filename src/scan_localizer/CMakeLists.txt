@@ -73,6 +73,7 @@ target_compile_options(scan_localizer_benchmark PRIVATE ${SCAN_LOCALIZER_WARN_FL
 # ============================================================================
 add_library(localizer_node_component SHARED
   src/localizer_node.cpp
+  src/localizer_node_params.cpp
 )
 ament_target_dependencies(localizer_node_component PUBLIC
   rclcpp
@@ -144,6 +145,12 @@ if(BUILD_TESTING)
   ament_lint_auto_find_test_dependencies()
 
   find_package(ament_cmake_gtest REQUIRED)
+  ament_add_gtest(test_odom_sync_buffer test/test_odom_sync_buffer.cpp)
+  if(TARGET test_odom_sync_buffer)
+    target_link_libraries(test_odom_sync_buffer scan_localizer_core)
+    target_compile_options(test_odom_sync_buffer PRIVATE ${SCAN_LOCALIZER_WARN_FLAGS})
+  endif()
+
   ament_add_gtest(test_se2 test/test_se2.cpp)
   if(TARGET test_se2)
     # ament_add_gtest internally uses plain target_link_libraries

@@ -72,6 +72,24 @@
 
     # --- 全局重定位（冷启动 / 绑架恢复） ---
     use_global_search: true
+    global_async: true                # 异步隔离线程跑 B&B，不阻塞 TRACKING 回调
+    global_max_time_ms: 250.0         # 全局搜索墙钟熔断预算 (ms)
+    global_worker_nice: 10            # 后台线程 nice 降权值
+    global_retry_cooldown_s: 1.5      # 原地静止失锁时的全局搜索重试冷却 (s)
+    global_retry_move_m: 0.15         # 位移超过此阈值立即解除冷却重试 (m)
+
+    # --- 预测协方差下限、高置信度 kMahal 软门控与里程计跳变防护（P0） ---
+    min_pred_trans_var: 2.25e-4       # 预测平移方差下限 (0.015 m)²
+    min_pred_rot_var: 2.25e-4         # 预测航向方差下限 (0.015 rad)²
+    mahal_soft_min_score: 0.85        # 高置信度软放行最低得分
+    mahal_soft_min_inlier: 0.80       # 高置信度软放行最低内点率
+    mahal_soft_max_cond: 25.0         # 2x2 平移协方差非退化条件数上限
+    odom_jump_max_trans: 0.30         # 单周期里程计位移突变阈值 (m)
+    odom_jump_max_rot: 0.45           # 单周期里程计转角突变阈值 (rad)
+
+    # --- 现场黑匣子记录（默认关闭） ---
+    blackbox_enabled: false
+    blackbox_output_dir: "/tmp/scan_localizer_blackbox"
 
     # --- TF 发布与查询 ---
     tf_broadcast: true                # 是否广播 map -> odom TF

@@ -64,6 +64,7 @@
 #include "scan_localizer/blackbox_recorder.hpp"
 #include "scan_localizer/localizer_core.hpp"
 #include "scan_localizer/matchers.hpp"
+#include "scan_localizer/odom_sync_buffer.hpp"
 
 namespace sloc
 {
@@ -80,15 +81,6 @@ public:
   CallbackReturn on_shutdown(const rclcpp_lifecycle::State &) override;
 
 private:
-  struct TimedPose
-  {
-    rclcpp::Time stamp;
-    Pose2 pose;
-    double vx{0.0};
-    double vy{0.0};
-    double wz{0.0};
-  };
-
   struct OutputSnapshot
   {
     CoreOutput out;
@@ -110,7 +102,8 @@ private:
   static CoreConfig buildFineConfig(const CoreConfig & base);
   Pose2 odomToPose(const nav_msgs::msg::Odometry & m) const;
 
-  // 参数读取、校验与动态更新
+  // 参数声明、读取、校验与动态更新（实现位于 src/localizer_node_params.cpp）
+  void declareParameters();
   bool readAndValidateParameters();
   rcl_interfaces::msg::SetParametersResult onSetParameters(
     const std::vector<rclcpp::Parameter> & params);
@@ -185,6 +178,8 @@ private:
   bool global_async_{true};
   double global_max_time_ms_{250.0};
   int global_worker_nice_{10};
+  double global_retry_cooldown_s_{1.5};
+  double global_retry_move_m_{0.15};
   bool blackbox_enabled_{false};
   std::string blackbox_output_dir_{"/tmp/scan_localizer_blackbox"};
   double transform_tolerance_{0.1};
@@ -218,9 +213,12 @@ private:
   bool imu_started_{false};
   rclcpp::Time last_imu_stamp_{0, 0, RCL_ROS_TIME};
 
-  std::deque<TimedPose> odom_buffer_;
+  OdomSyncBuffer odom_sync_{200};
+  GlobalRetryGate global_retry_gate_{};
   bool has_odom_sample_{false};
+  bool first_odom_fed_{false};
   rclcpp::Time last_odom_stamp_{0, 0, RCL_ROS_TIME};
+  double active_scan_stamp_s_{0.0};
 
   Scan last_scan_{};
   bool has_last_scan_{false};
