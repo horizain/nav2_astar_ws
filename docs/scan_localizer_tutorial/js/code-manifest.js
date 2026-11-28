@@ -112,7 +112,7 @@
     {
       path: "src/global_search.cpp",
       group: "core",
-      lines: 642,
+      lines: 649,
       desc: "金字塔 Branch-and-Bound 全局相关性搜索、uint8 LUT 早退评估与自适应角步长（从 matchers.cpp 拆分）",
       symbols: [
         { name: "global_correlative", range: "55-540", desc: "多分辨率金字塔 B&B 全局多峰搜索" },
@@ -167,7 +167,7 @@
     {
       path: "src/localizer_core.cpp",
       group: "core",
-      lines: 723,
+      lines: 765,
       chapter: "ch07",
       role: "4D SE(2)+Bias EKF、Joseph 协方差、四道门控、静止锁死松弛与跳变保护实现",
       symbols: [
@@ -223,7 +223,7 @@
     {
       path: "src/localizer_node.cpp",
       group: "ros",
-      lines: 1297,
+      lines: 1315,
       chapter: "ch08",
       role: "生命周期治理、锁外构场热切图、TF2 3D 外参、Odom 插值、热调参与 6×6 协方差发布",
       symbols: [
@@ -417,7 +417,7 @@
     {
       path: "test/test_localizer_core.cpp",
       group: "sim_test",
-      lines: 1623,
+      lines: 1664,
       chapter: "ch07",
       role: "4D EKF 零偏收敛、门控、走廊滑移、静止松弛与对称走廊防误跳单测 (14 cases)",
       symbols: [
@@ -437,7 +437,7 @@
     {
       path: "test/test_odom_sync_buffer.cpp",
       group: "test",
-      lines: 108,
+      lines: 120,
       desc: "OdomSyncBuffer 插值/异步外推与 GlobalRetryGate 冷却节流单元测试",
       symbols: [
         { name: "OdomSyncBufferTest / GlobalRetryGateTest", range: "22-106", desc: "4 项时间同步、外推与冷却门控单测" }
@@ -507,7 +507,7 @@
     {
       path: "src/blackbox_recorder.cpp",
       group: "core",
-      lines: 609,
+      lines: 618,
       chapter: "ch07",
       role: "黑匣子环形缓冲、SLOCBB01 二进制读写、JSON 摘要与后台配额轮转实现",
       symbols: [
@@ -518,7 +518,7 @@
     {
       path: "test/test_blackbox_recorder.cpp",
       group: "tests",
-      lines: 332,
+      lines: 364,
       chapter: "ch09",
       role: "黑匣子模块单元测试：二进制往返、前后窗切片、大点云降采样、冷却防风暴与磁盘配额",
       symbols: [
@@ -529,7 +529,7 @@
     {
       path: "include/scan_localizer/async_global_worker.hpp",
       group: "core",
-      lines: 112,
+      lines: 118,
       chapter: "ch08",
       role: "异步全局重定位隔离工作线程接口：Latest-Only 单槽覆盖、Linux 绑核与 nice 降权",
       symbols: [
@@ -540,7 +540,7 @@
     {
       path: "src/async_global_worker.cpp",
       group: "core",
-      lines: 213,
+      lines: 234,
       chapter: "ch08",
       role: "AsyncGlobalWorker 实现：pthread_setaffinity_np 绑核、setpriority 降权与自适应角步长",
       symbols: [
@@ -551,7 +551,7 @@
     {
       path: "test/test_async_global_worker.cpp",
       group: "tests",
-      lines: 157,
+      lines: 193,
       chapter: "ch09",
       role: "AsyncGlobalWorker 单元测试：绑核降权重定位精度与高频突发提交单槽覆盖验证",
       symbols: [

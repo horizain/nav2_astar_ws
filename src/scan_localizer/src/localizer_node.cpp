@@ -441,6 +441,11 @@ bool LocalizerNode::applyMap(
     return false;
   }
 
+  const int map_w = grid->width;
+  const int map_h = grid->height;
+  const double map_res = grid->resolution;
+  const double map_ox = grid->origin_x;
+  const double map_oy = grid->origin_y;
   bool first = false;
   {
     std::lock_guard<std::mutex> lk(state_mtx_);
@@ -454,6 +459,10 @@ bool LocalizerNode::applyMap(
     pending_hypotheses_.clear();
     global_alternates_.clear();
     stable_tracking_count_ = 0;
+    if (global_worker_) {
+      global_worker_->invalidate();
+    }
+    global_retry_gate_.reset();
     core_->set_map(field_);
     core_->set_matcher(matcher_);
     map_received_ = true;
@@ -466,8 +475,7 @@ bool LocalizerNode::applyMap(
   RCLCPP_INFO(
     get_logger(),
     "map applied: %dx%d @ %.3fm origin(%.2f,%.2f)%s",
-    grid_->width, grid_->height, grid_->resolution,
-    grid_->origin_x, grid_->origin_y,
+    map_w, map_h, map_res, map_ox, map_oy,
     first ? "" : (keep_pose ? " [switched, keep_pose]" :
     " [switched, global_relocalize]"));
   return true;
@@ -921,6 +929,10 @@ void LocalizerNode::onInitialPose(
   }
 
   core_->set_initial_pose(pose, cov);
+  if (global_worker_) {
+    global_worker_->invalidate();
+  }
+  global_retry_gate_.reset();
   pending_hypotheses_.clear();
   global_alternates_.clear();
   stable_tracking_count_ = 0;
@@ -1045,8 +1057,14 @@ void LocalizerNode::onGlobalRelocalize(
   const bool ok = core_->request_global();
   if (ok) {
     stable_tracking_count_ = 0;
+    if (global_worker_) {
+      global_worker_->invalidate();
+    }
+    global_retry_gate_.reset();
     if (blackbox_) {
-      blackbox_->trigger(now().seconds(), BlackboxTrigger::kExternalRequest);
+      const double trigger_s =
+        active_scan_stamp_s_ > 0.0 ? active_scan_stamp_s_ : now().seconds();
+      blackbox_->trigger(trigger_s, BlackboxTrigger::kExternalRequest);
     }
   }
   res->success = ok;

@@ -105,4 +105,16 @@ TEST(GlobalRetryGateTest, ThrottlesWhenStationaryAndUnblocksOnMotionOrCooldown)
   EXPECT_TRUE(gate.should_submit(2.6, true, p0, false, 1.5, 0.15));
 }
 
+TEST(OdomSyncBufferTest, ComputeDeltaRejectsStaleTruncatedStartStamp)
+{
+  sloc::OdomSyncBuffer buf(10);
+  buf.push(10.0, sloc::Pose2(0.0, 0.0, 0.0));
+  buf.push(10.5, sloc::Pose2(0.5, 0.0, 0.0));
+
+  sloc::Pose2 delta{};
+  EXPECT_FALSE(buf.compute_delta(9.0, 10.5, delta));
+  EXPECT_TRUE(buf.compute_delta(10.0, 10.5, delta));
+  EXPECT_NEAR(delta.x, 0.5, 1e-6);
+}
+
 }  // namespace

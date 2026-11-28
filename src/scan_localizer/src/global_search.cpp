@@ -149,8 +149,15 @@ GlobalResult global_correlative(
     return out;
   }
 
-  const int n_ang = static_cast<int>(std::ceil(kTwoPi / ang_step));
-  if (n_ang <= 0) {return out;}
+  constexpr int kMaxNodeIndex = std::numeric_limits<std::int16_t>::max();
+  if (W > kMaxNodeIndex || H > kMaxNodeIndex) {return out;}
+  const double raw_n_ang = std::ceil(kTwoPi / ang_step);
+  if (!std::isfinite(raw_n_ang) || raw_n_ang <= 0.0 ||
+    raw_n_ang > static_cast<double>(kMaxNodeIndex))
+  {
+    return out;
+  }
+  const int n_ang = static_cast<int>(raw_n_ang);
 
     // 每角度：整数胞元 c_i + 1D 扁平偏移 + 范围包围盒（供内部全命中无分支快路径使用）
   struct AngData

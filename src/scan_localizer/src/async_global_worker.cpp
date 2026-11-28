@@ -67,6 +67,17 @@ void AsyncGlobalWorker::update_config(const GlobalWorkerConfig & cfg)
   }
 }
 
+void AsyncGlobalWorker::invalidate()
+{
+  std::lock_guard<std::mutex> lk(mtx_);
+  ++epoch_;
+  has_pending_ = false;
+  pending_job_ = Job{};
+  has_result_ = false;
+  latest_result_ = GlobalWorkerResult{};
+  busy_.store(running_, std::memory_order_release);
+}
+
 std::uint64_t AsyncGlobalWorker::submit(
   double stamp_s, std::shared_ptr<const MapField> field, Scan scan)
 {
@@ -78,10 +89,12 @@ std::uint64_t AsyncGlobalWorker::submit(
     }
     id = next_id_++;
     pending_job_.request_id = id;
+    pending_job_.epoch = epoch_;
     pending_job_.stamp_s = stamp_s;
     pending_job_.field = std::move(field);
     pending_job_.scan = std::move(scan);
     has_pending_ = true;
+    busy_.store(true, std::memory_order_release);
   }
   job_cv_.notify_one();
   return id;
@@ -171,6 +184,7 @@ void AsyncGlobalWorker::worker_loop()
       }
       job = std::move(pending_job_);
       has_pending_ = false;
+      running_ = true;
       local_cfg = cfg_;
       busy_.store(true, std::memory_order_release);
     }
@@ -196,17 +210,24 @@ void AsyncGlobalWorker::worker_loop()
     const double elapsed_ms =
       std::chrono::duration<double, std::milli>(t1 - t0).count();
 
+    bool accepted_epoch = false;
     {
       std::lock_guard<std::mutex> lk(mtx_);
-      latest_result_.request_id = job.request_id;
-      latest_result_.stamp_s = job.stamp_s;
-      latest_result_.elapsed_ms = elapsed_ms;
-      latest_result_.result = std::move(gres);
-      has_result_ = true;
-      busy_.store(false, std::memory_order_release);
+      running_ = false;
+      if (job.epoch == epoch_) {
+        latest_result_.request_id = job.request_id;
+        latest_result_.stamp_s = job.stamp_s;
+        latest_result_.elapsed_ms = elapsed_ms;
+        latest_result_.result = std::move(gres);
+        has_result_ = true;
+        accepted_epoch = true;
+      }
+      busy_.store(has_pending_, std::memory_order_release);
     }
-    completed_.fetch_add(1u, std::memory_order_release);
-    res_cv_.notify_all();
+    if (accepted_epoch) {
+      completed_.fetch_add(1u, std::memory_order_release);
+      res_cv_.notify_all();
+    }
   }
 }
 

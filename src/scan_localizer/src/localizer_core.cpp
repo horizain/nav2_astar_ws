@@ -314,10 +314,6 @@ CoreOutput LocalizerCore::on_scan(const Scan & scan)
     cfg_.odom_jump_max_rot > 0.0 && raw_drot > cfg_.odom_jump_max_rot;
   const bool odom_jump = odom_trans_jump || odom_rot_jump;
 
-  if (!hypotheses_.empty() && first_fix_) {
-    propagate_hypotheses(delta);
-  }
-
   const double th = last_pose_.theta;
   const double c = std::cos(th);
   const double s = std::sin(th);
@@ -457,6 +453,7 @@ CoreOutput LocalizerCore::on_scan(const Scan & scan)
              std::isfinite(r.inlier_ratio) &&
              r.covariance.allFinite();
     };
+  bool odom_jump_fallback = false;
   if (odom_jump && first_fix_) {
     const bool pred_ok = is_mr_finite(mr) &&
       mr.score >= cfg_.min_score &&
@@ -471,8 +468,38 @@ CoreOutput LocalizerCore::on_scan(const Scan & scan)
       {
         mr = fb;
         pred = last_pose_;
+        odom_jump_fallback = true;
+        // 回退至静止先验时重算无跳变耦合的先验协方差，避免错误 delta 污染雅可比与噪声
+        Eigen::Matrix4d F_fb = Eigen::Matrix4d::Identity();
+        if (imu_used && dt_imu > 0.0) {
+          F_fb(2, 3) = -dt_imu;
+        }
+        Eigen::Matrix4d Q_fb = Eigen::Matrix4d::Zero();
+        const double q_fb_t = std::max(0.0, cfg_.odomless_trans_var);
+        const double q_fb_r = imu_used ?
+          (std::abs(delta.theta) * cfg_.imu_rot_var_per_rad +
+          dt_imu * cfg_.imu_rot_var_per_rad) :
+          std::max(0.0, cfg_.odomless_rot_var);
+        Q_fb(0, 0) = q_fb_t;
+        Q_fb(1, 1) = q_fb_t;
+        Q_fb(2, 2) = q_fb_r;
+        if (imu_used && dt_imu > 0.0) {
+          Q_fb(3, 3) = std::max(0.0, cfg_.gyro_bias_rw_var_per_s) * dt_imu;
+        }
+        P4_pred = F_fb * P4_ * F_fb.transpose() + Q_fb;
+        if (cfg_.min_pred_trans_var > 0.0) {
+          P4_pred(0, 0) = std::max(P4_pred(0, 0), cfg_.min_pred_trans_var);
+          P4_pred(1, 1) = std::max(P4_pred(1, 1), cfg_.min_pred_trans_var);
+        }
+        if (cfg_.min_pred_rot_var > 0.0) {
+          P4_pred(2, 2) = std::max(P4_pred(2, 2), cfg_.min_pred_rot_var);
+        }
+        P4_pred = 0.5 * (P4_pred + P4_pred.transpose());
       }
     }
+  }
+  if (!hypotheses_.empty() && first_fix_ && !odom_jump_fallback) {
+    propagate_hypotheses(delta);
   }
   const bool mr_finite = is_mr_finite(mr);
   // 正交观测评估：几何贴合、前景动态遮挡、硬穿墙矛盾、前沿覆盖度完全解耦
@@ -609,7 +636,7 @@ CoreOutput LocalizerCore::on_scan(const Scan & scan)
   // 滑动窗口异常监测（绑架主动触发）：仅将匹配失效、极低分或得分与内点率均不达标
   // 视作绑架异常；高分高内点率但仅因马氏门控拒绝属于正常局部抖动/转弯，绝非绑架。
   const bool is_anomaly = !accept &&
-    (!mr_finite || mr.score < cfg_.anomaly_low_score ||
+    (!mr_finite || !gate_wall || track_score < cfg_.anomaly_low_score ||
     (!gate_inlier && !gate_score));
   record_anomaly(is_anomaly);
 
@@ -620,17 +647,20 @@ CoreOutput LocalizerCore::on_scan(const Scan & scan)
     if (ldlt.info() == Eigen::Success && S_inv_HP.allFinite()) {
       const Eigen::Matrix<double, 4, 3> K4 = S_inv_HP.transpose();
       Eigen::Vector4d dx = K4 * innov;
+      double scale_xy = 1.0;
+      double scale_th = 1.0;
 
       if (cfg_.max_update_trans > 0.0) {
         const double tn = std::hypot(dx(0), dx(1));
         if (tn > cfg_.max_update_trans) {
-          const double scale = cfg_.max_update_trans / tn;
-          dx(0) *= scale;
-          dx(1) *= scale;
+          scale_xy = cfg_.max_update_trans / tn;
+          dx(0) *= scale_xy;
+          dx(1) *= scale_xy;
         }
       }
-      if (cfg_.max_update_rot > 0.0) {
-        dx(2) = std::clamp(dx(2), -cfg_.max_update_rot, cfg_.max_update_rot);
+      if (cfg_.max_update_rot > 0.0 && std::abs(dx(2)) > cfg_.max_update_rot) {
+        scale_th = cfg_.max_update_rot / std::abs(dx(2));
+        dx(2) *= scale_th;
       }
 
       last_pose_ = Pose2(
@@ -638,12 +668,24 @@ CoreOutput LocalizerCore::on_scan(const Scan & scan)
         pred.y + dx(1),
         wrap_angle(pred.theta + dx(2)));
       const double max_b = std::max(0.0, cfg_.max_gyro_bias);
-      gyro_bias_ = std::clamp(gyro_bias_ + dx(3), -max_b, max_b);
+      const double next_b = std::clamp(gyro_bias_ + dx(3), -max_b, max_b);
+      double scale_b = 1.0;
+      if (std::abs(dx(3)) > 1e-12) {
+        scale_b = std::clamp((next_b - gyro_bias_) / dx(3), 0.0, 1.0);
+      }
+      gyro_bias_ = next_b;
+
+      // 步长/零偏限幅时按实际生效比例缩放增益再做 Joseph 更新，避免协方差过度收缩
+      Eigen::Matrix<double, 4, 3> K_eff = K4;
+      K_eff.row(0) *= scale_xy;
+      K_eff.row(1) *= scale_xy;
+      K_eff.row(2) *= scale_th;
+      K_eff.row(3) *= scale_b;
 
       Eigen::Matrix<double, 3, 4> H = Eigen::Matrix<double, 3, 4>::Zero();
       H.leftCols<3>() = Eigen::Matrix3d::Identity();
-      const Eigen::Matrix4d I_KH = Eigen::Matrix4d::Identity() - K4 * H;
-      P4_ = I_KH * P4_pred * I_KH.transpose() + K4 * R * K4.transpose();
+      const Eigen::Matrix4d I_KH = Eigen::Matrix4d::Identity() - K_eff * H;
+      P4_ = I_KH * P4_pred * I_KH.transpose() + K_eff * R * K_eff.transpose();
       P4_ = 0.5 * (P4_ + P4_.transpose());
 
       reject_streak_ = 0;

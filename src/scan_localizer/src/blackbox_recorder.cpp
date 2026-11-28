@@ -371,6 +371,12 @@ void BlackboxRecorder::record_scan(
   }
   prev_state_ = out.state;
 
+  // 时间回拨（如重播 rosbag 或时钟跳变）防护：重置后窗状态机与冷却锚点，防止永久卡死
+  if (capturing_post_ && stamp_s < trigger_stamp_s_) {
+    capturing_post_ = false;
+    last_dump_stamp_s_ = -1e18;
+  }
+
   // 若正处于后窗捕获阶段，录满 post_seconds 后立刻异步切分落盘
   if (capturing_post_ && (stamp_s - trigger_stamp_s_) >= cfg_.post_seconds) {
     dispatch_snapshot();
@@ -393,6 +399,9 @@ void BlackboxRecorder::start_capture(double stamp_s, BlackboxTrigger reason)
 {
   if (capturing_post_) {
     return;
+  }
+  if (stamp_s < last_dump_stamp_s_) {
+    last_dump_stamp_s_ = -1e18;
   }
   if ((stamp_s - last_dump_stamp_s_) < cfg_.cooldown_s) {
     return;
