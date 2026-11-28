@@ -37,7 +37,6 @@ bool isFiniteNonNegative(double v)
 {
   return std::isfinite(v) && v >= 0.0;
 }
-
 }  // namespace
 
 void LocalizerNode::declareParameters()
@@ -136,7 +135,6 @@ void LocalizerNode::declareParameters()
 
   // autostart：默认 false 以适配 Nav2 lifecycle_manager；演示/测试可在 launch 覆写 true
   declare_parameter<bool>("autostart", false);
-
 }
 
 bool LocalizerNode::readAndValidateParameters()
@@ -594,5 +592,4 @@ rcl_interfaces::msg::SetParametersResult LocalizerNode::onSetParameters(
 
   return res;
 }
-
 }  // namespace sloc

@@ -200,12 +200,12 @@
     {
       path: "src/localizer_node_params.cpp",
       group: "ros",
-      lines: 598,
+      lines: 595,
       desc: "LocalizerNode 全量参数声明、校验与动态热更新实现（从 localizer_node.cpp 拆分）",
       symbols: [
         { name: "LocalizerNode::declareParameters", range: "43-155", desc: "全量 66 项 ROS 2 参数声明" },
         { name: "LocalizerNode::readAndValidateParameters", range: "157-335", desc: "on_configure 阶段参数读取与合法性校验" },
-        { name: "LocalizerNode::onSetParameters", range: "337-596", desc: "运行时动态参数回调与匹配器热切换" }
+        { name: "LocalizerNode::onSetParameters", range: "335-594", desc: "运行时动态参数回调与匹配器热切换" }
       ]
     },
     {
