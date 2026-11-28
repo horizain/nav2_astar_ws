@@ -19,9 +19,6 @@
 
 #include <algorithm>
 #include <chrono>
-#if defined(__ARM_NEON) || defined(__aarch64__)
-#include <arm_neon.h>
-#endif
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -938,31 +935,14 @@ MatchResult ComposedMatcher::match(
 // · 固定容量 top-K + 空间/角度 NMS 维护剪枝下界 worst_kept；
 // · 末端小窗口细修（±2 格 / ±半角步长），产出交给跟踪匹配器。
 // ============================================================================
-// 内部全命中无分支 uint8 似然累加 + 部分和上界早停（ARM64 启用 NEON，x86 走 4 路展开）
+// 内部全命中无分支 uint8 似然累加 + 部分和上界早停（统一 4 路标量展开：
+// ARM64 Cortex-A72 实测 NEON 缺乏硬件 gather，手写 8 路打包反而慢 ~1.26%）
 static inline std::uint32_t eval_u8_inbounds_early_exit(
   const std::uint8_t * base, const std::int32_t * offs,
   int n, std::uint32_t min_sum_u8)
 {
   std::uint32_t sum = 0u;
   int i = 0;
-#if defined(__ARM_NEON) || defined(__aarch64__)
-  uint32x2_t acc = vdup_n_u32(0u);
-  for (; i + 8 <= n; i += 8) {
-    const std::uint8_t v[8] = {
-      base[offs[i]], base[offs[i + 1]], base[offs[i + 2]], base[offs[i + 3]],
-      base[offs[i + 4]], base[offs[i + 5]], base[offs[i + 6]], base[offs[i + 7]]
-    };
-    const uint8x8_t v8 = vld1_u8(v);
-    acc = vpadal_u16(acc, vpaddl_u8(v8));
-    if (((i + 8) & 15) == 0 && min_sum_u8 > 0u) {
-      const std::uint32_t cur = vget_lane_u32(acc, 0) + vget_lane_u32(acc, 1);
-      if (cur + static_cast<std::uint32_t>(n - (i + 8)) * 255u <= min_sum_u8) {
-        return 0u;
-      }
-    }
-  }
-  sum = vget_lane_u32(acc, 0) + vget_lane_u32(acc, 1);
-#else
   for (; i + 4 <= n; i += 4) {
     sum += static_cast<std::uint32_t>(base[offs[i]]) +
       static_cast<std::uint32_t>(base[offs[i + 1]]) +
@@ -974,7 +954,6 @@ static inline std::uint32_t eval_u8_inbounds_early_exit(
       }
     }
   }
-#endif
   for (; i < n; ++i) {
     sum += static_cast<std::uint32_t>(base[offs[i]]);
   }
