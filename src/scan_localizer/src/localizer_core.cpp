@@ -436,10 +436,15 @@ CoreOutput LocalizerCore::on_scan(const Scan & scan)
       active_opt.window_ang = std::clamp(
         3.5 * ang_std + 0.02, std::max(0.04, 0.55 * base_wang), base_wang);
     } else {
+      // 连续拒帧或 DEGRADED 时，除先验协方差外还按拒帧数渐进扩窗（最高 3x / 0.50m），
+      // 避免默认低过程噪声下大转弯/滑移超出基础搜窗后 pos_std 几乎不增长导致失锁。
+      const double streak_scale = 1.0 + 0.25 * std::min(reject_streak_, 8);
+      const double max_wlin = std::min(0.50, std::max(base_wlin, 3.0 * base_wlin));
+      const double max_wang = std::min(0.45, std::max(base_wang, 3.0 * base_wang));
       active_opt.window_lin = std::clamp(
-        3.5 * pos_std + 0.05, base_wlin, 2.0 * base_wlin);
+        std::max(3.5 * pos_std + 0.05, streak_scale * base_wlin), base_wlin, max_wlin);
       active_opt.window_ang = std::clamp(
-        3.5 * ang_std + 0.04, base_wang, 2.0 * base_wang);
+        std::max(3.5 * ang_std + 0.04, streak_scale * base_wang), base_wang, max_wang);
     }
   }
   MatchResult mr = matcher_->match(*field_, pred, *active_scan, active_opt);
@@ -549,10 +554,10 @@ CoreOutput LocalizerCore::on_scan(const Scan & scan)
     (cov_cond <= cfg_.mahal_soft_max_cond);
   const double max_local_xy = high_geom_conf ?
     std::max(0.50, 3.0 * active_opt.window_lin) :
-    std::max(0.20, 1.5 * cfg_.match_opt.window_lin);
+    std::max(0.20, 1.5 * active_opt.window_lin);
   const double max_local_th = high_geom_conf ?
     std::max(0.35, 3.0 * active_opt.window_ang) :
-    std::max(0.15, 1.5 * cfg_.match_opt.window_ang);
+    std::max(0.15, 1.5 * active_opt.window_ang);
 
   if (high_geom_conf && !gate_mahal && reject_streak_ >= 1) {
     const double innov_xy = std::hypot(innov(0), innov(1));

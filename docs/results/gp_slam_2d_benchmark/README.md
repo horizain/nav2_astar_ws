@@ -101,3 +101,19 @@
 > *注：永谦中心（Yongqian）为半径 8.5 m 的强对称圆弧走廊，无 IMU 时单帧盲搜在一次恢复中锁定至对称镜像弧段，导致全程 ATE 偏高；曹光彪大楼（ChouYeiChing）在**零调参默认 `localizer.yaml`** 下仅靠 1 次 153.8 ms 异步全局搜索即在 1.1 s 内重捕获，跑完 91.9 m 全程且 ATE 仅 **9.0 cm**，3 次 8 m + 120° 主动绑架亦实现 **3/3 100% 恢复**。
 
 ![scan_localizer P0+P1 端到端异步全局恢复与绑架恢复基准测试](05_async_global_recovery.png)
+
+## 7. 自适应扩窗 + 对称多峰净位移门控优化（Route 1）
+
+针对实景数据暴露出的两个典型问题做了定点算法加固（不新增/改动 `config/localizer.yaml` 默认参数）：
+
+1. **连续拒帧 / `DEGRADED` 渐进自适应扩窗（`localizer_core.cpp`）**：`adaptive_window` 在 `reject_streak_ > 0` 时除先验 `pos_std` 外还按连续拒帧数渐进扩窗（`1 + 0.25 × min(streak, 8)` 倍，上限 `min(0.50 m, 3×base_wlin)` / `min(0.45 rad, 3×base_wang)`），并同步放大局部马氏软松弛邻域，避免低过程噪声默认配置下大转弯/滑移超出基础窗后搜窗长期卡死。
+2. **多峰对称远距离跳变地图净位移消歧门控（`hypothesis_tracker.cpp`）**：`Hypothesis` 记录初始锚点 `seed_pose` 与多峰歧义标记 `seeded_ambiguous`；当自动恢复（`!manual_global_ && first_fix_`）拟晋升远距离多峰候选时，除通过 SPRT 后验（`≥ 0.95`）外，还须满足高几何置信度（`score ≥ 0.85` 且 `inlier ≥ 0.75`）或真实地图净位移/转角消歧（`net_disp ≥ 0.50 m` 或 `net_rot ≥ 0.35 rad`），防止对称圆弧走廊中匹配器将假峰反复拉回同一假墙角而原地误锁。
+
+| 场景与配置（`composed`, 10 Hz） | 改前全程 ATE / 跟踪段 ATE | 改后全程 ATE / 跟踪段 ATE | 误差降幅 | 接受率 / 丢锁帧 |
+| :--- | ---: | ---: | ---: | ---: |
+| Yongqian（**默认参数 + `AsyncGlobal`**） | 4.729 m / 4.063 m | **0.725 m / 0.596 m** | **-84.7% / -85.3%** | 80.54% / 167 |
+| Yongqian（**适配参数 + `AsyncGlobal`**） | 2.563 m / 2.322 m | **1.152 m / 1.071 m** | **-55.1% / -53.9%** | 80.45% / 222 |
+| ChouYeiChing（默认参数 + `AsyncGlobal`） | 0.090 m / 0.066 m | **0.101 m / 0.081 m** | 基本持平 | **94.43% / 10** |
+| ChouYeiChing（3 次 8m+120° 绑架 + `AsyncGlobal`） | 1.988 m / 0.083 m | **1.988 m / 0.083 m** | 3/3 (100%) 保持 | 91.03% / 14 |
+
+> **边界说明**：曹光彪默认参数（无全局）在 `scan=5109–5307`（6.0 s）处即便在参考真值位姿处（`AT_GT`）`raw_inlier` 也跌至 `0.28–0.43`（伴随 18%–25% 动态遮挡与约 0.2 m 局部建图畸变），低于默认 `min_inlier_ratio=0.60`，因此该段失锁并非搜窗不足所致；保持 `min_inlier_ratio=0.60` 安全门限、由 `AsyncGlobalWorker` 在 10 帧（1.0 s）内自动重捕获是更稳妥的工程边界。

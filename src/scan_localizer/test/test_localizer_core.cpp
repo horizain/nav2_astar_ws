@@ -1426,3 +1426,150 @@ TEST(LocalizerCoreTest, OdomJumpDegradesToWideWindowWithoutLosingLock)
   EXPECT_EQ(out.state, sloc::LocState::TRACKING);
   EXPECT_NEAR(out.pose.x, 5.05, 0.03);
 }
+
+TEST(LocalizerCoreTest, ProgressiveDegradedWindowExpandsWithRejectStreak)
+{
+  class WindowGatedMatcher : public sloc::Matcher {
+public:
+    mutable std::vector<double> seen_wlin;
+    mutable std::vector<double> seen_wang;
+
+    sloc::MatchResult match(
+      const sloc::MapField &, const sloc::Pose2 & prior,
+      const sloc::Scan &, const sloc::MatchOptions & opt) const override
+    {
+      seen_wlin.push_back(opt.window_lin);
+      seen_wang.push_back(opt.window_ang);
+      sloc::MatchResult r;
+      r.covariance = sloc::Cov3::Identity() * 5e-4;
+      if (opt.window_lin >= 0.30) {
+        r.valid = true;
+        r.pose = sloc::Pose2(prior.x + 0.28, prior.y, prior.theta);
+        r.score = 0.94;
+        r.inlier_ratio = 0.92;
+      } else {
+        r.valid = true;
+        r.pose = prior;
+        r.score = 0.55;
+        r.inlier_ratio = 0.35;
+      }
+      return r;
+    }
+  };
+
+  const auto & wf = shared_warehouse();
+  auto wm = std::make_shared<WindowGatedMatcher>();
+  sloc::CoreConfig cfg;
+  cfg.adaptive_window = true;
+  cfg.match_opt.window_lin = 0.15;
+  cfg.match_opt.window_ang = 0.15;
+  cfg.odom_trans_var_per_m = 4e-4;
+  cfg.odom_rot_var_per_rad = 1e-3;
+  cfg.degraded_after = 5;
+  cfg.lost_after = 30;
+  cfg.anomaly_window = 0;
+
+  sloc::LocalizerCore core(cfg);
+  core.set_map(wf.field);
+  core.set_matcher(wm);
+  core.on_odom(sloc::Pose2(0.0, 0.0, 0.0));
+  core.set_initial_pose(sloc::Pose2(5.0, 5.0, 0.0), sloc::Cov3::Identity() * 1e-4);
+
+  const sloc::Scan dummy = make_dummy_scan();
+  bool recovered = false;
+  for (int i = 0; i < 12; ++i) {
+    const auto out = core.on_scan(dummy);
+    if (out.accepted) {
+      recovered = true;
+      break;
+    }
+  }
+  EXPECT_TRUE(recovered);
+  EXPECT_EQ(core.state(), sloc::LocState::TRACKING);
+  ASSERT_GE(wm->seen_wlin.size(), 5u);
+  EXPECT_LE(wm->seen_wlin.front(), 0.15 + 1e-9);
+  EXPECT_GE(wm->seen_wlin.back(), 0.30 - 1e-9);
+  EXPECT_GE(wm->seen_wang.back(), 0.30 - 1e-9);
+}
+
+TEST(LocalizerCoreTest, AmbiguousFarHypothesisRequiresNetMapMotionOrHighConfidence)
+{
+  class PinnedMirrorMatcher : public sloc::Matcher {
+public:
+    bool allow_advance{false};
+
+    sloc::MatchResult match(
+      const sloc::MapField &, const sloc::Pose2 & prior,
+      const sloc::Scan &, const sloc::MatchOptions &) const override
+    {
+      sloc::MatchResult r;
+      r.covariance = sloc::Cov3::Identity() * 1e-3;
+      if (prior.x < 10.0) {
+        r.valid = false;
+        return r;
+      }
+      if (prior.x < 18.0) {
+        r.valid = true;
+        r.pose = allow_advance ? prior : sloc::Pose2(15.05, 5.0, 0.0);
+        r.score = 0.80;
+        r.inlier_ratio = 0.68;
+      } else {
+        r.valid = true;
+        r.pose = prior;
+        r.score = 0.45;
+        r.inlier_ratio = 0.40;
+      }
+      return r;
+    }
+  };
+
+  const auto & wf = shared_warehouse();
+  auto pm = std::make_shared<PinnedMirrorMatcher>();
+  sloc::Scan real_like_scan;
+  for (int i = 0; i < 32; ++i) {
+    const double a = -1.5 + 0.1 * i;
+    real_like_scan.points.emplace_back(2.0 * std::cos(a), 2.0 * std::sin(a));
+  }
+
+  sloc::CoreConfig cfg;
+  cfg.use_visibility_check = false;
+  cfg.min_score = 0.35;
+  cfg.min_inlier_ratio = 0.45;
+  cfg.hyp_confirm_frames = 2;
+  cfg.hyp_min_score = 0.70;
+  cfg.hyp_min_inlier = 0.65;
+  cfg.hyp_promote_posterior = 0.90;
+  cfg.global_jump_min_dist = 1.0;
+  cfg.anomaly_window = 0;
+
+  sloc::LocalizerCore core(cfg);
+  core.set_map(wf.field);
+  core.set_matcher(pm);
+  core.on_odom(sloc::Pose2(0.0, 0.0, 0.0));
+  core.set_initial_pose(sloc::Pose2(5.0, 5.0, 0.0));
+  ASSERT_TRUE(core.request_global(false));
+  core.add_hypotheses({sloc::Pose2(15.0, 5.0, 0.0), sloc::Pose2(22.0, 5.0, 3.14159)});
+
+  // Phase 1: odom advances 0.60m, but matcher keeps pinning hyp[0] at x=15.05 (net_disp=0.05m).
+  // Mediocre score/inlier (0.80/0.68) in an ambiguous far pool must NOT promote.
+  for (int f = 1; f <= 6; ++f) {
+    core.on_odom(sloc::Pose2(0.10 * f, 0.0, 0.0));
+    const auto out = core.on_scan(real_like_scan);
+    EXPECT_FALSE(out.accepted) << "pinned mirror hyp promoted prematurely at frame " << f;
+  }
+
+  // Phase 2: once hyp[0] advances >= 0.50m on the map in agreement with odom, it promotes cleanly.
+  pm->allow_advance = true;
+  bool promoted = false;
+  for (int f = 7; f <= 14; ++f) {
+    core.on_odom(sloc::Pose2(0.10 * f, 0.0, 0.0));
+    const auto out = core.on_scan(real_like_scan);
+    if (out.accepted) {
+      promoted = true;
+      EXPECT_EQ(out.state, sloc::LocState::TRACKING);
+      EXPECT_GT(out.pose.x, 15.5);
+      break;
+    }
+  }
+  EXPECT_TRUE(promoted);
+}

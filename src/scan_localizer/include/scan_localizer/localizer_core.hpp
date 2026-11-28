@@ -204,6 +204,8 @@ private:
     double last_score{0.0};
     double ema_score{0.0};
     int eval_count{0};
+    Pose2 seed_pose{};
+    bool seeded_ambiguous{false};
   };
 
   void compute_motion_delta(Pose2 & delta, bool & imu_used, double & dt_imu);
