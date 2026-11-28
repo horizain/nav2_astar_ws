@@ -57,6 +57,14 @@ struct CoreConfig
   double odom_rot_var_per_rad{1e-3};
   double odom_rot_var_per_m{2e-3};
   double sync_jitter_ratio{0.15};        // 传感器-里程计时钟相对抖动比例 σ_t / Δt
+  // 预测协方差下限 + 高置信度 kMahal 软门控 + 里程计跳变防护
+  double min_pred_trans_var{2.25e-4};    // 预测平移方差下限 (0.015 m)²，防静止坍缩
+  double min_pred_rot_var{2.25e-4};      // 预测航向方差下限 (0.015 rad)²
+  double mahal_soft_min_score{0.85};     // 仅触发 kMahal 时允许软化门控的最低几何得分
+  double mahal_soft_min_inlier{0.80};    // 仅触发 kMahal 时允许软化门控的最低内点率
+  double mahal_soft_max_cond{25.0};      // 仅非退化匹配（λ_max/λ_min <= 上限）才允许软化
+  double odom_jump_max_trans{0.30};      // 单帧里程计位移突变阈值 (m)，<=0 关闭
+  double odom_jump_max_rot{0.45};        // 单帧里程计转角突变阈值 (rad)，<=0 关闭
   // IMU 融合（可选）：陀螺积分 Δyaw 替换轮式 Δθ（平移仍取轮式）
   bool use_imu_yaw{false};
   double imu_rot_var_per_rad{2e-5};      // MEMS 陀螺短时精度高两个数量级

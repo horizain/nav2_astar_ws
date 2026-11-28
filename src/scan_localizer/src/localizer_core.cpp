@@ -1178,6 +1178,19 @@ CoreOutput LocalizerCore::on_scan(const Scan & scan)
   double dt_imu = 0.0;
   compute_motion_delta(delta, imu_used, dt_imu);
 
+  // /odom 瞬时跳变/断流突变防护：单周期增量超过物理合理上限时，
+  // 保留里程计先验以兼容真实长步长/断流位移，但自动膨胀过程噪声、放宽搜窗，
+  // 且当里程计先验匹配不佳时自动回退至无里程计静止先验 last_pose_ 兜底。
+  const double raw_dtrans = std::hypot(delta.x, delta.y);
+  const double raw_drot = std::abs(delta.theta);
+  const bool odom_noise_enabled =
+    cfg_.odom_trans_var_per_m > 0.0 || cfg_.odom_rot_var_per_rad > 0.0;
+  const bool odom_trans_jump = has_odom_ && first_fix_ && odom_noise_enabled &&
+    cfg_.odom_jump_max_trans > 0.0 && raw_dtrans > cfg_.odom_jump_max_trans;
+  const bool odom_rot_jump = has_odom_ && first_fix_ && !imu_used && odom_noise_enabled &&
+    cfg_.odom_jump_max_rot > 0.0 && raw_drot > cfg_.odom_jump_max_rot;
+  const bool odom_jump = odom_trans_jump || odom_rot_jump;
+
   if (!hypotheses_.empty() && first_fix_) {
     propagate_hypotheses(delta);
   }
@@ -1185,7 +1198,7 @@ CoreOutput LocalizerCore::on_scan(const Scan & scan)
   const double th = last_pose_.theta;
   const double c = std::cos(th);
   const double s = std::sin(th);
-  const Pose2 pred = first_fix_ ?
+  Pose2 pred = first_fix_ ?
     Pose2(
       last_pose_.x + c * delta.x - s * delta.y,
       last_pose_.y + s * delta.x + c * delta.y,
@@ -1205,7 +1218,7 @@ CoreOutput LocalizerCore::on_scan(const Scan & scan)
   // 过程噪声 Q4：本体系噪声经 G 旋转至 map 系 + 陀螺零偏随机游走
   double q_trans = 0.0;
   double q_rot = 0.0;
-  if (has_odom_) {
+  if (has_odom_ && !odom_jump) {
     const double dtrans = std::hypot(delta.x, delta.y);
     const double drot = std::abs(delta.theta);
     q_trans = dtrans * cfg_.odom_trans_var_per_m + drot * cfg_.odom_trans_var_per_rad;
@@ -1214,6 +1227,19 @@ CoreOutput LocalizerCore::on_scan(const Scan & scan)
     if (imu_used && dt_imu > 0.0) {
       q_rot += dt_imu * cfg_.imu_rot_var_per_rad;
     }
+  } else if (odom_jump) {
+    const double dtrans = std::hypot(delta.x, delta.y);
+    const double drot = std::abs(delta.theta);
+    q_trans = std::max(
+      std::max(0.0, cfg_.odomless_trans_var),
+      dtrans * cfg_.odom_trans_var_per_m + drot * cfg_.odom_trans_var_per_rad +
+      0.25 * raw_dtrans * raw_dtrans);
+    q_rot = imu_used ?
+      (drot * cfg_.imu_rot_var_per_rad + dt_imu * cfg_.imu_rot_var_per_rad) :
+      std::max(
+        std::max(0.0, cfg_.odomless_rot_var),
+        dtrans * cfg_.odom_rot_var_per_m + drot * cfg_.odom_rot_var_per_rad +
+        0.25 * raw_drot * raw_drot);
   } else {
     q_trans = std::max(0.0, cfg_.odomless_trans_var);
     q_rot = imu_used ?
@@ -1257,11 +1283,25 @@ CoreOutput LocalizerCore::on_scan(const Scan & scan)
   }
 
   Cov4 P4_pred = F4 * P4_ * F4.transpose() + Q4;
+  if (cfg_.min_pred_trans_var > 0.0) {
+    P4_pred(0, 0) = std::max(P4_pred(0, 0), cfg_.min_pred_trans_var);
+    P4_pred(1, 1) = std::max(P4_pred(1, 1), cfg_.min_pred_trans_var);
+  }
+  if (cfg_.min_pred_rot_var > 0.0) {
+    P4_pred(2, 2) = std::max(P4_pred(2, 2), cfg_.min_pred_rot_var);
+  }
   P4_pred = 0.5 * (P4_pred + P4_pred.transpose());
 
   // ---------- 协方差驱动自适应搜窗 + 匹配 ----------
   MatchOptions active_opt = cfg_.match_opt;
-  if (cfg_.adaptive_window && has_odom_) {
+  if (odom_jump) {
+    const double base_wlin = cfg_.match_opt.window_lin;
+    const double base_wang = cfg_.match_opt.window_ang;
+    active_opt.window_lin = std::clamp(
+      std::max(2.0 * base_wlin, raw_dtrans + 0.10), base_wlin, 0.60);
+    active_opt.window_ang = std::clamp(
+      std::max(2.0 * base_wang, raw_drot + 0.10), base_wang, 0.60);
+  } else if (cfg_.adaptive_window && has_odom_) {
     const double base_wlin = cfg_.match_opt.window_lin;
     const double base_wang = cfg_.match_opt.window_ang;
     const double pos_std = std::sqrt(
@@ -1280,11 +1320,31 @@ CoreOutput LocalizerCore::on_scan(const Scan & scan)
     }
   }
   MatchResult mr = matcher_->match(*field_, pred, *active_scan, active_opt);
-  const bool mr_finite = mr.valid &&
-    is_finite_pose(mr.pose) &&
-    std::isfinite(mr.score) &&
-    std::isfinite(mr.inlier_ratio) &&
-    mr.covariance.allFinite();
+  auto is_mr_finite = [](const MatchResult & r) {
+      return r.valid &&
+             is_finite_pose(r.pose) &&
+             std::isfinite(r.score) &&
+             std::isfinite(r.inlier_ratio) &&
+             r.covariance.allFinite();
+    };
+  if (odom_jump && first_fix_) {
+    const bool pred_ok = is_mr_finite(mr) &&
+      mr.score >= cfg_.min_score &&
+      mr.inlier_ratio >= cfg_.min_inlier_ratio &&
+      std::hypot(mr.pose.x - pred.x, mr.pose.y - pred.y) <= active_opt.window_lin;
+    if (!pred_ok) {
+      const MatchResult fb = matcher_->match(*field_, last_pose_, *active_scan, active_opt);
+      if (is_mr_finite(fb) &&
+        (!is_mr_finite(mr) || fb.score > mr.score + 0.05 ||
+        std::hypot(fb.pose.x - last_pose_.x, fb.pose.y - last_pose_.y) <
+        std::hypot(mr.pose.x - pred.x, mr.pose.y - pred.y)))
+      {
+        mr = fb;
+        pred = last_pose_;
+      }
+    }
+  }
+  const bool mr_finite = is_mr_finite(mr);
   // 正交观测评估：几何贴合、前景动态遮挡、硬穿墙矛盾、前沿覆盖度完全解耦
   ScanObservation obs;
   if (mr_finite) {
@@ -1308,6 +1368,7 @@ CoreOutput LocalizerCore::on_scan(const Scan & scan)
 
   Cov3 R = Cov3::Identity();
   bool gate_cov = false;
+  double cov_cond = std::numeric_limits<double>::infinity();
   if (mr_finite) {
     R = 0.5 * (mr.covariance + mr.covariance.transpose());
     Eigen::SelfAdjointEigenSolver<Cov3> es(R);
@@ -1315,6 +1376,17 @@ CoreOutput LocalizerCore::on_scan(const Scan & scan)
       const double min_eig = es.eigenvalues().minCoeff();
       gate_cov = std::isfinite(min_eig) && (min_eig > 0.0) &&
         (min_eig < cfg_.max_cov_eig);
+      if (gate_cov) {
+        // 用 2x2 平移子块条件数（量纲统一为 m²）判断几何退化，避免 m² 与 rad² 混算
+        Eigen::SelfAdjointEigenSolver<Eigen::Matrix2d> es_xy(R.topLeftCorner<2, 2>());
+        if (es_xy.info() == Eigen::Success && es_xy.eigenvalues().size() == 2) {
+          const double xy_min = es_xy.eigenvalues().minCoeff();
+          const double xy_max = es_xy.eigenvalues().maxCoeff();
+          if (std::isfinite(xy_min) && std::isfinite(xy_max) && xy_min > 1e-12) {
+            cov_cond = xy_max / xy_min;
+          }
+        }
+      }
     }
   }
 
@@ -1338,6 +1410,43 @@ CoreOutput LocalizerCore::on_scan(const Scan & scan)
         if (std::isfinite(mahal) && mahal >= 0.0) {
           mahal_val = mahal;
           gate_mahal = mahal < cfg_.mahal_gate;
+        }
+      }
+    }
+  }
+
+  // 高几何置信度且非退化下的 kMahal 软门控：
+  // 仅当其余四门全通过、几何贴合极佳且匹配非退化（排除对称走廊沿墙滑移），
+  // 在连续 >=1 帧确认同一局部吸引盆后软膨胀 P4_pred 放行，根治静止/高漂移误拒锁死
+  const bool high_geom_conf = mr_finite && gate_wall && gate_inlier && gate_score &&
+    gate_cov &&
+    (track_score >= cfg_.mahal_soft_min_score) &&
+    (track_inlier >= cfg_.mahal_soft_min_inlier) &&
+    (obs.wall_visibility >= 0.99) &&
+    (cov_cond <= cfg_.mahal_soft_max_cond);
+  const double max_local_xy = high_geom_conf ?
+    std::max(0.50, 3.0 * active_opt.window_lin) :
+    std::max(0.20, 1.5 * cfg_.match_opt.window_lin);
+  const double max_local_th = high_geom_conf ?
+    std::max(0.35, 3.0 * active_opt.window_ang) :
+    std::max(0.15, 1.5 * cfg_.match_opt.window_ang);
+
+  if (high_geom_conf && !gate_mahal && reject_streak_ >= 1) {
+    const double innov_xy = std::hypot(innov(0), innov(1));
+    if (innov_xy <= max_local_xy && std::abs(innov(2)) <= max_local_th) {
+      P4_pred.topLeftCorner<3, 3>() += innov * innov.transpose();
+      P4_pred = 0.5 * (P4_pred + P4_pred.transpose());
+      const Cov3 S_soft = P4_pred.topLeftCorner<3, 3>() + R;
+      S = 0.5 * (S_soft + S_soft.transpose()) + Cov3::Identity() * 1e-9;
+      ldlt.compute(S);
+      if (ldlt.info() == Eigen::Success && ldlt.isPositive()) {
+        const Eigen::Vector3d S_inv_innov = ldlt.solve(innov);
+        if (ldlt.info() == Eigen::Success && S_inv_innov.allFinite()) {
+          const double mahal_soft = innov.dot(S_inv_innov);
+          if (std::isfinite(mahal_soft) && mahal_soft >= 0.0) {
+            mahal_val = mahal_soft;
+            gate_mahal = mahal_soft < cfg_.mahal_gate;
+          }
         }
       }
     }
@@ -1432,8 +1541,6 @@ CoreOutput LocalizerCore::on_scan(const Scan & scan)
   // 严格沿当前新息方向叠加有界秩 1 协方差；远距离对称假峰绝不触发任何协方差膨胀（替代旧 P*=2.5）
   if (mr_finite && gate_wall && gate_inlier && gate_score && gate_cov && !gate_mahal) {
     const double innov_xy = std::hypot(innov(0), innov(1));
-    const double max_local_xy = std::max(0.20, 1.5 * cfg_.match_opt.window_lin);
-    const double max_local_th = std::max(0.15, 1.5 * cfg_.match_opt.window_ang);
     if (innov_xy <= max_local_xy && std::abs(innov(2)) <= max_local_th) {
       P4_.topLeftCorner<3, 3>() += 0.6 * (innov * innov.transpose());
       P4_.topLeftCorner<3, 3>() =

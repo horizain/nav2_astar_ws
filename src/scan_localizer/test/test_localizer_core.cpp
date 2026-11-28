@@ -1292,3 +1292,137 @@ TEST(LocalizerCoreTest, OrthogonalGatesExposeExactDiagnosticsForWallFlipVsOpenFr
 }
 
 }  // namespace
+
+TEST(LocalizerCoreTest, StationaryCovarianceFloorPreventsMahalLockup)
+{
+  const auto & wf = shared_warehouse();
+  auto sm = std::make_shared<ScriptedMatcher>();
+
+  sloc::CoreConfig cfg;
+  cfg.min_score = 0.35;
+  cfg.min_inlier_ratio = 0.45;
+  cfg.mahal_gate = 9.0;
+  cfg.min_pred_trans_var = 2.25e-4;  // (0.015 m)^2
+  cfg.min_pred_rot_var = 2.25e-4;    // (0.015 rad)^2
+  cfg.anomaly_window = 0;
+
+  sloc::LocalizerCore core(cfg);
+  core.set_map(wf.field);
+  core.set_matcher(sm);
+  core.on_odom(sloc::Pose2(0.0, 0.0, 0.0));
+  core.set_initial_pose(sloc::Pose2(5.0, 5.0, 0.0), sloc::Cov3::Identity() * 1e-6);
+
+  const sloc::Scan dummy = make_dummy_scan();
+  sm->next_result.valid = true;
+  sm->next_result.score = 0.96;
+  sm->next_result.inlier_ratio = 0.95;
+  sm->next_result.covariance = sloc::Cov3::Identity() * 1e-5;
+  // 0.03m stationary offset: without floor (P=1e-6, R=1e-5) mahal=81.8 > 9.0 -> rejected;
+  // with 2.25e-4 floor, S=2.35e-4 -> mahal=3.83 < 9.0 -> accepted immediately.
+  sm->next_result.pose = sloc::Pose2(5.03, 5.0, 0.0);
+
+  const auto out = core.on_scan(dummy);
+  EXPECT_TRUE(out.accepted);
+  EXPECT_EQ(out.state, sloc::LocState::TRACKING);
+  EXPECT_LT(out.diag.mahal_dist, cfg.mahal_gate);
+}
+
+TEST(LocalizerCoreTest, HighConfidenceNonDegenerateMahalSoftRelaxesWhileDegenerateRejects)
+{
+  const auto & wf = shared_warehouse();
+  auto sm = std::make_shared<ScriptedMatcher>();
+
+  sloc::CoreConfig cfg;
+  cfg.min_score = 0.35;
+  cfg.min_inlier_ratio = 0.45;
+  cfg.mahal_gate = 9.0;
+  cfg.mahal_soft_min_score = 0.85;
+  cfg.mahal_soft_min_inlier = 0.80;
+  cfg.mahal_soft_max_cond = 25.0;
+  cfg.anomaly_window = 0;
+
+  const sloc::Scan dummy = make_dummy_scan();
+
+  // 1) High-confidence non-degenerate match with 0.28m offset:
+  //    Frame 1 rejects & relaxes; Frame 2 soft-accepts without hitting LOST.
+  {
+    sloc::LocalizerCore core(cfg);
+    core.set_map(wf.field);
+    core.set_matcher(sm);
+    core.on_odom(sloc::Pose2(0.0, 0.0, 0.0));
+    core.set_initial_pose(sloc::Pose2(5.0, 5.0, 0.0), sloc::Cov3::Identity() * 1e-4);
+
+    sm->next_result.valid = true;
+    sm->next_result.score = 0.96;
+    sm->next_result.inlier_ratio = 0.94;
+    sm->next_result.covariance = sloc::Cov3::Identity() * 5e-4;
+    sm->next_result.pose = sloc::Pose2(5.28, 5.0, 0.0);
+
+    const auto out1 = core.on_scan(dummy);
+    EXPECT_FALSE(out1.accepted);
+    EXPECT_EQ(out1.diag.reject_flags, sloc::GateFlag::kMahal);
+
+    const auto out2 = core.on_scan(dummy);
+    EXPECT_TRUE(out2.accepted);
+    EXPECT_EQ(out2.state, sloc::LocState::TRACKING);
+    EXPECT_GT(out2.pose.x, 5.10);
+  }
+
+  // 2) Degenerate corridor match (cond = 100 > 25) with 0.28m offset:
+  //    Must NOT soft-relax; stays rejected to protect against corridor slip.
+  {
+    sloc::LocalizerCore core(cfg);
+    core.set_map(wf.field);
+    core.set_matcher(sm);
+    core.on_odom(sloc::Pose2(0.0, 0.0, 0.0));
+    core.set_initial_pose(sloc::Pose2(5.0, 5.0, 0.0), sloc::Cov3::Identity() * 1e-4);
+
+    sm->next_result.valid = true;
+    sm->next_result.score = 0.96;
+    sm->next_result.inlier_ratio = 0.94;
+    sm->next_result.covariance = sloc::Cov3::Zero();
+    sm->next_result.covariance(0, 0) = 5e-2;   // 100x longitudinal uncertainty
+    sm->next_result.covariance(1, 1) = 5e-4;
+    sm->next_result.covariance(2, 2) = 5e-4;
+    sm->next_result.pose = sloc::Pose2(5.0, 5.28, 0.0);
+
+    EXPECT_FALSE(core.on_scan(dummy).accepted);
+    EXPECT_FALSE(core.on_scan(dummy).accepted);
+  }
+}
+
+TEST(LocalizerCoreTest, OdomJumpDegradesToWideWindowWithoutLosingLock)
+{
+  const auto & wf = shared_warehouse();
+  auto sm = std::make_shared<ScriptedMatcher>();
+
+  sloc::CoreConfig cfg;
+  cfg.min_score = 0.35;
+  cfg.min_inlier_ratio = 0.45;
+  cfg.mahal_gate = 9.0;
+  cfg.odom_jump_max_trans = 0.30;
+  cfg.odom_jump_max_rot = 0.45;
+  cfg.anomaly_window = 0;
+
+  sloc::LocalizerCore core(cfg);
+  core.set_map(wf.field);
+  core.set_matcher(sm);
+  core.on_odom(sloc::Pose2(0.0, 0.0, 0.0));
+  core.set_initial_pose(sloc::Pose2(5.0, 5.0, 0.0), sloc::Cov3::Identity() * 1e-4);
+
+  const sloc::Scan dummy = make_dummy_scan();
+  sm->next_result.valid = true;
+  sm->next_result.score = 0.95;
+  sm->next_result.inlier_ratio = 0.94;
+  sm->next_result.covariance = sloc::Cov3::Identity() * 1e-3;
+  sm->next_result.pose = sloc::Pose2(5.0, 5.0, 0.0);
+  ASSERT_TRUE(core.on_scan(dummy).accepted);
+
+  // Inject sudden 0.45m /odom jump while robot actually moved 0.05m
+  core.on_odom(sloc::Pose2(0.45, 0.0, 0.0));
+  sm->next_result.pose = sloc::Pose2(5.05, 5.0, 0.0);
+  const auto out = core.on_scan(dummy);
+  EXPECT_TRUE(out.accepted);
+  EXPECT_EQ(out.state, sloc::LocState::TRACKING);
+  EXPECT_NEAR(out.pose.x, 5.05, 0.03);
+}
