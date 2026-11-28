@@ -136,7 +136,7 @@
     {
       path: "include/scan_localizer/localizer_core.hpp",
       group: "core",
-      lines: 242,
+      lines: 250,
       chapter: "ch07",
       role: "ROS 无关核心状态机：4 状态各向异性 EKF [x,y,θ,b_g]^T、门控与多假设队列",
       symbols: [
@@ -147,7 +147,7 @@
     {
       path: "src/localizer_core.cpp",
       group: "core",
-      lines: 1486,
+      lines: 1593,
       chapter: "ch07",
       role: "4D SE(2)+Bias EKF、Joseph 协方差、四道门控、静止锁死松弛与跳变保护实现",
       symbols: [
@@ -357,7 +357,7 @@
     {
       path: "test/test_localizer_core.cpp",
       group: "sim_test",
-      lines: 1294,
+      lines: 1428,
       chapter: "ch07",
       role: "4D EKF 零偏收敛、门控、走廊滑移、静止松弛与对称走廊防误跳单测 (14 cases)",
       symbols: [
