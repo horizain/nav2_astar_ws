@@ -286,11 +286,11 @@ GlobalResult global_correlative(
         const double sc = eval_block_bound(K, blk.first, blk.second, A, 0.05);
         if (sc > 0.05) {
           seed_buf.push_back({
-            static_cast<float>(sc),
-            static_cast<std::int16_t>(blk.first),
-            static_cast<std::int16_t>(blk.second),
-            static_cast<std::int16_t>(a),
-            static_cast<std::uint8_t>(K)});
+              static_cast<float>(sc),
+              static_cast<std::int16_t>(blk.first),
+              static_cast<std::int16_t>(blk.second),
+              static_cast<std::int16_t>(a),
+              static_cast<std::uint8_t>(K)});
         }
       }
     }
@@ -476,11 +476,11 @@ GlobalResult global_correlative(
           ++expanded;
           if (sc > 0.05 && sc > worst_kept) {
             pq.push({
-              static_cast<float>(sc),
-              static_cast<std::int16_t>(bx),
-              static_cast<std::int16_t>(by),
-              nd.aidx,
-              static_cast<std::uint8_t>(child_level)});
+                static_cast<float>(sc),
+                static_cast<std::int16_t>(bx),
+                static_cast<std::int16_t>(by),
+                nd.aidx,
+                static_cast<std::uint8_t>(child_level)});
           }
         }
       }
