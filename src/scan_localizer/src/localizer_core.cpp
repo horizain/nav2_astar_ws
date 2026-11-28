@@ -469,24 +469,17 @@ CoreOutput LocalizerCore::on_scan(const Scan & scan)
         mr = fb;
         pred = last_pose_;
         odom_jump_fallback = true;
-        // 回退至静止先验时重算无跳变耦合的先验协方差，避免错误 delta 污染雅可比与噪声
-        Eigen::Matrix4d F_fb = Eigen::Matrix4d::Identity();
-        if (imu_used && dt_imu > 0.0) {
-          F_fb(2, 3) = -dt_imu;
-        }
+        // 回退至静止先验 last_pose_ 时不应用 delta.theta，因此不做 b_g->theta 交叉耦合
         Eigen::Matrix4d Q_fb = Eigen::Matrix4d::Zero();
         const double q_fb_t = std::max(0.0, cfg_.odomless_trans_var);
-        const double q_fb_r = imu_used ?
-          (std::abs(delta.theta) * cfg_.imu_rot_var_per_rad +
-          dt_imu * cfg_.imu_rot_var_per_rad) :
-          std::max(0.0, cfg_.odomless_rot_var);
+        const double q_fb_r = std::max(0.0, cfg_.odomless_rot_var);
         Q_fb(0, 0) = q_fb_t;
         Q_fb(1, 1) = q_fb_t;
         Q_fb(2, 2) = q_fb_r;
         if (imu_used && dt_imu > 0.0) {
           Q_fb(3, 3) = std::max(0.0, cfg_.gyro_bias_rw_var_per_s) * dt_imu;
         }
-        P4_pred = F_fb * P4_ * F_fb.transpose() + Q_fb;
+        P4_pred = P4_ + Q_fb;
         if (cfg_.min_pred_trans_var > 0.0) {
           P4_pred(0, 0) = std::max(P4_pred(0, 0), cfg_.min_pred_trans_var);
           P4_pred(1, 1) = std::max(P4_pred(1, 1), cfg_.min_pred_trans_var);

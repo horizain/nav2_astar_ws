@@ -112,7 +112,7 @@
     {
       path: "src/global_search.cpp",
       group: "core",
-      lines: 649,
+      lines: 653,
       desc: "金字塔 Branch-and-Bound 全局相关性搜索、uint8 LUT 早退评估与自适应角步长（从 matchers.cpp 拆分）",
       symbols: [
         { name: "global_correlative", range: "55-540", desc: "多分辨率金字塔 B&B 全局多峰搜索" },
@@ -167,7 +167,7 @@
     {
       path: "src/localizer_core.cpp",
       group: "core",
-      lines: 765,
+      lines: 758,
       chapter: "ch07",
       role: "4D SE(2)+Bias EKF、Joseph 协方差、四道门控、静止锁死松弛与跳变保护实现",
       symbols: [

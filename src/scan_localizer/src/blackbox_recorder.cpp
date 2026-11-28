@@ -347,6 +347,12 @@ void BlackboxRecorder::record_scan(
     ++scan_count_;
   }
 
+  // 时间回拨（如重播 rosbag 或时钟跳变）防护：先重置后窗状态机与冷却锚点，防止永久卡死
+  if (capturing_post_ && stamp_s < trigger_stamp_s_) {
+    capturing_post_ = false;
+    last_dump_stamp_s_ = -1e18;
+  }
+
   // 自动监测异常触发条件（仅在非后窗捕获且过冷却期时生效）
   if (!capturing_post_) {
     const bool streak_hit = cfg_.reject_streak_trigger > 0 &&
@@ -370,12 +376,6 @@ void BlackboxRecorder::record_scan(
     }
   }
   prev_state_ = out.state;
-
-  // 时间回拨（如重播 rosbag 或时钟跳变）防护：重置后窗状态机与冷却锚点，防止永久卡死
-  if (capturing_post_ && stamp_s < trigger_stamp_s_) {
-    capturing_post_ = false;
-    last_dump_stamp_s_ = -1e18;
-  }
 
   // 若正处于后窗捕获阶段，录满 post_seconds 后立刻异步切分落盘
   if (capturing_post_ && (stamp_s - trigger_stamp_s_) >= cfg_.post_seconds) {

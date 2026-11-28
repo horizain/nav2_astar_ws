@@ -41,6 +41,47 @@ inline bool pt_is_finite(const Vec2 & pt)
   return std::isfinite(pt.x()) && std::isfinite(pt.y());
 }
 
+void reorder_beams_bit_reversed(std::vector<Vec2> & pts)
+{
+  std::vector<Vec2> reordered;
+  reordered.reserve(pts.size());
+  std::size_t pow2 = 1;
+  int bits = 0;
+  while (pow2 < pts.size()) {
+    pow2 <<= 1;
+    ++bits;
+  }
+  for (std::size_t k = 0; k < pow2; ++k) {
+    std::size_t rev = 0;
+    std::size_t v = k;
+    for (int b = 0; b < bits; ++b) {
+      rev = (rev << 1) | (v & 1u);
+      v >>= 1;
+    }
+    if (rev < pts.size()) {
+      reordered.push_back(pts[rev]);
+    }
+  }
+  pts.swap(reordered);
+}
+
+double compute_range_p90(const std::vector<Vec2> & valid_pts)
+{
+  std::vector<double> ranges;
+  ranges.reserve(valid_pts.size());
+  for (const auto & pt : valid_pts) {
+    const double r = pt.norm();
+    if (r > 1e-3) {ranges.push_back(r);}
+  }
+  if (ranges.empty()) {return 1.5;}
+  const std::size_t idx90 = (ranges.size() * 9) / 10;
+  std::nth_element(
+    ranges.begin(),
+    ranges.begin() + static_cast<std::ptrdiff_t>(idx90),
+    ranges.end());
+  return std::max(1.5, ranges[idx90]);
+}
+
 }  // namespace
 
 // ============================================================================
@@ -116,28 +157,7 @@ GlobalResult global_correlative(
   const int n = static_cast<int>(sub_pts.size());
   if (n < 5) {return out;}
   // 低差异位反转重排光束顺序：前 16~32 束即均匀覆盖全视场，错误位姿更快触发精确上界早停
-  {
-    std::vector<Vec2> reordered;
-    reordered.reserve(sub_pts.size());
-    std::size_t pow2 = 1;
-    int bits = 0;
-    while (pow2 < sub_pts.size()) {
-      pow2 <<= 1;
-      ++bits;
-    }
-    for (std::size_t k = 0; k < pow2; ++k) {
-      std::size_t rev = 0;
-      std::size_t v = k;
-      for (int b = 0; b < bits; ++b) {
-        rev = (rev << 1) | (v & 1u);
-        v >>= 1;
-      }
-      if (rev < sub_pts.size()) {
-        reordered.push_back(sub_pts[rev]);
-      }
-    }
-    sub_pts.swap(reordered);
-  }
+  reorder_beams_bit_reversed(sub_pts);
   const int K = field.poolLevels() - 1;
   if (K < 0) {return out;}
 
@@ -310,23 +330,7 @@ GlobalResult global_correlative(
   constexpr double kNmsAngRad = 0.35;
     // 空间+航向分桶配额：单桶硬封顶 2，桶尺度随可通行面积、地图跨度与射程 p90 自适应放大，
     // 防止 200m 长走廊/大厂房下局部高分区域吞掉 top-K 全局配额并过早抬高剪枝下界。
-  double r_p90 = 1.5;
-  {
-    std::vector<double> ranges;
-    ranges.reserve(valid_pts.size());
-    for (const auto & pt : valid_pts) {
-      const double r = pt.norm();
-      if (r > 1e-3) {ranges.push_back(r);}
-    }
-    if (!ranges.empty()) {
-      const std::size_t idx90 = (ranges.size() * 9) / 10;
-      std::nth_element(
-        ranges.begin(),
-        ranges.begin() + static_cast<std::ptrdiff_t>(idx90),
-        ranges.end());
-      r_p90 = std::max(1.5, ranges[idx90]);
-    }
-  }
+  const double r_p90 = compute_range_p90(valid_pts);
   const double free_area_m2 =
     static_cast<double>(free_cells) * grid->resolution * grid->resolution;
   const double free_diag_m = std::hypot(
