@@ -558,6 +558,26 @@
         { name: "AsyncGlobalWorkerTest.*", range: "27-92", desc: "覆盖绑核执行、非阻塞轮询与旧请求自动丢弃" },
       ],
     },
+    {
+      path: "tools/inspect_blackbox.py",
+      group: "tools",
+      lines: 469,
+      chapter: "ch08",
+      role: "离线 .slocbb 黑匣子复盘与可视化诊断工具（终端摘要、CSV 导出、四联时序与激光叠图）",
+      symbols: [
+        { name: "load_slocbb / format_summary / render_diagnostic_plot", range: "105-320", desc: "二进制解析、GateFlag 位掩码统计与 2×2 诊断出图" },
+      ],
+    },
+    {
+      path: "test/test_inspect_blackbox.py",
+      group: "tests",
+      lines: 103,
+      chapter: "ch09",
+      role: "离线黑匣子诊断脚本单元测试（往返解析、损坏文件防护与 CSV 导出校验）",
+      symbols: [
+        { name: "InspectBlackboxTest.*", range: "55-95", desc: "覆盖 v1 二进制解析、GateFlag 解码与截断/坏魔数异常" },
+      ],
+    },
 
   ];
 
